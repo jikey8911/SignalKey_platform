@@ -27,9 +27,8 @@ export function SignalsKeiLayout({ children, currentPage }: SignalsKeiLayoutProp
     <div className="flex h-screen bg-background">
       {/* Sidebar */}
       <aside
-        className={`${
-          sidebarOpen ? 'w-64' : 'w-20'
-        } bg-card border-r border-border transition-all duration-300 flex flex-col`}
+        className={`${sidebarOpen ? 'w-64' : 'w-20'
+          } bg-card border-r border-border transition-all duration-300 flex flex-col`}
       >
         {/* Logo */}
         <div className="p-4 border-b border-border flex items-center justify-between">
@@ -55,11 +54,10 @@ export function SignalsKeiLayout({ children, currentPage }: SignalsKeiLayoutProp
         {/* Demo Mode Toggle */}
         <div className="p-4 border-b border-border">
           <div
-            className={`px-3 py-2 rounded-lg text-sm font-semibold transition-all ${
-              demoMode
-                ? 'bg-yellow-100 text-yellow-800'
-                : 'bg-red-100 text-red-800'
-            }`}
+            className={`px-3 py-2 rounded-lg text-sm font-semibold transition-all ${demoMode
+              ? 'bg-yellow-100 text-yellow-800'
+              : 'bg-red-100 text-red-800'
+              }`}
           >
             {sidebarOpen ? (
               <>
@@ -80,17 +78,12 @@ export function SignalsKeiLayout({ children, currentPage }: SignalsKeiLayoutProp
         {/* Navigation */}
         <nav className="flex-1 p-4 space-y-2">
           {navItems.map((item) => (
-            <Link key={item.href} href={item.href}>
-              <a
-                className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
-                  currentPage === item.href
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-foreground hover:bg-muted'
-                }`}
-              >
-                <span className="text-xl">{item.icon}</span>
-                {sidebarOpen && <span className="text-sm">{item.label}</span>}
-              </a>
+            <Link key={item.href} href={item.href} className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${currentPage === item.href
+              ? 'bg-primary text-primary-foreground'
+              : 'text-foreground hover:bg-muted'
+              }`}>
+              <span className="text-xl">{item.icon}</span>
+              {sidebarOpen && <span className="text-sm">{item.label}</span>}
             </Link>
           ))}
         </nav>
@@ -116,18 +109,15 @@ export function SignalsKeiLayout({ children, currentPage }: SignalsKeiLayoutProp
           </h1>
           <div className="flex items-center gap-4">
             <div
-              className={`px-4 py-2 rounded-lg font-semibold text-sm ${
-                demoMode
-                  ? 'bg-yellow-100 text-yellow-800'
-                  : 'bg-red-100 text-red-800'
-              }`}
+              className={`px-4 py-2 rounded-lg font-semibold text-sm ${demoMode
+                ? 'bg-yellow-100 text-yellow-800'
+                : 'bg-red-100 text-red-800'
+                }`}
             >
               {demoMode ? '🧪 Modo Demo' : '⚠️ Modo Real'}
             </div>
-            <Link href="/settings">
-              <a className="p-2 hover:bg-muted rounded-lg transition-colors">
-                <Settings size={20} />
-              </a>
+            <Link href="/settings" className="p-2 hover:bg-muted rounded-lg transition-colors">
+              <Settings size={20} />
             </Link>
           </div>
         </header>

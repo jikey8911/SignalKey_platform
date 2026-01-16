@@ -106,6 +106,26 @@ async def get_history(user_id: str):
     history = await db.trades.find({"userId": user["_id"]}).sort("createdAt", -1).limit(50).to_list(length=50)
     return [{**h, "_id": str(h["_id"]), "userId": str(h["userId"]), "signalId": str(h.get("signalId", ""))} for h in history]
 
+from pydantic import BaseModel
+
+class ConnectionTestRequest(BaseModel):
+    exchangeId: str
+    apiKey: str
+    secret: str
+    password: Optional[str] = None
+    uid: Optional[str] = None
+
+@app.post("/test-connection")
+async def test_connection(data: ConnectionTestRequest):
+    success, message = await cex_service.test_connection(
+        data.exchangeId,
+        data.apiKey,
+        data.secret,
+        data.password,
+        data.uid
+    )
+    return {"success": success, "message": message}
+
 if __name__ == "__main__":
     import uvicorn
     import os

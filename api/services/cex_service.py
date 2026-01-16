@@ -10,6 +10,28 @@ class CEXService:
     def __init__(self):
         self.exchanges = {} # Cache de instancias de exchange por user_id
 
+    async def test_connection(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None):
+        try:
+            exchange_class = getattr(ccxt, exchange_id)
+            inst_config = {
+                'apiKey': api_key,
+                'secret': secret,
+                'enableRateLimit': True,
+            }
+            if password:
+                inst_config['password'] = password
+            if uid:
+                inst_config['uid'] = uid
+                
+            async with exchange_class(inst_config) as instance:
+                # Try fetching balance as a connectivity test
+                # fetch_balance usually requires authentication
+                await instance.fetch_balance()
+                return True, "Conexión exitosa"
+        except Exception as e:
+            logger.error(f"Error testing connection {exchange_id}: {e}")
+            return False, str(e)
+
     async def get_exchange_instance(self, user_id: str, exchange_id: str = "binance"):
         config = await get_app_config(user_id)
         if not config or "exchanges" not in config:
