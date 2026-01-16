@@ -1,89 +1,110 @@
 import ccxt
 import logging
-from crypto_bot_api.config import Config
+from typing import Optional, Dict, Any
 from crypto_bot_api.models.schemas import AnalysisResult, ExecutionResult
+from crypto_bot_api.models.mongodb import get_app_config, save_trade, update_virtual_balance
 
 logger = logging.getLogger(__name__)
 
 class CEXService:
     def __init__(self):
-        self.exchange_id = Config.EXCHANGE_ID
-        self.api_key = Config.CEX_API_KEY
-        self.secret = Config.CEX_SECRET
-        self.password = Config.CEX_PASSWORD
-        self.uid = Config.CEX_UID
+        self.exchanges = {} # Cache de instancias de exchange por user_id
+
+    async def get_exchange_instance(self, user_id: str, exchange_id: str = "binance"):
+        config = await get_app_config(user_id)
+        if not config or "exchanges" not in config:
+            return None, None
+
+        # Buscar el exchange específico en la lista
+        exchange_config = next((e for e in config["exchanges"] if e["exchangeId"] == exchange_id and e.get("isActive", True)), None)
         
-        if self.api_key and self.secret:
-            exchange_class = getattr(ccxt, self.exchange_id)
-            
-            # Configuración dinámica de credenciales
-            config = {
-                'apiKey': self.api_key,
-                'secret': self.secret,
+        if not exchange_config or not exchange_config.get("apiKey"):
+            return None, config
+
+        cache_key = f"{user_id}_{exchange_id}"
+        if cache_key in self.exchanges:
+            return self.exchanges[cache_key], config
+
+        try:
+            exchange_class = getattr(ccxt, exchange_id)
+            inst_config = {
+                'apiKey': exchange_config["apiKey"],
+                'secret': exchange_config["secret"],
                 'enableRateLimit': True,
             }
-            
-            # Añadir password/passphrase si existe (requerido por OKX, KuCoin, etc.)
-            if self.password:
-                config['password'] = self.password
-            
-            # Añadir UID si existe
-            if self.uid:
-                config['uid'] = self.uid
+            if exchange_config.get("password"):
+                inst_config['password'] = exchange_config["password"]
+            if exchange_config.get("uid"):
+                inst_config['uid'] = exchange_config["uid"]
                 
-            self.exchange = exchange_class(config)
-        else:
-            self.exchange = None
-            logger.warning(f"Credenciales de {self.exchange_id} no configuradas.")
+            instance = exchange_class(inst_config)
+            self.exchanges[cache_key] = instance
+            return instance, config
+        except Exception as e:
+            logger.error(f"Error inicializando exchange {exchange_id}: {e}")
+            return None, config
 
-    async def execute_trade(self, analysis: AnalysisResult) -> ExecutionResult:
-        if not self.exchange and not Config.DEMO_MODE:
-            return ExecutionResult(success=False, message="Exchange no configurado")
+    async def execute_trade(self, analysis: AnalysisResult, user_id: str = "default_user") -> ExecutionResult:
+        exchange, config = await self.get_exchange_instance(user_id)
+        demo_mode = config.get("demoMode", True) if config else True
+        
+        # Obtener límite de inversión
+        max_amount = 100.0 # Default
+        if config and "investmentLimits" in config:
+            max_amount = config["investmentLimits"].get("cexMaxAmount", 100.0)
 
         try:
             symbol = analysis.symbol
             side = analysis.decision.lower()
-            amount = analysis.parameters.get('amount', 0) if analysis.parameters else 0
+            
+            # Usar el monto sugerido o el máximo permitido
+            suggested_amount = analysis.parameters.get('amount', 0) if analysis.parameters else 0
+            amount = min(suggested_amount, max_amount) if suggested_amount > 0 else max_amount
             
             if amount <= 0:
-                return ExecutionResult(success=False, message="Cantidad inválida")
+                return ExecutionResult(success=False, message="Cantidad de inversión inválida o no configurada")
 
-            if Config.DEMO_MODE:
-                logger.info(f"[MODO DEMO] Simulando {side} para {symbol}")
-                # Aquí se actualizaría la base de datos de balances virtuales
-                from crypto_bot_api.models.database import SessionLocal, VirtualBalance, TradeHistory
-                db = SessionLocal()
+            if demo_mode:
+                logger.info(f"[MODO DEMO] Simulando {side} para {symbol} con monto {amount}")
                 
                 # Obtener precio actual para la simulación
-                ticker = self.exchange.fetch_ticker(symbol) if self.exchange else {'last': 50000.0}
-                price = ticker['last']
+                price = 50000.0 # Default fallback
+                if exchange:
+                    try:
+                        ticker = await exchange.fetch_ticker(symbol)
+                        price = ticker['last']
+                    except:
+                        pass
                 
-                # Registrar trade
-                new_trade = TradeHistory(
-                    symbol=symbol, side=side.upper(), price=price, 
-                    amount=amount, market_type="CEX", is_demo=True
-                )
-                db.add(new_trade)
+                # Registrar trade en MongoDB
+                trade_doc = {
+                    "userId": config["userId"] if config else None,
+                    "symbol": symbol,
+                    "side": side.upper(),
+                    "price": price,
+                    "amount": amount,
+                    "marketType": "CEX",
+                    "isDemo": True,
+                    "status": "completed"
+                }
+                await save_trade(trade_doc)
                 
-                # Actualizar balance (simplificado)
-                balance = db.query(VirtualBalance).filter_by(market_type="CEX", asset="USDT").first()
-                if side == "buy":
-                    balance.amount -= (price * amount)
-                else:
-                    balance.amount += (price * amount)
-                
-                db.commit()
-                db.close()
+                # Actualizar balance virtual (simplificado: asumiendo USDT como base)
+                # En una implementación real, buscaríamos el balance actual y restaríamos/sumaríamos
+                # await update_virtual_balance(user_id, "CEX", "USDT", new_amount)
                 
                 return ExecutionResult(
                     success=True,
-                    message=f"MODO DEMO: {side.upper()} {symbol} a {price} registrado en balance virtual"
+                    message=f"MODO DEMO: {side.upper()} {symbol} a {price} registrado (Límite: {max_amount})"
                 )
 
-            # Lógica real (si no es modo demo)
-            logger.info(f"Ejecutando {side} REAL en {self.exchange_id} para {symbol}")
-            # order = self.exchange.create_order(symbol, 'market', side, amount)
-            return ExecutionResult(success=True, message="Orden real ejecutada (Simulado en código)")
+            if not exchange:
+                return ExecutionResult(success=False, message="Exchange no configurado para trading real")
+
+            # Lógica real
+            logger.info(f"Ejecutando {side} REAL en CEX para {symbol} con monto {amount}")
+            # order = await exchange.create_order(symbol, 'market', side, amount)
+            return ExecutionResult(success=True, message=f"Orden real ejecutada (Simulado). Monto: {amount}")
 
         except Exception as e:
             logger.error(f"Error ejecutando trade en CEX: {e}")

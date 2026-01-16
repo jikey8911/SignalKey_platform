@@ -3,37 +3,62 @@ import { SignalsKeiLayout } from '@/components/SignalsKeiLayout';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { trpc } from '@/lib/trpc';
-import { Eye, EyeOff, Save } from 'lucide-react';
+import { Eye, EyeOff, Save, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function Settings() {
   const { data: config, isLoading } = trpc.trading.getConfig.useQuery();
   const updateConfigMutation = trpc.trading.updateConfig.useMutation();
   const [showSecrets, setShowSecrets] = useState(false);
+  
   const [formData, setFormData] = useState({
+    demoMode: true,
     geminiApiKey: '',
     gmgnApiKey: '',
     telegramBotToken: '',
-    exchangeId: 'binance',
-    cexApiKey: '',
-    cexSecret: '',
-    cexPassword: '',
-    cexUid: '',
-    dexWalletPrivateKey: '',
+    telegramChatId: '',
+    exchanges: [{
+      exchangeId: 'binance',
+      apiKey: '',
+      secret: '',
+      password: '',
+      uid: '',
+      isActive: true
+    }],
+    dexConfig: {
+      walletPrivateKey: '',
+      rpcUrl: 'https://api.mainnet-beta.solana.com'
+    },
+    investmentLimits: {
+      cexMaxAmount: 100,
+      dexMaxAmount: 1
+    }
   });
 
   React.useEffect(() => {
     if (config) {
       setFormData({
+        demoMode: config.demoMode ?? true,
         geminiApiKey: config.geminiApiKey || '',
         gmgnApiKey: config.gmgnApiKey || '',
         telegramBotToken: config.telegramBotToken || '',
-        exchangeId: config.exchangeId || 'binance',
-        cexApiKey: config.cexApiKey || '',
-        cexSecret: config.cexSecret || '',
-        cexPassword: config.cexPassword || '',
-        cexUid: config.cexUid || '',
-        dexWalletPrivateKey: config.dexWalletPrivateKey || '',
+        telegramChatId: config.telegramChatId || '',
+        exchanges: config.exchanges?.length ? config.exchanges : [{
+          exchangeId: 'binance',
+          apiKey: '',
+          secret: '',
+          password: '',
+          uid: '',
+          isActive: true
+        }],
+        dexConfig: {
+          walletPrivateKey: config.dexConfig?.walletPrivateKey || '',
+          rpcUrl: config.dexConfig?.rpcUrl || 'https://api.mainnet-beta.solana.com'
+        },
+        investmentLimits: {
+          cexMaxAmount: config.investmentLimits?.cexMaxAmount ?? 100,
+          dexMaxAmount: config.investmentLimits?.dexMaxAmount ?? 1
+        }
       });
     }
   }, [config]);
@@ -47,28 +72,51 @@ export default function Settings() {
     }
   };
 
-  const InputField = ({ label, name, type = 'text', placeholder }: any) => (
-    <div>
-      <label className="block text-sm font-semibold text-foreground mb-2">
+  const addExchange = () => {
+    setFormData({
+      ...formData,
+      exchanges: [...formData.exchanges, {
+        exchangeId: 'binance',
+        apiKey: '',
+        secret: '',
+        password: '',
+        uid: '',
+        isActive: true
+      }]
+    });
+  };
+
+  const removeExchange = (index: number) => {
+    const newExchanges = [...formData.exchanges];
+    newExchanges.splice(index, 1);
+    setFormData({ ...formData, exchanges: newExchanges });
+  };
+
+  const updateExchange = (index: number, field: string, value: any) => {
+    const newExchanges = [...formData.exchanges];
+    (newExchanges[index] as any)[field] = value;
+    setFormData({ ...formData, exchanges: newExchanges });
+  };
+
+  const InputField = ({ label, value, onChange, type = 'text', placeholder }: any) => (
+    <div className="flex-1">
+      <label className="block text-xs font-semibold text-foreground mb-1">
         {label}
       </label>
       <div className="relative">
         <input
           type={showSecrets && type === 'password' ? 'text' : type}
-          name={name}
           placeholder={placeholder}
-          value={(formData as any)[name]}
-          onChange={(e) =>
-            setFormData({ ...formData, [name]: e.target.value })
-          }
-          className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
         />
         {type === 'password' && (
           <button
             onClick={() => setShowSecrets(!showSecrets)}
-            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
           >
-            {showSecrets ? <EyeOff size={18} /> : <Eye size={18} />}
+            {showSecrets ? <EyeOff size={14} /> : <Eye size={14} />}
           </button>
         )}
       </div>
@@ -77,163 +125,185 @@ export default function Settings() {
 
   return (
     <SignalsKeiLayout currentPage="/settings">
-      <div className="space-y-6 max-w-4xl">
-        <div>
-          <h2 className="text-3xl font-bold text-foreground mb-2">Configuración</h2>
-          <p className="text-muted-foreground">
-            Configura tus API Keys y credenciales de exchanges
-          </p>
+      <div className="space-y-6 max-w-5xl pb-10">
+        <div className="flex justify-between items-center">
+          <div>
+            <h2 className="text-3xl font-bold text-foreground mb-2">Configuración</h2>
+            <p className="text-muted-foreground">Gestiona tus credenciales y límites de inversión</p>
+          </div>
+          <Button onClick={handleSave} disabled={updateConfigMutation.isPending} className="flex items-center gap-2">
+            <Save size={18} />
+            {updateConfigMutation.isPending ? 'Guardando...' : 'Guardar Todo'}
+          </Button>
         </div>
 
-        {isLoading ? (
-          <div className="space-y-4">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-20 bg-muted animate-pulse rounded-lg" />
-            ))}
-          </div>
-        ) : (
-          <>
-            {/* Gemini AI */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* AI & API Keys */}
+          <div className="space-y-6">
             <Card className="p-6">
-              <h3 className="text-lg font-semibold text-foreground mb-4">🤖 Gemini AI</h3>
-              <InputField
-                label="API Key de Gemini"
-                name="geminiApiKey"
+              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">🤖 Inteligencia Artificial</h3>
+              <InputField 
+                label="Gemini API Key" 
+                value={formData.geminiApiKey} 
+                onChange={(v: string) => setFormData({...formData, geminiApiKey: v})} 
                 type="password"
-                placeholder="Tu API Key de Google Gemini"
               />
-              <p className="text-xs text-muted-foreground mt-2">
-                Obtén tu API Key en{' '}
-                <a
-                  href="https://makersuite.google.com/app/apikey"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline"
-                >
-                  Google AI Studio
-                </a>
-              </p>
             </Card>
 
-            {/* DEX (GMGN) */}
             <Card className="p-6">
-              <h3 className="text-lg font-semibold text-foreground mb-4">🔄 DEX (GMGN)</h3>
-              <InputField
-                label="API Key de GMGN"
-                name="gmgnApiKey"
-                type="password"
-                placeholder="Tu API Key de GMGN"
-              />
-              <p className="text-xs text-muted-foreground mt-2">
-                Obtén tu API Key en{' '}
-                <a
-                  href="https://gmgn.ai"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline"
-                >
-                  GMGN.ai
-                </a>
-              </p>
-            </Card>
-
-            {/* Telegram */}
-            <Card className="p-6">
-              <h3 className="text-lg font-semibold text-foreground mb-4">📱 Telegram Bot</h3>
-              <InputField
-                label="Token del Bot de Telegram"
-                name="telegramBotToken"
-                type="password"
-                placeholder="Tu token de bot de Telegram"
-              />
-              <p className="text-xs text-muted-foreground mt-2">
-                Crea un bot con{' '}
-                <a
-                  href="https://t.me/BotFather"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline"
-                >
-                  BotFather
-                </a>
-              </p>
-            </Card>
-
-            {/* CEX Configuration */}
-            <Card className="p-6">
-              <h3 className="text-lg font-semibold text-foreground mb-4">💱 Configuración CEX</h3>
+              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">📱 Telegram Bot</h3>
               <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-semibold text-foreground mb-2">
-                    Exchange
-                  </label>
-                  <select
-                    value={formData.exchangeId}
-                    onChange={(e) =>
-                      setFormData({ ...formData, exchangeId: e.target.value })
-                    }
-                    className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                  >
-                    <option value="binance">Binance</option>
-                    <option value="okx">OKX</option>
-                    <option value="kucoin">KuCoin</option>
-                    <option value="bybit">Bybit</option>
-                  </select>
-                </div>
-                <InputField
-                  label="API Key"
-                  name="cexApiKey"
+                <InputField 
+                  label="Bot Token" 
+                  value={formData.telegramBotToken} 
+                  onChange={(v: string) => setFormData({...formData, telegramBotToken: v})} 
                   type="password"
-                  placeholder="Tu API Key del exchange"
                 />
-                <InputField
-                  label="API Secret"
-                  name="cexSecret"
-                  type="password"
-                  placeholder="Tu API Secret del exchange"
-                />
-                <InputField
-                  label="Passphrase (si aplica)"
-                  name="cexPassword"
-                  type="password"
-                  placeholder="Passphrase del API (OKX, KuCoin, etc)"
-                />
-                <InputField
-                  label="UID (si aplica)"
-                  name="cexUid"
-                  type="password"
-                  placeholder="UID del API (OKX, etc)"
+                <InputField 
+                  label="Chat ID (Opcional)" 
+                  value={formData.telegramChatId} 
+                  onChange={(v: string) => setFormData({...formData, telegramChatId: v})} 
                 />
               </div>
             </Card>
 
-            {/* DEX Wallet */}
             <Card className="p-6">
-              <h3 className="text-lg font-semibold text-foreground mb-4">🔐 Wallet DEX</h3>
-              <InputField
-                label="Private Key de Wallet"
-                name="dexWalletPrivateKey"
-                type="password"
-                placeholder="Tu private key de Solana wallet"
-              />
-              <p className="text-xs text-muted-foreground mt-2">
-                ⚠️ Nunca compartas tu private key. Se almacena de forma segura.
-              </p>
+              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">💰 Límites de Inversión</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <InputField 
+                  label="Máximo CEX (USDT)" 
+                  value={formData.investmentLimits.cexMaxAmount} 
+                  onChange={(v: string) => setFormData({...formData, investmentLimits: {...formData.investmentLimits, cexMaxAmount: parseFloat(v)}})} 
+                  type="number"
+                />
+                <InputField 
+                  label="Máximo DEX (SOL)" 
+                  value={formData.investmentLimits.dexMaxAmount} 
+                  onChange={(v: string) => setFormData({...formData, investmentLimits: {...formData.investmentLimits, dexMaxAmount: parseFloat(v)}})} 
+                  type="number"
+                />
+              </div>
+            </Card>
+          </div>
+
+          {/* DEX & General */}
+          <div className="space-y-6">
+            <Card className="p-6">
+              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">🔄 DEX Config (GMGN)</h3>
+              <div className="space-y-4">
+                <InputField 
+                  label="GMGN API Key" 
+                  value={formData.gmgnApiKey} 
+                  onChange={(v: string) => setFormData({...formData, gmgnApiKey: v})} 
+                  type="password"
+                />
+                <InputField 
+                  label="Wallet Private Key" 
+                  value={formData.dexConfig.walletPrivateKey} 
+                  onChange={(v: string) => setFormData({...formData, dexConfig: {...formData.dexConfig, walletPrivateKey: v}})} 
+                  type="password"
+                />
+                <InputField 
+                  label="RPC URL" 
+                  value={formData.dexConfig.rpcUrl} 
+                  onChange={(v: string) => setFormData({...formData, dexConfig: {...formData.dexConfig, rpcUrl: v}})} 
+                />
+              </div>
             </Card>
 
-            {/* Save Button */}
-            <div className="flex gap-4">
-              <Button
-                onClick={handleSave}
-                disabled={updateConfigMutation.isPending}
-                className="flex items-center gap-2"
-              >
-                <Save size={18} />
-                {updateConfigMutation.isPending ? 'Guardando...' : 'Guardar Configuración'}
-              </Button>
-            </div>
-          </>
-        )}
+            <Card className="p-6">
+              <h3 className="text-lg font-semibold mb-4">⚙️ Modo de Operación</h3>
+              <div className="flex items-center gap-4">
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={formData.demoMode} 
+                    onChange={(e) => setFormData({...formData, demoMode: e.target.checked})}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                  <span className="ml-3 text-sm font-medium text-foreground">Modo Demo (Simulación)</span>
+                </label>
+              </div>
+            </Card>
+          </div>
+        </div>
+
+        {/* CEX Exchanges */}
+        <Card className="p-6">
+          <div className="flex justify-between items-center mb-6">
+            <h3 className="text-lg font-semibold flex items-center gap-2">💱 Exchanges Centralizados (CEX)</h3>
+            <Button onClick={addExchange} variant="outline" size="sm" className="flex items-center gap-1">
+              <Plus size={16} /> Añadir Exchange
+            </Button>
+          </div>
+          
+          <div className="space-y-6">
+            {formData.exchanges.map((ex, index) => (
+              <div key={index} className="p-4 border border-border rounded-lg bg-muted/30 relative">
+                <button 
+                  onClick={() => removeExchange(index)}
+                  className="absolute top-4 right-4 text-muted-foreground hover:text-destructive"
+                >
+                  <Trash2 size={18} />
+                </button>
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-foreground mb-1">Exchange</label>
+                    <select
+                      value={ex.exchangeId}
+                      onChange={(e) => updateExchange(index, 'exchangeId', e.target.value)}
+                      className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground"
+                    >
+                      <option value="binance">Binance</option>
+                      <option value="okx">OKX</option>
+                      <option value="kucoin">KuCoin</option>
+                      <option value="bybit">Bybit</option>
+                      <option value="gateio">Gate.io</option>
+                    </select>
+                  </div>
+                  <InputField 
+                    label="API Key" 
+                    value={ex.apiKey} 
+                    onChange={(v: string) => updateExchange(index, 'apiKey', v)} 
+                    type="password"
+                  />
+                  <InputField 
+                    label="API Secret" 
+                    value={ex.secret} 
+                    onChange={(v: string) => updateExchange(index, 'secret', v)} 
+                    type="password"
+                  />
+                </div>
+                
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <InputField 
+                    label="Passphrase (OKX/KuCoin)" 
+                    value={ex.password} 
+                    onChange={(v: string) => updateExchange(index, 'password', v)} 
+                    type="password"
+                  />
+                  <InputField 
+                    label="UID" 
+                    value={ex.uid} 
+                    onChange={(v: string) => updateExchange(index, 'uid', v)} 
+                  />
+                  <div className="flex items-end pb-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input 
+                        type="checkbox" 
+                        checked={ex.isActive} 
+                        onChange={(e) => updateExchange(index, 'isActive', e.target.checked)}
+                      />
+                      <span className="text-sm">Activo</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
     </SignalsKeiLayout>
   );
