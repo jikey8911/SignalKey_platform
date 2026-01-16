@@ -84,6 +84,81 @@ async def get_telegram_dialogs():
         logger.error(f"Error getting dialogs: {e}")
         return []
 
+@app.get("/telegram/logs")
+async def get_telegram_logs(limit: int = 50):
+    try:
+        cursor = db.telegram_logs.find({}).sort("timestamp", -1).limit(limit)
+        logs = await cursor.to_list(length=limit)
+        # Convert ObjectId and datetime to string
+        return [{**log, "_id": str(log["_id"]), "timestamp": log["timestamp"].isoformat()} for log in logs]
+    except Exception as e:
+        logger.error(f"Error fetching logs: {e}")
+        return []
+
+@app.post("/balances/init/{user_id}")
+async def initialize_balances(user_id: str):
+    """Initialize virtual balances from config"""
+    try:
+        config = await get_app_config(user_id)
+        if not config:
+            raise HTTPException(status_code=404, detail="Config not found")
+        
+        virtual_balances = config.get("virtualBalances", {"cex": 10000, "dex": 10})
+        
+        # Initialize CEX balance
+        await update_virtual_balance(user_id, "CEX", "USDT", virtual_balances.get("cex", 10000))
+        
+        # Initialize DEX balance
+        await update_virtual_balance(user_id, "DEX", "SOL", virtual_balances.get("dex", 10))
+        
+        return {"success": True, "message": "Balances initialized", "balances": virtual_balances}
+    except Exception as e:
+        logger.error(f"Error initializing balances: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/status/{user_id}")
+async def get_connection_status(user_id: str):
+    """Check connection status for all services"""
+    status = {
+        "gemini": False,
+        "exchange": False,
+        "telegram": False,
+        "gmgn": False
+    }
+    
+    try:
+        config = await get_app_config(user_id)
+        if not config:
+            return status
+        
+        # Check Gemini
+        if config.get("geminiApiKey"):
+            status["gemini"] = True
+        
+        # Check Exchange
+        exchanges = config.get("exchanges", [])
+        active_ex = next((e for e in exchanges if e.get("isActive") and e.get("apiKey")), None)
+        if active_ex:
+            try:
+                exchange, _ = await cex_service.get_exchange_instance(user_id, active_ex["exchangeId"])
+                if exchange:
+                    status["exchange"] = True
+            except:
+                pass
+        
+        # Check Telegram
+        if bot_instance.client and bot_instance.client.is_connected():
+            status["telegram"] = True
+        
+        # Check GMGN
+        if config.get("gmgnApiKey"):
+            status["gmgn"] = True
+        
+        return status
+    except Exception as e:
+        logger.error(f"Error checking status: {e}")
+        return status
+
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "database": "mongodb"}
@@ -94,8 +169,68 @@ async def get_balances(user_id: str):
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
+    # 1. Get Config for keys
+    config = await get_app_config(user_id)
+    
+    # 2. Get Real CEX Balance (if configured)
+    cex_balance = 0.0
+    if config:
+        # Try primary exchange
+        exchanges = config.get("exchanges", [])
+        active_ex = next((e for e in exchanges if e.get("isActive")), None)
+        if active_ex:
+             # Reuse CEXService instance method if possible, or manual call
+             # For speed/simplicity here, we use the service's helper
+             # But the service helper requires 'get_exchange_instance' which caches
+             try:
+                 exchange, _ = await cex_service.get_exchange_instance(user_id, active_ex["exchangeId"])
+                 if exchange:
+                     # Fetch total balance in USDT
+                     bal = await exchange.fetch_balance()
+                     # Calculate total USDT value roughly
+                     if 'total' in bal:
+                         cex_balance = bal['total'].get('USDT', 0.0)
+                         # Add other assets value? Complex. For now, just USDT.
+             except Exception as e:
+                 logger.error(f"Error fetching real balance: {e}")
+
+    # 3. Get DB Balances (Virtual/Tracked)
     balances = await db.virtual_balances.find({"userId": user["_id"]}).to_list(length=100)
-    return [{**b, "_id": str(b["_id"]), "userId": str(b["userId"])} for b in balances]
+    
+    # Merge/Override CEX balance if exists in DB or add it
+    # We want to return a list that the frontend understands
+    
+    response_list = []
+    
+    # Add CEX if present
+    cex_db = next((b for b in balances if b["marketType"] == "CEX"), None)
+    if cex_db:
+         response_list.append({**cex_db, "_id": str(cex_db["_id"]), "userId": str(cex_db["userId"]), "realBalance": cex_balance})
+    else:
+         # If no CEX balance in DB, inject one with the real balance finding
+         response_list.append({
+             "_id": "virtual_cex", 
+             "userId": user_id, 
+             "marketType": "CEX", 
+             "currency": "USDT", 
+             "amount": 0.0, # Virtual
+             "realBalance": cex_balance
+         })
+
+    # Add DEX if present
+    dex_db = next((b for b in balances if b["marketType"] == "DEX"), None)
+    if dex_db:
+        response_list.append({**dex_db, "_id": str(dex_db["_id"]), "userId": str(dex_db["userId"])})
+    else:
+         response_list.append({
+             "_id": "virtual_dex",
+             "userId": user_id,
+             "marketType": "DEX",
+             "currency": "SOL",
+             "amount": 0.0
+         })
+
+    return response_list
 
 @app.get("/history/{user_id}")
 async def get_history(user_id: str):

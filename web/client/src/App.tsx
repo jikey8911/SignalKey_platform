@@ -10,6 +10,7 @@ import Signals from "./pages/Signals";
 import Trades from "./pages/Trades";
 import Backtest from "./pages/Backtest";
 import Settings from "./pages/Settings";
+import TelegramConsole from "./pages/TelegramConsole";
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 
@@ -20,6 +21,7 @@ function Router() {
       <Route path={"/signals"} component={Signals} />
       <Route path={"/trades"} component={Trades} />
       <Route path={"/backtest"} component={Backtest} />
+      <Route path={"/telegram-console"} component={TelegramConsole} />
       <Route path={"/settings"} component={Settings} />
       <Route path={"/login"} component={Login} />
       <Route path={"/404"} component={NotFound} />

@@ -7,8 +7,33 @@ import { TrendingUp, TrendingDown, DollarSign, Zap } from 'lucide-react';
 
 export default function Dashboard() {
   const { demoMode } = useTrading();
-  const { data: balances, isLoading: balancesLoading } = trpc.trading.getBalances.useQuery();
+  const { data: balances, isLoading: balancesLoading, refetch: refetchBalances } = trpc.trading.getBalances.useQuery();
   const { data: trades, isLoading: tradesLoading } = trpc.trading.getTrades.useQuery();
+  const [connectionStatus, setConnectionStatus] = React.useState<any>(null);
+
+  // Fetch connection status
+  React.useEffect(() => {
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch('http://localhost:8000/status/default_user');
+        const data = await res.json();
+        setConnectionStatus(data);
+      } catch (e) {
+        console.error('Error fetching status:', e);
+      }
+    };
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 10000); // Update every 10s
+    return () => clearInterval(interval);
+  }, []);
+
+  // Refetch balances every 30s
+  React.useEffect(() => {
+    const interval = setInterval(() => {
+      refetchBalances();
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [refetchBalances]);
 
   const stats = React.useMemo(() => {
     if (!trades || trades.length === 0) {
@@ -40,9 +65,8 @@ export default function Dashboard() {
           <p className="text-2xl font-bold text-foreground">{value}</p>
           {change !== undefined && (
             <p
-              className={`text-xs mt-2 ${
-                change >= 0 ? 'text-green-600' : 'text-red-600'
-              }`}
+              className={`text-xs mt-2 ${change >= 0 ? 'text-green-600' : 'text-red-600'
+                }`}
             >
               {change >= 0 ? '↑' : '↓'} {Math.abs(change)}%
             </p>
@@ -66,19 +90,54 @@ export default function Dashboard() {
           </div>
         )}
 
+        {/* Connection Status */}
+        {connectionStatus && (
+          <Card className="p-4 bg-muted/30">
+            <h3 className="text-sm font-semibold mb-3 text-foreground">Estado de Conexiones</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${connectionStatus.gemini ? 'bg-green-500' : 'bg-red-500'}`} />
+                <span className="text-xs text-muted-foreground">Gemini AI</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${connectionStatus.exchange ? 'bg-green-500' : 'bg-red-500'}`} />
+                <span className="text-xs text-muted-foreground">Exchange</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${connectionStatus.telegram ? 'bg-green-500' : 'bg-red-500'}`} />
+                <span className="text-xs text-muted-foreground">Telegram</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className={`w-2 h-2 rounded-full ${connectionStatus.gmgn ? 'bg-green-500' : 'bg-red-500'}`} />
+                <span className="text-xs text-muted-foreground">GMGN</span>
+              </div>
+            </div>
+          </Card>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <Card className="p-6 border-2 border-primary/20">
             <h3 className="text-lg font-semibold text-foreground mb-4">Balance CEX</h3>
             {balancesLoading ? (
               <div className="h-12 bg-muted animate-pulse rounded" />
             ) : (
-              <div>
-                <p className="text-3xl font-bold text-primary">
-                  ${balances?.find((b: any) => b.marketType === 'CEX')?.amount.toFixed(2) || '0.00'}
-                </p>
-                <p className="text-sm text-muted-foreground mt-2">
-                  {demoMode ? 'Balance Virtual' : 'Balance Real'}
-                </p>
+              <div className="space-y-3">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Virtual (Simulación)</p>
+                  <p className="text-2xl font-bold text-primary">
+                    ${(balances?.find((b: any) => b.marketType === 'CEX')?.amount || 0).toFixed(2)}
+                  </p>
+                </div>
+
+                {balances?.find((b: any) => b.marketType === 'CEX')?.realBalance !== undefined && (
+                  <div className="pt-3 border-t border-border">
+                    <p className="text-xs text-muted-foreground mb-1">Real (Exchange)</p>
+                    <p className="text-2xl font-bold text-green-600">
+                      ${(balances.find((b: any) => b.marketType === 'CEX').realBalance || 0).toFixed(2)}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-1">USDT</p>
+                  </div>
+                )}
               </div>
             )}
           </Card>
@@ -89,11 +148,9 @@ export default function Dashboard() {
               <div className="h-12 bg-muted animate-pulse rounded" />
             ) : (
               <div>
-                <p className="text-3xl font-bold text-primary">
-                  {balances?.find((b: any) => b.marketType === 'DEX')?.amount.toFixed(4) || '0.0000'} SOL
-                </p>
-                <p className="text-sm text-muted-foreground mt-2">
-                  {demoMode ? 'Balance Virtual' : 'Balance Real'}
+                <p className="text-xs text-muted-foreground mb-1">Virtual (Simulación)</p>
+                <p className="text-2xl font-bold text-primary">
+                  {(balances?.find((b: any) => b.marketType === 'DEX')?.amount || 0).toFixed(4)} SOL
                 </p>
               </div>
             )}
@@ -147,11 +204,10 @@ export default function Dashboard() {
                   </div>
                   <div className="text-right">
                     <p
-                      className={`font-semibold ${
-                        trade.pnl && trade.pnl > 0
-                          ? 'text-green-600'
-                          : 'text-red-600'
-                      }`}
+                      className={`font-semibold ${trade.pnl && trade.pnl > 0
+                        ? 'text-green-600'
+                        : 'text-red-600'
+                        }`}
                     >
                       ${trade.pnl?.toFixed(2) || '0.00'}
                     </p>

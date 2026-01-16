@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { trpc } from '@/lib/trpc';
 import { Eye, EyeOff, Save, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { CCXT_EXCHANGES } from '@/constants/exchanges';
 
 export default function Settings() {
   const { data: config, isLoading } = trpc.trading.getConfig.useQuery();
@@ -34,6 +35,10 @@ export default function Settings() {
     investmentLimits: {
       cexMaxAmount: 100,
       dexMaxAmount: 1
+    },
+    virtualBalances: {
+      cex: 10000,
+      dex: 10
     }
   });
 
@@ -61,6 +66,10 @@ export default function Settings() {
         investmentLimits: {
           cexMaxAmount: config.investmentLimits?.cexMaxAmount ?? 100,
           dexMaxAmount: config.investmentLimits?.dexMaxAmount ?? 1
+        },
+        virtualBalances: {
+          cex: config.virtualBalances?.cex ?? 10000,
+          dex: config.virtualBalances?.dex ?? 10
         }
       });
     }
@@ -240,6 +249,27 @@ export default function Settings() {
                 />
               </div>
             </Card>
+
+            <Card className="p-6">
+              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">💵 Balance Virtual Inicial</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <InputField
+                  label="CEX (USDT)"
+                  value={formData.virtualBalances.cex}
+                  onChange={(v: string) => setFormData({ ...formData, virtualBalances: { ...formData.virtualBalances, cex: parseFloat(v) || 0 } })}
+                  type="number"
+                />
+                <InputField
+                  label="DEX (SOL)"
+                  value={formData.virtualBalances.dex}
+                  onChange={(v: string) => setFormData({ ...formData, virtualBalances: { ...formData.virtualBalances, dex: parseFloat(v) || 0 } })}
+                  type="number"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground mt-3 p-2 bg-muted/20 rounded border border-border/50">
+                💡 Este balance se usará para simular operaciones en modo demo. Se actualizará automáticamente con cada trade simulado.
+              </p>
+            </Card>
           </div>
 
           {/* DEX & General */}
@@ -312,11 +342,11 @@ export default function Settings() {
                       onChange={(e) => updateExchange(index, 'exchangeId', e.target.value)}
                       className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground"
                     >
-                      <option value="binance">Binance</option>
-                      <option value="okx">OKX</option>
-                      <option value="kucoin">KuCoin</option>
-                      <option value="bybit">Bybit</option>
-                      <option value="gateio">Gate.io</option>
+                      {CCXT_EXCHANGES.map(exchange => (
+                        <option key={exchange} value={exchange}>
+                          {exchange.charAt(0).toUpperCase() + exchange.slice(1)}
+                        </option>
+                      ))}
                     </select>
                   </div>
                   <InputField
@@ -345,7 +375,7 @@ export default function Settings() {
                     value={ex.uid}
                     onChange={(v: string) => updateExchange(index, 'uid', v)}
                   />
-                  <div className="flex items-end pb-2">
+                  <div className="flex items-end pb-2 gap-2">
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
                         type="checkbox"
@@ -354,6 +384,38 @@ export default function Settings() {
                       />
                       <span className="text-sm">Activo</span>
                     </label>
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="ml-auto"
+                      onClick={async () => {
+                        if (!ex.apiKey || !ex.secret) {
+                          toast.error("API Key y Secret requeridos");
+                          return;
+                        }
+                        const loadingToast = toast.loading("Probando conexión...");
+                        try {
+                          const res = await fetch('http://localhost:8000/test-connection', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(ex)
+                          });
+                          const data = await res.json();
+                          toast.dismiss(loadingToast);
+                          if (data.success) {
+                            toast.success("Conexión Exitosa: " + data.message);
+                          } else {
+                            toast.error("Error: " + data.message);
+                          }
+                        } catch (e: any) {
+                          toast.dismiss(loadingToast);
+                          toast.error("Error de red: " + e.message);
+                        }
+                      }}
+                    >
+                      Probar 🔌
+                    </Button>
                   </div>
                 </div>
               </div>

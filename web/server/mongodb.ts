@@ -52,6 +52,10 @@ const AppConfigSchema = new Schema({
   investmentLimits: {
     cexMaxAmount: { type: Number, default: 100 },
     dexMaxAmount: { type: Number, default: 1 }
+  },
+  virtualBalances: {
+    cex: { type: Number, default: 10000 },
+    dex: { type: Number, default: 10 }
   }
 }, { timestamps: true });
 

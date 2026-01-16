@@ -20,6 +20,7 @@ export function SignalsKeiLayout({ children, currentPage }: SignalsKeiLayoutProp
     { label: 'Señales', href: '/signals', icon: '📡' },
     { label: 'Trades', href: '/trades', icon: '💱' },
     { label: 'Backtesting', href: '/backtest', icon: '📈' },
+    { label: 'Telegram Console', href: '/telegram-console', icon: '📨' },
     { label: 'Configuración', href: '/settings', icon: '⚙️' },
   ];
 

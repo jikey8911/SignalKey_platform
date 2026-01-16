@@ -51,8 +51,8 @@ export const appRouter = router({
         }).optional(),
         exchanges: z.array(z.object({
           exchangeId: z.string(),
-          apiKey: z.string(),
-          secret: z.string(),
+          apiKey: z.string().optional(),
+          secret: z.string().optional(),
           password: z.string().optional(),
           uid: z.string().optional(),
           isActive: z.boolean().optional()
@@ -64,6 +64,10 @@ export const appRouter = router({
         investmentLimits: z.object({
           cexMaxAmount: z.number().optional(),
           dexMaxAmount: z.number().optional()
+        }).optional(),
+        virtualBalances: z.object({
+          cex: z.number().optional(),
+          dex: z.number().optional()
         }).optional()
       }))
       .mutation(async ({ ctx, input }) => {

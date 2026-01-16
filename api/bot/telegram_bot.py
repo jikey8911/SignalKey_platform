@@ -2,6 +2,7 @@ from telethon import TelegramClient, events
 from api.config import Config
 from api.models.schemas import TradingSignal
 from api.models.mongodb import db
+from datetime import datetime
 import httpx
 import logging
 import asyncio
@@ -53,6 +54,20 @@ class TelegramUserBot:
             if not text:
                 return
 
+            # Log Log entry
+            try:
+                chat_title = event.chat.title if hasattr(event.chat, 'title') else "Private/Unknown"
+                log_entry = {
+                    "chatId": chat_id,
+                    "chatName": chat_title,
+                    "message": text,
+                    "timestamp": datetime.utcnow(),
+                    "status": "ignored" # default
+                }
+            except Exception as e:
+                logger.error(f"Error preparing log: {e}")
+                log_entry = None
+
             try:
                 # Fetch all configs (optimization needed for prod)
                 # TODO: This pulls ALL configs. In production, we need to map to specific user.
@@ -71,8 +86,6 @@ class TelegramUserBot:
                     
                     if not allow_list: 
                         # If allow list is missing or empty, LEGACY mode: ALLOW ALL
-                        # UNLESS 'telegramChannels' key exists and is empty list?
-                        # Let's say: If 'allow' is empty, we allow.
                         allowed = True
                         break
 
@@ -80,12 +93,20 @@ class TelegramUserBot:
                         allowed = True
                         break
                 
+                # Update log status if allowed
+                if allowed:
+                    if log_entry: log_entry["status"] = "processed"
+                
+                # Save log
+                if log_entry:
+                    await db.telegram_logs.insert_one(log_entry)
+
                 # If after checking all configs, allowed is still False
                 if not allowed:
                     return
 
             except Exception as e:
-                logger.error(f"Error checking permissions: {e}")
+                logger.error(f"Error checking permissions/logging: {e}")
 
             logger.info(f"Processing Signal from {chat_id}")
             

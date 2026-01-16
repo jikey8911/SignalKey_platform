@@ -23,11 +23,19 @@ class CEXService:
             if uid:
                 inst_config['uid'] = uid
                 
-            async with exchange_class(inst_config) as instance:
-                # Try fetching balance as a connectivity test
-                # fetch_balance usually requires authentication
-                await instance.fetch_balance()
-                return True, "Conexión exitosa"
+            instance = exchange_class(inst_config)
+            # Try fetching balance as a connectivity test
+            result = instance.fetch_balance()
+            # Check if it's a coroutine (async) or direct result (sync)
+            import inspect
+            if inspect.iscoroutine(result):
+                await result
+            # Close if method exists
+            if hasattr(instance, 'close'):
+                close_result = instance.close()
+                if inspect.iscoroutine(close_result):
+                    await close_result
+            return True, "Conexión exitosa"
         except Exception as e:
             logger.error(f"Error testing connection {exchange_id}: {e}")
             return False, str(e)
@@ -110,6 +118,28 @@ class CEXService:
                     "status": "completed"
                 }
                 await save_trade(trade_doc)
+                
+                # Update virtual balance
+                # Get current virtual balance
+                user = await db.users.find_one({"openId": user_id})
+                if user:
+                    current_balance_doc = await db.virtual_balances.find_one({
+                        "userId": user["_id"],
+                        "marketType": "CEX",
+                        "asset": "USDT"
+                    })
+                    
+                    current_balance = current_balance_doc["amount"] if current_balance_doc else config.get("virtualBalances", {}).get("cex", 10000)
+                    
+                    # Calculate new balance (subtract amount spent on BUY, add on SELL)
+                    if side == "buy":
+                        new_balance = current_balance - amount
+                    else:  # sell
+                        new_balance = current_balance + amount
+                    
+                    # Update in DB
+                    await update_virtual_balance(user_id, "CEX", "USDT", new_balance)
+                    logger.info(f"Virtual balance updated: {current_balance} -> {new_balance}")
                 
                 # Actualizar balance virtual (simplificado: asumiendo USDT como base)
                 # En una implementación real, buscaríamos el balance actual y restaríamos/sumaríamos
