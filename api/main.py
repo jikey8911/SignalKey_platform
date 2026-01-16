@@ -1,129 +1,78 @@
+from fastapi import FastAPI, BackgroundTasks
+from crypto_bot_api.models.schemas import TradingSignal
+from crypto_bot_api.services.gemini_service import GeminiService
+from crypto_bot_api.services.cex_service import CEXService
+from crypto_bot_api.services.dex_service import DEXService
+from crypto_bot_api.services.backtest_service import BacktestService
+from crypto_bot_api.models.database import init_db, SessionLocal, VirtualBalance, TradeHistory
 import logging
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-from config import Config
 
-# Configure logging
-logging.basicConfig(level=Config.LOG_LEVEL)
+# Inicializar DB
+init_db()
+
+# Configuración de logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize FastAPI app
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    logger.info("🚀 SignalKey Trading API iniciando...")
-    yield
-    logger.info("🛑 SignalKey Trading API cerrando...")
+app = FastAPI(title="Crypto Trading Signal API")
 
-app = FastAPI(
-    title="SignalKey Trading API",
-    description="API para trading automatizado con análisis de IA",
-    version="1.0.0",
-    lifespan=lifespan
-)
+# Inicialización de servicios
+gemini_service = GeminiService()
+cex_service = CEXService()
+dex_service = DEXService()
+backtest_service = BacktestService()
 
-# CORS middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+async def process_signal_task(signal: TradingSignal):
+    logger.info(f"Procesando señal de {signal.source}")
+    
+    # 1. Analizar con Gemini
+    analysis = await gemini_service.analyze_signal(signal.raw_text)
+    logger.info(f"Análisis completado: {analysis.decision} para {analysis.symbol}")
+    
+    if analysis.decision == "HOLD":
+        logger.info("Decisión: HOLD. No se ejecuta operación.")
+        return
 
-# Health check endpoint
+    # 2. Ejecutar operación
+    if analysis.market_type == "DEX":
+        result = await dex_service.execute_trade(analysis)
+    else:
+        result = await cex_service.execute_trade(analysis)
+        
+    logger.info(f"Resultado de ejecución: {'Éxito' if result.success else 'Fallo'} - {result.message}")
+
+@app.post("/webhook/signal")
+async def receive_signal(signal: TradingSignal, background_tasks: BackgroundTasks):
+    background_tasks.add_task(process_signal_task, signal)
+    return {"status": "Signal received and processing in background"}
+
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "healthy",
-        "demo_mode": Config.DEMO_MODE,
-        "exchange": Config.EXCHANGE_ID
-    }
+    return {"status": "healthy"}
 
-# Telegram webhook endpoint
-@app.post("/webhook/telegram")
-async def telegram_webhook(data: dict):
-    """
-    Recibe señales de Telegram y las procesa
-    """
-    try:
-        logger.info(f"📡 Señal recibida: {data}")
-        
-        # Aquí se procesaría la señal con Gemini AI
-        # y se ejecutaría la operación en CEX/DEX
-        
-        return {
-            "status": "received",
-            "message": "Señal procesada correctamente"
-        }
-    except Exception as e:
-        logger.error(f"Error procesando señal: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
+@app.get("/demo/balance")
+async def get_demo_balance():
+    db = SessionLocal()
+    balances = db.query(VirtualBalance).all()
+    result = {b.market_type + "_" + b.asset: b.amount for b in balances}
+    db.close()
+    return result
 
-# Generic webhook endpoint
-@app.post("/webhook/signal")
-async def signal_webhook(data: dict):
-    """
-    Recibe señales de cualquier fuente
-    """
-    try:
-        logger.info(f"📡 Señal recibida: {data}")
-        return {
-            "status": "received",
-            "message": "Señal procesada correctamente"
-        }
-    except Exception as e:
-        logger.error(f"Error procesando señal: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
+@app.get("/demo/history")
+async def get_demo_history():
+    db = SessionLocal()
+    history = db.query(TradeHistory).order_by(TradeHistory.timestamp.desc()).limit(50).all()
+    db.close()
+    return history
 
-# Backtesting endpoint
-@app.post("/backtest")
-async def run_backtest(symbol: str, days: int = 30, timeframe: str = "1h"):
-    """
-    Ejecuta un backtesting con datos históricos
-    """
-    try:
-        logger.info(f"📊 Backtesting: {symbol} ({days} días, {timeframe})")
-        
-        # Aquí se ejecutaría el backtesting
-        
-        return {
-            "status": "completed",
-            "symbol": symbol,
-            "days": days,
-            "timeframe": timeframe,
-            "results": {
-                "total_trades": 0,
-                "win_rate": 0,
-                "profit_factor": 0,
-                "max_drawdown": 0
-            }
-        }
-    except Exception as e:
-        logger.error(f"Error en backtesting: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
-
-# Configuration endpoint
-@app.get("/config")
-async def get_config():
-    """
-    Retorna la configuración actual
-    """
-    return {
-        "demo_mode": Config.DEMO_MODE,
-        "exchange": Config.EXCHANGE_ID,
-        "has_gemini_key": bool(Config.GEMINI_API_KEY),
-        "has_gmgn_key": bool(Config.GMGN_API_KEY),
-        "has_telegram_token": bool(Config.TELEGRAM_BOT_TOKEN),
-        "has_cex_credentials": bool(Config.CEX_API_KEY),
-        "has_dex_wallet": bool(Config.DEX_WALLET_PRIVATE_KEY)
-    }
+@app.get("/backtest/{symbol}")
+async def run_backtest(symbol: str, days: int = 7):
+    # Reemplazar / por _ para el path si es necesario
+    clean_symbol = symbol.replace("-", "/")
+    result = await backtest_service.run_backtest(clean_symbol, days=days)
+    return result
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "main:app",
-        host=Config.API_HOST,
-        port=Config.API_PORT,
-        reload=True
-    )
+    from crypto_bot_api.config import Config
+    uvicorn.run(app, host="0.0.0.0", port=Config.PORT)
