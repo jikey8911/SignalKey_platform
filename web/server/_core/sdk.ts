@@ -4,8 +4,7 @@ import axios, { type AxiosInstance } from "axios";
 import { parse as parseCookieHeader } from "cookie";
 import type { Request } from "express";
 import { SignJWT, jwtVerify } from "jose";
-import type { User } from "../../drizzle/schema";
-import * as db from "../db";
+import { User } from "../mongodb"; // New import
 import { ENV } from "./env";
 import type {
   ExchangeTokenRequest,
@@ -268,23 +267,27 @@ class SDKServer {
 
     const sessionUserId = session.openId;
     const signedInAt = new Date();
-    let user = await db.getUserByOpenId(sessionUserId);
+
+    // Find user in MongoDB
+    let user = await User.findOne({ openId: sessionUserId });
 
     // If user not in DB, sync from OAuth server automatically
     if (!user) {
       try {
         const userInfo = await this.getUserInfoWithJwt(sessionCookie ?? "");
-        await db.upsertUser({
+        // Create user in MongoDB
+        user = await User.create({
           openId: userInfo.openId,
           name: userInfo.name || null,
           email: userInfo.email ?? null,
           loginMethod: userInfo.loginMethod ?? userInfo.platform ?? null,
           lastSignedIn: signedInAt,
         });
-        user = await db.getUserByOpenId(userInfo.openId);
       } catch (error) {
         console.error("[Auth] Failed to sync user from OAuth:", error);
-        throw ForbiddenError("Failed to sync user info");
+        // For local dev, if we can't sync, we might just fail. 
+        // But for our new local auth flow, the user should already exist via register.
+        throw ForbiddenError("Failed to sync user info or User not found");
       }
     }
 
@@ -292,10 +295,11 @@ class SDKServer {
       throw ForbiddenError("User not found");
     }
 
-    await db.upsertUser({
-      openId: user.openId,
-      lastSignedIn: signedInAt,
-    });
+    // Update last signed in
+    await User.updateOne(
+      { _id: user._id },
+      { $set: { lastSignedIn: signedInAt } }
+    );
 
     return user;
   }

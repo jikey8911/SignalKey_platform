@@ -1,8 +1,8 @@
 import google.generativeai as genai
 import json
 import logging
-from crypto_bot_api.config import Config
-from crypto_bot_api.models.schemas import AnalysisResult
+from api.config import Config
+from api.models.schemas import AnalysisResult
 
 logger = logging.getLogger(__name__)
 

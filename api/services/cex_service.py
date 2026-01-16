@@ -1,8 +1,8 @@
 import ccxt
 import logging
 from typing import Optional, Dict, Any
-from crypto_bot_api.models.schemas import AnalysisResult, ExecutionResult
-from crypto_bot_api.models.mongodb import get_app_config, save_trade, update_virtual_balance
+from api.models.schemas import AnalysisResult, ExecutionResult
+from api.models.mongodb import get_app_config, save_trade, update_virtual_balance
 
 logger = logging.getLogger(__name__)
 

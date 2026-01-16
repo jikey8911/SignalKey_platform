@@ -1,10 +1,10 @@
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
-from crypto_bot_api.models.schemas import TradingSignal
-from crypto_bot_api.services.gemini_service import GeminiService
-from crypto_bot_api.services.cex_service import CEXService
-from crypto_bot_api.services.dex_service import DEXService
-from crypto_bot_api.services.backtest_service import BacktestService
-from crypto_bot_api.models.mongodb import db, get_app_config
+from api.models.schemas import TradingSignal
+from api.services.gemini_service import GeminiService
+from api.services.cex_service import CEXService
+from api.services.dex_service import DEXService
+from api.services.backtest_service import BacktestService
+from api.models.mongodb import db, get_app_config
 import logging
 from typing import Optional
 from bson import ObjectId
@@ -13,7 +13,32 @@ from bson import ObjectId
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Crypto Trading Signal API (MongoDB Refactored)")
+from contextlib import asynccontextmanager
+from api.bot.telegram_bot import start_userbot, bot_instance
+from fastapi.middleware.cors import CORSMiddleware
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Starting Telegram UserBot...")
+    # Run in background to not block startup if auth is needed (though auth IS blocking for input)
+    # Ideally, we start it as a task.
+    import asyncio
+    asyncio.create_task(start_userbot())
+    yield
+    # Shutdown
+    logger.info("Stopping Telegram UserBot...")
+    await bot_instance.stop()
+
+app = FastAPI(title="Crypto Trading Signal API (MongoDB Refactored)", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000", "http://localhost:3001"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Inicialización de servicios
 gemini_service = GeminiService()
@@ -48,6 +73,16 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
 async def receive_signal(signal: TradingSignal, background_tasks: BackgroundTasks, user_id: Optional[str] = "default_user"):
     background_tasks.add_task(process_signal_task, signal, user_id)
     return {"status": "Signal received and processing in background"}
+
+@app.get("/telegram/dialogs")
+async def get_telegram_dialogs():
+    """Returns list of channels/groups from the UserBot."""
+    try:
+        dialogs = await bot_instance.get_dialogs()
+        return dialogs
+    except Exception as e:
+        logger.error(f"Error getting dialogs: {e}")
+        return []
 
 @app.get("/health")
 async def health_check():

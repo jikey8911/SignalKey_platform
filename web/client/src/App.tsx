@@ -11,6 +11,7 @@ import Trades from "./pages/Trades";
 import Backtest from "./pages/Backtest";
 import Settings from "./pages/Settings";
 import Home from "./pages/Home";
+import Login from "./pages/Login";
 
 function Router() {
   return (
@@ -20,6 +21,7 @@ function Router() {
       <Route path={"/trades"} component={Trades} />
       <Route path={"/backtest"} component={Backtest} />
       <Route path={"/settings"} component={Settings} />
+      <Route path={"/login"} component={Login} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>

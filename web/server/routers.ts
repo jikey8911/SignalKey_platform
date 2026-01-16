@@ -45,6 +45,10 @@ export const appRouter = router({
         gmgnApiKey: z.string().optional(),
         telegramBotToken: z.string().optional(),
         telegramChatId: z.string().optional(),
+        telegramChannels: z.object({
+          allow: z.array(z.string()).optional(),
+          deny: z.array(z.string()).optional()
+        }).optional(),
         exchanges: z.array(z.object({
           exchangeId: z.string(),
           apiKey: z.string(),
@@ -65,7 +69,7 @@ export const appRouter = router({
       .mutation(async ({ ctx, input }) => {
         const mongoUser = await User.findOne({ openId: ctx.user.openId });
         if (!mongoUser) throw new Error("User not found in MongoDB");
-        
+
         await AppConfig.findOneAndUpdate(
           { userId: mongoUser._id },
           { $set: input },

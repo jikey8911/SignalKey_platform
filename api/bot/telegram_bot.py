@@ -1,88 +1,122 @@
-from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
-from crypto_bot_api.models.schemas import TradingSignal
-from crypto_bot_api.models.mongodb import db
+from telethon import TelegramClient, events
+from api.config import Config
+from api.models.schemas import TradingSignal
+from api.models.mongodb import db
 import httpx
 import logging
 import asyncio
+import os
 
 logger = logging.getLogger(__name__)
 
-class TelegramSignalBotManager:
+class TelegramUserBot:
     def __init__(self):
-        self.active_bots = {} # token -> application
+        self.api_id = Config.TELEGRAM_API_ID
+        self.api_hash = Config.TELEGRAM_API_HASH
+        self.session_file = 'userbot_session' # Session name
+        self.client = None
         self.api_url = "http://localhost:8000/webhook/signal"
 
-    async def handle_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not update.message or not update.message.text:
+        if not self.api_id or not self.api_hash:
+            logger.warning("TELEGRAM_API_ID or TELEGRAM_API_HASH not set. UserBot will not start.")
+
+    async def get_dialogs(self):
+        if not self.client:
+            return []
+        dialogs = []
+        try:
+            # We need to ensure we are connected before fetching dialogs.
+            # Usually start() is called at startup.
+            if not self.client.is_connected():
+                 # Maybe we shouldn't force connect here if start failed.
+                 return []
+                 
+            async for dialog in self.client.iter_dialogs(limit=50):
+                if dialog.is_channel or dialog.is_group:
+                    # Provide ID as string to match JS expectations and avoid bigInt issues
+                    dialogs.append({"id": str(dialog.id), "name": dialog.name})
+        except Exception as e:
+            logger.error(f"Error fetching dialogs: {e}")
+        return dialogs
+
+    async def start(self):
+        if not self.api_id or not self.api_hash:
             return
 
-        signal_text = update.message.text
-        chat_id = str(update.effective_chat.id)
-        
-        # Verificar si este chat_id está autorizado para este bot en la DB
-        # (Opcional: podrías filtrar por telegramChatId guardado en app_configs)
-        
-        logger.info(f"Nueva señal recibida de Telegram (Chat: {chat_id}): {signal_text[:50]}...")
+        self.client = TelegramClient(self.session_file, int(self.api_id), self.api_hash)
 
-        async with httpx.AsyncClient() as client:
+        @self.client.on(events.NewMessage)
+        async def handler(event):
+            chat_id = str(event.chat_id)
+            text = event.message.message
+            
+            if not text:
+                return
+
             try:
-                payload = {
-                    "source": f"telegram_{chat_id}",
-                    "raw_text": signal_text
-                }
-                response = await client.post(self.api_url, json=payload)
-                if response.status_code == 200:
-                    logger.info("Señal enviada correctamente a la API")
-                else:
-                    logger.error(f"Error enviando señal a la API: {response.text}")
-            except Exception as e:
-                logger.error(f"Error de conexión con la API: {e}")
+                # Fetch all configs (optimization needed for prod)
+                # TODO: This pulls ALL configs. In production, we need to map to specific user.
+                cursor = db.app_configs.find({})
+                configs = await cursor.to_list(length=10)
+                
+                allowed = False
+                for config in configs:
+                    channels = config.get("telegramChannels", {})
+                    allow_list = channels.get("allow", [])
+                    deny_list = channels.get("deny", [])
+                    
+                    if chat_id in deny_list:
+                        # Explicit deny always wins for this config
+                        continue
+                    
+                    if not allow_list: 
+                        # If allow list is missing or empty, LEGACY mode: ALLOW ALL
+                        # UNLESS 'telegramChannels' key exists and is empty list?
+                        # Let's say: If 'allow' is empty, we allow.
+                        allowed = True
+                        break
 
-    async def start_bot(self, token: str):
-        if token in self.active_bots:
-            return
+                    if chat_id in allow_list:
+                        allowed = True
+                        break
+                
+                # If after checking all configs, allowed is still False
+                if not allowed:
+                    return
+
+            except Exception as e:
+                logger.error(f"Error checking permissions: {e}")
+
+            logger.info(f"Processing Signal from {chat_id}")
+            
+            async with httpx.AsyncClient() as client:
+                try:
+                    payload = {
+                        "source": f"telegram_{chat_id}",
+                        "raw_text": text
+                    }
+                    response = await client.post(self.api_url, json=payload)
+                    if response.status_code != 200:
+                         logger.error(f"Error sending signal to API: {response.text}")
+                except Exception as e:
+                    logger.error(f"Error connection to API: {e}")
 
         try:
-            application = ApplicationBuilder().token(token).build()
-            message_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), self.handle_message)
-            application.add_handler(message_handler)
-            
-            # Iniciar en modo no bloqueante
-            await application.initialize()
-            await application.start()
-            await application.updater.start_polling()
-            
-            self.active_bots[token] = application
-            logger.info(f"Bot con token {token[:10]}... iniciado")
+            await self.client.start()
+            logger.info("Telegram UserBot started!")
+            if not await self.client.is_user_authorized():
+                logger.error("UserBot NOT authorized. Run the setup script manually first.")
+                await self.client.disconnect()
+                return
+
         except Exception as e:
-            logger.error(f"Error iniciando bot {token[:10]}...: {e}")
+            logger.error(f"Error starting UserBot: {e}")
 
-    async def sync_with_db(self):
-        """Sincroniza los bots activos con los tokens en la base de datos"""
-        while True:
-            try:
-                # Obtener todos los tokens únicos de la colección app_configs
-                cursor = db.app_configs.find({"telegramBotToken": {"$ne": None}})
-                configs = await cursor.to_list(length=100)
-                tokens = {c["telegramBotToken"] for c in configs if c.get("telegramBotToken")}
-                
-                # Iniciar nuevos bots
-                for token in tokens:
-                    if token not in self.active_bots:
-                        await self.start_bot(token)
-                
-                # (Opcional) Detener bots que ya no están en la DB
-                
-            except Exception as e:
-                logger.error(f"Error sincronizando bots con DB: {e}")
-            
-            await asyncio.sleep(60) # Sincronizar cada minuto
+    async def stop(self):
+        if self.client:
+            await self.client.disconnect()
 
-async def run_manager():
-    manager = TelegramSignalBotManager()
-    await manager.sync_with_db()
+bot_instance = TelegramUserBot()
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(run_manager())
+async def start_userbot():
+    await bot_instance.start()

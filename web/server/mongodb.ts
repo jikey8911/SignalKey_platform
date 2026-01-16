@@ -19,6 +19,7 @@ const UserSchema = new Schema({
   name: String,
   email: String,
   role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  password: { type: String, select: false }, // Added for local auth
   lastSignedIn: { type: Date, default: Date.now },
 }, { timestamps: true });
 
@@ -32,6 +33,10 @@ const AppConfigSchema = new Schema({
   gmgnApiKey: String,
   telegramBotToken: String,
   telegramChatId: String,
+  telegramChannels: {
+    allow: [String],
+    deny: [String]
+  },
   exchanges: [{
     exchangeId: { type: String, default: 'binance' },
     apiKey: String,

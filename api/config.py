@@ -7,6 +7,8 @@ class Config:
     # API Keys
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    TELEGRAM_API_ID = os.getenv("TELEGRAM_API_ID")
+    TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
     GMGN_API_KEY = os.getenv("GMGN_API_KEY")
     
     # CEX Config (Example for CCXT)
