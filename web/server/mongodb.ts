@@ -23,7 +23,7 @@ const UserSchema = new Schema({
   lastSignedIn: { type: Date, default: Date.now },
 }, { timestamps: true });
 
-export const User = mongoose.models.User || mongoose.model('User', UserSchema);
+export const User = mongoose.models.User || mongoose.model('User', UserSchema, 'users');
 
 // App Config Schema
 const AppConfigSchema = new Schema({
@@ -59,7 +59,7 @@ const AppConfigSchema = new Schema({
   }
 }, { timestamps: true });
 
-export const AppConfig = mongoose.models.AppConfig || mongoose.model('AppConfig', AppConfigSchema);
+export const AppConfig = mongoose.models.AppConfig || mongoose.model('AppConfig', AppConfigSchema, 'app_configs');
 
 // Trading Signal Schema
 const TradingSignalSchema = new Schema({
@@ -74,7 +74,7 @@ const TradingSignalSchema = new Schema({
   status: { type: String, default: 'pending' }
 }, { timestamps: true });
 
-export const TradingSignal = mongoose.models.TradingSignal || mongoose.model('TradingSignal', TradingSignalSchema);
+export const TradingSignal = mongoose.models.TradingSignal || mongoose.model('TradingSignal', TradingSignalSchema, 'trading_signals');
 
 // Trade Schema
 const TradeSchema = new Schema({
@@ -92,7 +92,7 @@ const TradeSchema = new Schema({
   executedAt: Date
 }, { timestamps: true });
 
-export const Trade = mongoose.models.Trade || mongoose.model('Trade', TradeSchema);
+export const Trade = mongoose.models.Trade || mongoose.model('Trade', TradeSchema, 'trades');
 
 // Virtual Balance Schema
 const VirtualBalanceSchema = new Schema({
@@ -102,4 +102,4 @@ const VirtualBalanceSchema = new Schema({
   amount: Number
 }, { timestamps: true });
 
-export const VirtualBalance = mongoose.models.VirtualBalance || mongoose.model('VirtualBalance', VirtualBalanceSchema);
+export const VirtualBalance = mongoose.models.VirtualBalance || mongoose.model('VirtualBalance', VirtualBalanceSchema, 'virtual_balances');

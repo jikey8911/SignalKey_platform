@@ -23,6 +23,26 @@ export const appRouter = router({
           role: opts.ctx.user.role
         });
       }
+
+      // Asegurar que exista AppConfig
+      let config = await AppConfig.findOne({ userId: mongoUser._id });
+      if (!config) {
+        await AppConfig.create({
+          userId: mongoUser._id,
+          demoMode: true,
+          investmentLimits: { cexMaxAmount: 100, dexMaxAmount: 1 },
+          virtualBalances: { cex: 10000, dex: 10 }
+        });
+
+        // Inicializar VirtualBalances si no existen
+        const hasBalances = await VirtualBalance.exists({ userId: mongoUser._id });
+        if (!hasBalances) {
+          await VirtualBalance.insertMany([
+            { userId: mongoUser._id, marketType: 'CEX', asset: 'USDT', amount: 10000 },
+            { userId: mongoUser._id, marketType: 'DEX', asset: 'SOL', amount: 10 }
+          ]);
+        }
+      }
       return mongoUser;
     }),
     logout: publicProcedure.mutation(({ ctx }) => {
@@ -94,6 +114,19 @@ export const appRouter = router({
     getBalances: protectedProcedure.query(async ({ ctx }) => {
       const mongoUser = await User.findOne({ openId: ctx.user.openId });
       if (!mongoUser) return [];
+
+      try {
+        // Intentar obtener balances enriquecidos desde la API (incluye balance real del exchange)
+        const res = await fetch(`http://localhost:8000/balances/${ctx.user.openId}`);
+        if (res.ok) {
+          const data = await res.json();
+          return data;
+        }
+      } catch (e) {
+        console.error("Error fetching balances from API, falling back to DB:", e);
+      }
+
+      // Fallback a solo balances virtuales de la DB
       return await VirtualBalance.find({ userId: mongoUser._id });
     }),
   }),

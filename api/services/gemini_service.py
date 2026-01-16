@@ -15,8 +15,18 @@ class GeminiService:
             self.model = None
             logger.warning("GEMINI_API_KEY no configurado. El análisis fallará.")
 
-    async def analyze_signal(self, text: str) -> AnalysisResult:
-        if not self.model:
+    async def analyze_signal(self, text: str, api_key: str = None) -> AnalysisResult:
+        model = self.model
+        if api_key:
+            try:
+                # Local configuration for this request
+                genai.configure(api_key=api_key)
+                model = genai.GenerativeModel('gemini-1.5-flash')
+            except Exception as e:
+                logger.error(f"Error configuring Gemini with provided API key: {e}")
+                return self._default_hold("Error in API Key configuration")
+
+        if not model:
             return self._default_hold("API Key de Gemini no configurada")
 
         prompt = f"""

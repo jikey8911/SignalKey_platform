@@ -3,9 +3,11 @@ import { SignalsKeiLayout } from '@/components/SignalsKeiLayout';
 import { Card } from '@/components/ui/card';
 import { trpc } from '@/lib/trpc';
 import { useTrading } from '@/contexts/TradingContext';
+import { useAuth } from '@/_core/hooks/useAuth';
 import { TrendingUp, TrendingDown, DollarSign, Zap } from 'lucide-react';
 
 export default function Dashboard() {
+  const { user } = useAuth();
   const { demoMode } = useTrading();
   const { data: balances, isLoading: balancesLoading, refetch: refetchBalances } = trpc.trading.getBalances.useQuery();
   const { data: trades, isLoading: tradesLoading } = trpc.trading.getTrades.useQuery();
@@ -14,8 +16,9 @@ export default function Dashboard() {
   // Fetch connection status
   React.useEffect(() => {
     const fetchStatus = async () => {
+      if (!user?.openId) return;
       try {
-        const res = await fetch('http://localhost:8000/status/default_user');
+        const res = await fetch(`http://localhost:8000/status/${user.openId}`);
         const data = await res.json();
         setConnectionStatus(data);
       } catch (e) {
@@ -25,7 +28,7 @@ export default function Dashboard() {
     fetchStatus();
     const interval = setInterval(fetchStatus, 10000); // Update every 10s
     return () => clearInterval(interval);
-  }, []);
+  }, [user?.openId]);
 
   // Refetch balances every 30s
   React.useEffect(() => {
