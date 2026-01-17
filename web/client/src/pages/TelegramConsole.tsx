@@ -25,7 +25,9 @@ export default function TelegramConsole() {
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      const res = await fetch('http://localhost:8000/telegram/logs?limit=100');
+      // Usamos la URL de la API configurada o localhost:8000 por defecto
+      const apiUrl = window.location.hostname === 'localhost' ? 'http://localhost:8000' : `http://${window.location.hostname}:8000`;
+      const res = await fetch(`${apiUrl}/telegram/logs?limit=100`);
       const data = await res.json();
       if (Array.isArray(data)) {
         setLogs(data);
