@@ -19,7 +19,7 @@ export default function Settings() {
   const [formData, setFormData] = useState<{
     demoMode: boolean;
     isAutoEnabled: boolean;
-    aiProvider: 'gemini' | 'openai' | 'perplexity';
+    aiProvider: 'gemini' | 'openai' | 'perplexity' | 'grok';
     aiApiKey: string;
     geminiApiKey: string;
     gmgnApiKey: string;
@@ -220,6 +220,7 @@ export default function Settings() {
                     <option value="gemini">Google Gemini</option>
                     <option value="openai">OpenAI (ChatGPT)</option>
                     <option value="perplexity">Perplexity AI</option>
+                    <option value="grok">Grok (xAI)</option>
                   </select>
                 </div>
                 <InputField

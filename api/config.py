@@ -10,6 +10,7 @@ class Config:
     TELEGRAM_API_ID = os.getenv("TELEGRAM_API_ID")
     TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
     GMGN_API_KEY = os.getenv("GMGN_API_KEY")
+    XAI_API_KEY = os.getenv("XAI_API_KEY")
     
     # CEX Config (Example for CCXT)
     EXCHANGE_ID = os.getenv("EXCHANGE_ID", "binance")

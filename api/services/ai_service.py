@@ -44,6 +44,8 @@ class AIService:
                 api_key = getattr(Config, "OPENAI_API_KEY", None)
             elif ai_provider == "perplexity":
                 api_key = getattr(Config, "PERPLEXITY_API_KEY", None)
+            elif ai_provider == "grok":
+                api_key = getattr(Config, "XAI_API_KEY", None)
 
         # Validar que tenemos una API key
         if not api_key:
@@ -98,6 +100,8 @@ class AIService:
                 result = await self._analyze_openai(prompt, api_key)
             elif ai_provider == "perplexity":
                 result = await self._analyze_perplexity(prompt, api_key)
+            elif ai_provider == "grok":
+                result = await self._analyze_grok(prompt, api_key)
             else:
                 error_msg = f"Proveedor de IA no soportado: {ai_provider}"
                 logger.error(error_msg)
@@ -139,6 +143,29 @@ class AIService:
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
+        response = requests.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+        return self._parse_ai_response(data['choices'][0]['message']['content'])
+
+    async def _analyze_grok(self, prompt: str, api_key: str) -> AnalysisResult:
+        # Grok API es compatible con OpenAI
+        url = "https://api.x.ai/v1/chat/completions"
+        payload = {
+            "model": "grok-2-1218", # O grok-beta
+            "messages": [
+                {"role": "system", "content": "You are a professional crypto trading analyzer. Return only JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            "stream": False,
+            "temperature": 0
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        # Nota: Grok no siempre soporta response_format={"type": "json_object"} dependiendo de la versión
+        # así que forzamos JSON en el prompt y el sistema.
         response = requests.post(url, json=payload, headers=headers)
         response.raise_for_status()
         data = response.json()

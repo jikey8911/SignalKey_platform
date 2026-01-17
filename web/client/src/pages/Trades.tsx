@@ -15,6 +15,7 @@ interface Trade {
   marketType: 'CEX' | 'DEX';
   price: number;
   currentPrice?: number;
+  targetPrice?: number;
   amount: number;
   pnl?: number;
   status: string;
@@ -116,7 +117,7 @@ export default function Trades() {
           <Card className="p-4 bg-gradient-to-br from-primary/10 to-primary/5">
             <p className="text-sm text-muted-foreground mb-1">P&L Total</p>
             <p className={`text-2xl font-bold ${stats.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-              ${stats.totalPnL.toFixed(2)}
+              ${(stats.totalPnL ?? 0).toFixed(2)}
             </p>
           </Card>
           <Card className="p-4 bg-gradient-to-br from-primary/10 to-primary/5">
@@ -126,7 +127,7 @@ export default function Trades() {
           <Card className="p-4 bg-gradient-to-br from-primary/10 to-primary/5">
             <p className="text-sm text-muted-foreground mb-1">P&L Promedio</p>
             <p className={`text-2xl font-bold ${stats.avgPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-              ${stats.avgPnL.toFixed(2)}
+              ${(stats.avgPnL ?? 0).toFixed(2)}
             </p>
           </Card>
         </div>
@@ -203,7 +204,9 @@ export default function Trades() {
                     <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Símbolo</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Tipo</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Mercado</th>
-                    <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Precio</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Entrada</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">P. Actual</th>
+                    <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Objetivo</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Cantidad</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">P&L</th>
                     <th className="px-6 py-3 text-left text-sm font-semibold text-foreground">Modo</th>
@@ -228,8 +231,22 @@ export default function Trades() {
                         </div>
                       </td>
                       <td className="px-6 py-4 text-sm text-foreground">{trade.marketType}</td>
-                      <td className="px-6 py-4 text-sm text-foreground">${trade.price.toFixed(2)}</td>
-                      <td className="px-6 py-4 text-sm text-foreground">{trade.amount.toFixed(4)}</td>
+                      <td className="px-6 py-4 text-sm text-foreground">${(trade.price ?? 0).toFixed(2)}</td>
+                      <td className="px-6 py-4 text-sm">
+                        <span className={
+                          trade.currentPrice && trade.price
+                            ? (trade.side === 'BUY'
+                              ? (trade.currentPrice >= trade.price ? 'text-green-600' : 'text-red-600')
+                              : (trade.currentPrice <= trade.price ? 'text-green-600' : 'text-red-600'))
+                            : 'text-foreground'
+                        }>
+                          ${(trade.currentPrice ?? trade.price ?? 0).toFixed(2)}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-sm text-blue-600 font-medium">
+                        ${(trade.targetPrice ?? 0).toFixed(2)}
+                      </td>
+                      <td className="px-6 py-4 text-sm text-foreground">{(trade.amount ?? 0).toFixed(4)}</td>
                       <td className="px-6 py-4 text-sm font-semibold">
                         <span className={trade.pnl && trade.pnl > 0 ? 'text-green-600' : 'text-red-600'}>
                           ${(trade.pnl || 0).toFixed(2)}

@@ -72,7 +72,8 @@ export const appRouter = router({
     updateConfig: protectedProcedure
       .input(z.object({
         demoMode: z.boolean().optional(),
-        aiProvider: z.enum(['gemini', 'openai', 'perplexity']).optional(),
+        isAutoEnabled: z.boolean().optional(),
+        aiProvider: z.enum(['gemini', 'openai', 'perplexity', 'grok']).optional(),
         aiApiKey: z.string().optional(),
         geminiApiKey: z.string().optional(),
         gmgnApiKey: z.string().optional(),

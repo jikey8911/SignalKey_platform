@@ -29,7 +29,8 @@ export const User = mongoose.models.User || mongoose.model('User', UserSchema, '
 const AppConfigSchema = new Schema({
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   demoMode: { type: Boolean, default: true },
-  aiProvider: { type: String, enum: ['gemini', 'openai', 'perplexity'], default: 'gemini' },
+  isAutoEnabled: { type: Boolean, default: true },
+  aiProvider: { type: String, enum: ['gemini', 'openai', 'perplexity', 'grok'], default: 'gemini' },
   aiApiKey: String,
   geminiApiKey: String, // Mantener por compatibilidad temporal
   gmgnApiKey: String,
