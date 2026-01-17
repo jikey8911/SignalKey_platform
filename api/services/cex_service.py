@@ -1,4 +1,4 @@
-import ccxt
+import ccxt.async_support as ccxt
 import logging
 from typing import Optional, Dict, Any
 from api.models.schemas import AnalysisResult, ExecutionResult
@@ -9,6 +9,23 @@ logger = logging.getLogger(__name__)
 class CEXService:
     def __init__(self):
         self.exchanges = {} # Cache de instancias de exchange por user_id
+        self.public_exchanges = {} # Cache de instancias públicas por exchange_id
+
+    async def close_all(self):
+        """Cierra todas las sesiones de exchange abiertas"""
+        for exchange in self.exchanges.values():
+            try:
+                await exchange.close()
+            except:
+                pass
+        for exchange in self.public_exchanges.values():
+            try:
+                await exchange.close()
+            except:
+                pass
+        self.exchanges = {}
+        self.public_exchanges = {}
+        logger.info("CEXService: Todas las sesiones cerradas.")
 
     async def test_connection(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None):
         try:
@@ -81,30 +98,88 @@ class CEXService:
             logger.error(f"Error inicializando exchange {exchange_id}: {e}")
             return None, config
 
+    def _normalize_symbol(self, symbol: str) -> str:
+        """Normaliza el símbolo al formato de ccxt (e.g. BTC/USDT)"""
+        if not symbol or not str(symbol).strip(): 
+            return "UNKNOWN/USDT"
+        
+        symbol = str(symbol).upper().strip().replace("-", "/").replace("_", "/")
+        
+        if "/" not in symbol:
+            # Intento básico de separar si termina en USDT, USDC, BTC, etc.
+            for quote in ["USDT", "USDC", "BUSD", "BTC", "ETH"]:
+                if symbol.endswith(quote) and symbol != quote:
+                    return f"{symbol[:-len(quote)]}/{quote}"
+        return symbol
+
     async def get_current_price(self, symbol: str, user_id: str) -> float:
         """Obtiene el precio actual de un símbolo para un usuario configurado"""
+        symbol = self._normalize_symbol(symbol)
+        if "UNKNOWN" in symbol:
+            return 0.0
+
         try:
             exchange, config = await self.get_exchange_instance(user_id)
             
-            # Determinar qué exchangeId usar para la consulta pública
+            # Determinar qué exchangeId usar para la consulta pública si no hay instancia autenticada
             exchange_id = "binance"
-            if config and config.get("exchanges"):
-                # Usar el primero activo o el primero de la lista
+            if config and config.get("exchanges") and len(config["exchanges"]) > 0:
                 active_ex = next((e for e in config["exchanges"] if e.get("isActive", True)), config["exchanges"][0])
                 exchange_id = active_ex["exchangeId"]
 
-            # Si no hay instancia autenticada, crear una pública temporal
+            # Si no hay instancia autenticada, usar caché de públicas
             if not exchange:
-                logger.info(f"Usando instancia pública de {exchange_id} para consultar precio de {symbol}")
-                exchange = getattr(ccxt, exchange_id)()
-                ticker = await exchange.fetch_ticker(symbol)
-                await exchange.close()
+                if exchange_id not in self.public_exchanges:
+                    logger.debug(f"Inicializando instancia pública de {exchange_id}")
+                    exchange_class = getattr(ccxt, exchange_id)
+                    self.public_exchanges[exchange_id] = exchange_class({
+                        'enableRateLimit': True,
+                        'options': {'defaultType': 'spot'}
+                    })
+                
+                pub_exchange = self.public_exchanges[exchange_id]
+                try:
+                    if not pub_exchange.markets:
+                        await pub_exchange.load_markets()
+                    
+                    if symbol not in pub_exchange.symbols:
+                        if exchange_id != "binance":
+                            return await self._get_price_from_binance(symbol)
+                        return 0.0
+
+                    ticker = await pub_exchange.fetch_ticker(symbol)
+                except Exception as e:
+                    if exchange_id != "binance":
+                        return await self._get_price_from_binance(symbol)
+                    raise e
             else:
+                if not exchange.markets:
+                    await exchange.load_markets()
                 ticker = await exchange.fetch_ticker(symbol)
             
             return ticker['last']
         except Exception as e:
-            logger.error(f"Error obteniendo precio para {symbol}: {e}")
+            logger.error(f"Error en CCXT al obtener precio para {symbol}: {str(e).split('http')[0]}")
+            return 0.0
+
+    async def _get_price_from_binance(self, symbol: str) -> float:
+        """Helper para reintentar específicamente con Binance"""
+        try:
+            if "binance" not in self.public_exchanges:
+                self.public_exchanges["binance"] = ccxt.binance({
+                    'enableRateLimit': True,
+                    'options': {'defaultType': 'spot'}
+                })
+            
+            binance = self.public_exchanges["binance"]
+            if not binance.markets:
+                await binance.load_markets()
+            
+            if symbol in binance.symbols:
+                ticker = await binance.fetch_ticker(symbol)
+                return ticker['last']
+            return 0.0
+        except:
             return 0.0
 
     async def execute_trade(self, analysis: AnalysisResult, user_id: str = "default_user") -> ExecutionResult:
@@ -130,22 +205,9 @@ class CEXService:
             if demo_mode:
                 logger.info(f"[MODO DEMO] Simulando {side} para {symbol} con monto {amount}")
                 
-                # Obtener precio actual para la simulación usando ccxt del exchange configurado
-                price = 0.0
-                try:
-                    # Determinar exchangeId de reserva
-                    exchange_id = "binance"
-                    if config and config.get("exchanges"):
-                        active_ex = next((e for e in config["exchanges"] if e.get("isActive", True)), config["exchanges"][0])
-                        exchange_id = active_ex["exchangeId"]
-
-                    # Si no hay instancia de exchange, crear una pública temporal para el precio
-                    temp_exchange = exchange if exchange else getattr(ccxt, exchange_id)()
-                    ticker = await temp_exchange.fetch_ticker(symbol)
-                    price = ticker['last']
-                    if not exchange: await temp_exchange.close()
-                except Exception as e:
-                    logger.error(f"Error obteniendo precio para modo demo: {e}")
+                # Obtener precio actual para la simulación usando el sistema centralizado de precios
+                price = await self.get_current_price(symbol, user_id)
+                if price <= 0:
                     return ExecutionResult(success=False, message=f"No se pudo obtener el precio para {symbol}")
                 
                 # Registrar trade en MongoDB con estado 'open' para monitoreo

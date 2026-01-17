@@ -33,3 +33,7 @@ class AIService:
                 "network": analysis.parameters.network
             }
         )
+
+    async def close(self):
+        """Cierra los recursos del adaptador"""
+        await self.adapter.close()

@@ -21,7 +21,7 @@ from api.bot.telegram_bot_manager import bot_manager
 from api.services.monitor_service import MonitorService
 from fastapi.middleware.cors import CORSMiddleware
 
-monitor_service = MonitorService()
+# monitor_service = MonitorService() # Se instanciará en lifespan
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -41,11 +41,15 @@ async def lifespan(app: FastAPI):
 
     # 2. Iniciar Tracker de Trading (Monitoreo de señales)
     logger.info("Starting Tracker Service...")
-    from api.services.tracker_service import tracker_service
+    from api.services.tracker_service import TrackerService # Importar clase, no instancia
+    global tracker_service, monitor_service
+    tracker_service = TrackerService(cex_service=cex_service, dex_service=dex_service)
     await tracker_service.start_monitoring()
     
-    # 2. Iniciar Monitor de Precios
+    # 3. Iniciar Monitor de Precios
     logger.info("Starting Price Monitor Service...")
+    from api.services.monitor_service import MonitorService
+    monitor_service = MonitorService(cex_service=cex_service)
     monitor_task = asyncio.create_task(monitor_service.start_monitoring())
     
     logger.info("=== All services are running in background ===")
@@ -65,6 +69,11 @@ async def lifespan(app: FastAPI):
     await monitor_service.stop_monitoring()
     monitor_task.cancel()
     
+    logger.info("Closing CEX, DEX and AI sessions...")
+    await cex_service.close_all()
+    await dex_service.close_all()
+    await ai_service.close()
+    
     logger.info("=== Shutdown complete ===")
 
 app = FastAPI(title="Crypto Trading Signal API (MongoDB Refactored)", lifespan=lifespan)
@@ -77,11 +86,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Inicialización de servicios
+# Inicialización de servicios globales
 ai_service = AIService()
 cex_service = CEXService()
 dex_service = DEXService()
 backtest_service = BacktestService()
+
+# Placeholder para servicios que se instancian en lifespan
+tracker_service = None
+monitor_service = None
 
 # Importar y agregar routers
 from api.routers.telegram_router import router as telegram_router

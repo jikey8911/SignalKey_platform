@@ -1,26 +1,18 @@
 import asyncio
 import logging
-import ccxt
+import ccxt.async_support as ccxt
 from datetime import datetime
 from api.models.mongodb import db, update_virtual_balance
+from api.services.cex_service import CEXService
 from bson import ObjectId
 
 logger = logging.getLogger(__name__)
 
 class MonitorService:
-    def __init__(self):
+    def __init__(self, cex_service: Optional[CEXService] = None):
         self.running = False
         self.interval = 300 # 5 minutos en segundos
-        self.exchanges = {}
-
-    async def get_exchange(self, exchange_id):
-        if exchange_id not in self.exchanges:
-            try:
-                exchange_class = getattr(ccxt, exchange_id)
-                self.exchanges[exchange_id] = exchange_class()
-            except:
-                return None
-        return self.exchanges[exchange_id]
+        self.cex_service = cex_service or CEXService()
 
     async def start_monitoring(self):
         if self.running:
@@ -36,8 +28,7 @@ class MonitorService:
 
     async def stop_monitoring(self):
         self.running = False
-        for ex in self.exchanges.values():
-            await ex.close()
+        await self.cex_service.close_all()
 
     async def check_open_positions(self):
         # Buscar posiciones abiertas en modo demo
@@ -58,16 +49,15 @@ class MonitorService:
                 tp = trade.get("tp")
                 sl = trade.get("sl")
                 amount = trade["amount"]
-                user_id = trade["userId"]
+                user = await db.users.find_one({"_id": user_id})
+                if not user:
+                    continue
+                user_open_id = user["openId"]
 
                 # Obtener precio actual
                 current_price = 0.0
                 if market_type == "CEX":
-                    # Usar Binance por defecto para precios si no se especifica
-                    exchange = await self.get_exchange("binance")
-                    if exchange:
-                        ticker = await exchange.fetch_ticker(symbol)
-                        current_price = ticker['last']
+                    current_price = await self.cex_service.get_current_price(symbol, user_open_id)
                 else:
                     # Para DEX, simulación o API externa
                     current_price = entry_price * 1.01 # Simulación de subida del 1%

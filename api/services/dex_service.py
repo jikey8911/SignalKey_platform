@@ -10,6 +10,10 @@ class DEXService:
     def __init__(self):
         self.base_url = "https://gmgn.ai"
 
+    async def close_all(self):
+        """Cierra sesiones abiertas si las hubiera (para consistencia con CEXService)"""
+        logger.info("DEXService: Sesiones cerradas.")
+
     async def execute_trade(self, analysis: AnalysisResult, user_id: str = "default_user") -> ExecutionResult:
         config = await get_app_config(user_id)
         demo_mode = config.get("demoMode", True) if config else True

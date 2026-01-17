@@ -10,10 +10,10 @@ from api.services.dex_service import DEXService
 logger = logging.getLogger(__name__)
 
 class TrackerService:
-    def __init__(self):
+    def __init__(self, cex_service: Optional[CEXService] = None, dex_service: Optional[DEXService] = None):
         self.active_monitors = {} # {trade_id: task}
-        self.cex_service = CEXService()
-        self.dex_service = DEXService()
+        self.cex_service = cex_service or CEXService()
+        self.dex_service = dex_service or DEXService()
         self.is_running = False
 
     async def start_monitoring(self):
@@ -224,4 +224,4 @@ class TrackerService:
         except Exception as e:
             logger.error(f"Error en _execute_trade_action para {trade_id}: {e}")
 
-tracker_service = TrackerService()
+# tracker_service = TrackerService() # Eliminado para instanciar en main.py con servicios compartidos

@@ -1,8 +1,8 @@
 import json
 import logging
-import google.generativeai as genai
-from openai import OpenAI
-import requests
+from google import genai
+from openai import AsyncOpenAI
+import httpx
 from api.core.ports.ai_port import AIPort
 from api.core.domain.signal import RawSignal, SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
 from api.config import Config
@@ -12,6 +12,11 @@ logger = logging.getLogger(__name__)
 class AIAdapter(AIPort):
     def __init__(self):
         self.default_model = "gemini"
+        self._httpx_client = httpx.AsyncClient(timeout=60.0)
+
+    async def close(self):
+        """Cierra el cliente HTTP"""
+        await self._httpx_client.aclose()
 
     async def analyze_signal(self, signal: RawSignal, config: dict = None) -> SignalAnalysis:
         ai_provider = config.get("aiProvider", "gemini") if config else "gemini"
@@ -88,14 +93,16 @@ class AIAdapter(AIPort):
         """
 
     async def _call_gemini(self, prompt: str, api_key: str) -> str:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt)
+        client = genai.Client(api_key=api_key)
+        response = await client.aio.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=prompt
+        )
         return response.text
 
     async def _call_openai(self, prompt: str, api_key: str) -> str:
-        client = OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
+        client = AsyncOpenAI(api_key=api_key)
+        response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"}
@@ -110,7 +117,7 @@ class AIAdapter(AIPort):
             "response_format": {"type": "json_object"}
         }
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        response = requests.post(url, json=payload, headers=headers)
+        response = await self._httpx_client.post(url, json=payload, headers=headers)
         response.raise_for_status()
         return response.json()['choices'][0]['message']['content']
 
@@ -122,7 +129,7 @@ class AIAdapter(AIPort):
             "temperature": 0
         }
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        response = requests.post(url, json=payload, headers=headers)
+        response = await self._httpx_client.post(url, json=payload, headers=headers)
         response.raise_for_status()
         return response.json()['choices'][0]['message']['content']
 
