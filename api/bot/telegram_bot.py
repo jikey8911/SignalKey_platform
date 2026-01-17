@@ -16,7 +16,7 @@ class TelegramUserBot:
         self.api_hash = Config.TELEGRAM_API_HASH
         self.session_file = 'userbot_session' # Session name
         self.client = None
-        self.api_url = "http://localhost:8001/webhook/signal"
+        self.api_url = "http://localhost:8000/webhook/signal"
 
         if not self.api_id or not self.api_hash:
             logger.warning("TELEGRAM_API_ID or TELEGRAM_API_HASH not set. UserBot will not start.")
@@ -81,12 +81,9 @@ class TelegramUserBot:
 
             # 2. Filtrar por chats seleccionados para procesar como SEÑALES
             try:
-                # Obtenemos todas las configuraciones que tengan canales permitidos
-                cursor = db.app_configs.find({"telegramChannels.allow": {"$exists": True, "$ne": []}})
+                # Obtenemos todas las configuraciones
+                cursor = db.app_configs.find({})
                 configs = await cursor.to_list(length=100)
-                
-                # Si no hay configuraciones con allow list, por ahora no procesamos como señal
-                # (El usuario pidió filtrar por chats seleccionados)
                 
                 for config in configs:
                     user_id = str(config.get("userId"))
@@ -96,7 +93,11 @@ class TelegramUserBot:
                     
                     allow_list = config.get("telegramChannels", {}).get("allow", [])
                     
-                    if chat_id in allow_list:
+                    # Si la lista está vacía, se procesan TODOS los canales (comportamiento por defecto)
+                    # Si tiene canales, solo se procesan los de la lista
+                    should_process = len(allow_list) == 0 or chat_id in allow_list
+                    
+                    if should_process:
                         logger.info(f"Signal detected in allowed chat {chat_id} for user {user_open_id}")
                         
                         # Actualizar el log para indicar que fue procesado como señal
