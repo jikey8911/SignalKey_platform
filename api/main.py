@@ -1,7 +1,7 @@
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
 from datetime import datetime
 from api.models.schemas import TradingSignal
-from api.services.gemini_service import GeminiService
+from api.services.ai_service import AIService
 from api.services.cex_service import CEXService
 from api.services.dex_service import DEXService
 from api.services.backtest_service import BacktestService
@@ -63,7 +63,7 @@ app.add_middleware(
 )
 
 # Inicialización de servicios
-gemini_service = GeminiService()
+ai_service = AIService()
 cex_service = CEXService()
 dex_service = DEXService()
 backtest_service = BacktestService()
@@ -86,13 +86,12 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
     })
     inserted_id = signal_id.inserted_id
     
-    # Obtener config del usuario para ver si tiene Gemini API Key
+    # Obtener config del usuario para ver la configuración de IA
     config = await get_app_config(user_id)
-    gemini_key = config.get("geminiApiKey") if config else None
     
-    # 1. Analizar con Gemini (Aprobación de la IA obligatoria)
+    # 1. Analizar con el servicio de IA (Aprobación de la IA obligatoria)
     try:
-        analysis = await gemini_service.analyze_signal(signal.raw_text, api_key=gemini_key)
+        analysis = await ai_service.analyze_signal(signal.raw_text, config=config)
         logger.info(f"Análisis completado: {analysis.decision} para {analysis.symbol}")
         
         # Actualizar señal con el análisis
@@ -209,9 +208,9 @@ async def get_connection_status(user_id: str):
         if not config:
             return status
         
-        # Check Gemini
-        if config.get("geminiApiKey"):
-            status["gemini"] = True
+        # Check AI Provider
+        if config.get("aiApiKey"):
+            status["gemini"] = True # Mantenemos el nombre de la clave para compatibilidad o actualizamos el frontend
         
         # Check Exchange
         exchanges = config.get("exchanges", [])

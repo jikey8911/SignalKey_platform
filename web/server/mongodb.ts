@@ -29,7 +29,9 @@ export const User = mongoose.models.User || mongoose.model('User', UserSchema, '
 const AppConfigSchema = new Schema({
   userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   demoMode: { type: Boolean, default: true },
-  geminiApiKey: String,
+  aiProvider: { type: String, enum: ['gemini', 'openai', 'perplexity'], default: 'gemini' },
+  aiApiKey: String,
+  geminiApiKey: String, // Mantener por compatibilidad temporal
   gmgnApiKey: String,
   telegramBotToken: String,
   telegramChatId: String,

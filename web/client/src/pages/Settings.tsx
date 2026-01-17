@@ -15,6 +15,8 @@ export default function Settings() {
 
   const [formData, setFormData] = useState({
     demoMode: true,
+    aiProvider: 'gemini',
+    aiApiKey: '',
     geminiApiKey: '',
     gmgnApiKey: '',
     telegramBotToken: '',
@@ -46,6 +48,8 @@ export default function Settings() {
     if (config) {
       setFormData({
         demoMode: config.demoMode ?? true,
+        aiProvider: config.aiProvider || 'gemini',
+        aiApiKey: config.aiApiKey || '',
         geminiApiKey: config.geminiApiKey || '',
         gmgnApiKey: config.gmgnApiKey || '',
         telegramBotToken: config.telegramBotToken || '',
@@ -154,12 +158,34 @@ export default function Settings() {
           <div className="space-y-6">
             <Card className="p-6">
               <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">🤖 Inteligencia Artificial</h3>
-              <InputField
-                label="Gemini API Key"
-                value={formData.geminiApiKey}
-                onChange={(v: string) => setFormData({ ...formData, geminiApiKey: v })}
-                type="password"
-              />
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold text-foreground mb-1">
+                    Proveedor de IA
+                  </label>
+                  <select
+                    value={formData.aiProvider}
+                    onChange={(e) => setFormData({ ...formData, aiProvider: e.target.value as any })}
+                    className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  >
+                    <option value="gemini">Google Gemini</option>
+                    <option value="openai">OpenAI (ChatGPT)</option>
+                    <option value="perplexity">Perplexity AI</option>
+                  </select>
+                </div>
+                <InputField
+                  label={`${formData.aiProvider.charAt(0).toUpperCase() + formData.aiProvider.slice(1)} API Key`}
+                  value={formData.aiApiKey}
+                  onChange={(v: string) => setFormData({ ...formData, aiApiKey: v })}
+                  type="password"
+                  placeholder={`Introduce tu token de ${formData.aiProvider}`}
+                />
+                {formData.aiProvider === 'gemini' && (
+                  <div className="text-[10px] text-muted-foreground">
+                    * También puedes usar la clave antigua de Gemini si ya la tenías configurada.
+                  </div>
+                )}
+              </div>
             </Card>
 
             <Card className="p-6">
