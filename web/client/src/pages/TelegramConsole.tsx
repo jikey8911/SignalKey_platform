@@ -6,6 +6,7 @@ import { RefreshCw, Search, MessageSquare, AlertCircle, CheckCircle } from 'luci
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { useAuth } from '@/_core/hooks/useAuth';
+import { useSocket } from '@/_core/hooks/useSocket';
 
 interface TelegramLog {
   _id: string;
@@ -17,17 +18,17 @@ interface TelegramLog {
 }
 
 export default function TelegramConsole() {
-  useAuth({ redirectOnUnauthenticated: true });
+  const { user } = useAuth({ redirectOnUnauthenticated: true });
   const [logs, setLogs] = useState<TelegramLog[]>([]);
   const [loading, setLoading] = useState(false);
-  const [autoRefresh, setAutoRefresh] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'received' | 'signal_detected' | 'processed' | 'ignored'>('all');
+
+  const { lastMessage } = useSocket(user?.openId);
 
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      // Usamos la URL de la API configurada o localhost:8000 por defecto
       const apiUrl = window.location.hostname === 'localhost' ? 'http://localhost:8000' : `http://${window.location.hostname}:8000`;
       const res = await fetch(`${apiUrl}/telegram/logs?limit=100`);
       const data = await res.json();
@@ -43,11 +44,20 @@ export default function TelegramConsole() {
 
   useEffect(() => {
     fetchLogs();
-    const interval = setInterval(() => {
-      if (autoRefresh) fetchLogs();
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [autoRefresh]);
+  }, []);
+
+  // Escuchar mensajes del socket
+  useEffect(() => {
+    if (lastMessage && lastMessage.event === 'telegram_log') {
+      const newLog = lastMessage.data;
+      setLogs(prev => [newLog, ...prev.slice(0, 99)]);
+
+      // Feedback visual opcional
+      if (newLog.status === 'signal_detected') {
+        toast.info(`Nueva señal detectada de ${newLog.chatName}`);
+      }
+    }
+  }, [lastMessage]);
 
   // Filtrar logs por búsqueda y estado
   const filteredLogs = logs.filter(log => {
@@ -113,14 +123,10 @@ export default function TelegramConsole() {
             <p className="text-muted-foreground">Monitor de todos los mensajes entrantes en tiempo real (sin filtrar)</p>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant={autoRefresh ? "secondary" : "outline"}
-              size="sm"
-              onClick={() => setAutoRefresh(!autoRefresh)}
-              className="gap-2"
-            >
-              {autoRefresh ? "Auto-Refresh ON" : "Auto-Refresh OFF"}
-            </Button>
+            <div className="flex items-center gap-2 px-3 py-1 bg-green-500/10 border border-green-500/20 rounded-full">
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+              <span className="text-[10px] font-bold text-green-600 uppercase tracking-wider">Live</span>
+            </div>
             <Button
               variant="outline"
               size="icon"

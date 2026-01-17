@@ -45,8 +45,15 @@ class CEXService:
         if not config or "exchanges" not in config:
             return None, None
 
-        # Buscar el exchange específico en la lista
+        # 1. Intentar encontrar el exchange solicitado
         exchange_config = next((e for e in config["exchanges"] if e["exchangeId"] == exchange_id and e.get("isActive", True)), None)
+        
+        # 2. Si no se encuentra (o es el default 'binance' pero el usuario tiene otro), 
+        # usar el primer exchange activo de la lista
+        if not exchange_config:
+            exchange_config = next((e for e in config["exchanges"] if e.get("isActive", True)), None)
+            if exchange_config:
+                exchange_id = exchange_config["exchangeId"]
         
         if not exchange_config or not exchange_config.get("apiKey"):
             return None, config
@@ -74,6 +81,32 @@ class CEXService:
             logger.error(f"Error inicializando exchange {exchange_id}: {e}")
             return None, config
 
+    async def get_current_price(self, symbol: str, user_id: str) -> float:
+        """Obtiene el precio actual de un símbolo para un usuario configurado"""
+        try:
+            exchange, config = await self.get_exchange_instance(user_id)
+            
+            # Determinar qué exchangeId usar para la consulta pública
+            exchange_id = "binance"
+            if config and config.get("exchanges"):
+                # Usar el primero activo o el primero de la lista
+                active_ex = next((e for e in config["exchanges"] if e.get("isActive", True)), config["exchanges"][0])
+                exchange_id = active_ex["exchangeId"]
+
+            # Si no hay instancia autenticada, crear una pública temporal
+            if not exchange:
+                logger.info(f"Usando instancia pública de {exchange_id} para consultar precio de {symbol}")
+                exchange = getattr(ccxt, exchange_id)()
+                ticker = await exchange.fetch_ticker(symbol)
+                await exchange.close()
+            else:
+                ticker = await exchange.fetch_ticker(symbol)
+            
+            return ticker['last']
+        except Exception as e:
+            logger.error(f"Error obteniendo precio para {symbol}: {e}")
+            return 0.0
+
     async def execute_trade(self, analysis: AnalysisResult, user_id: str = "default_user") -> ExecutionResult:
         exchange, config = await self.get_exchange_instance(user_id)
         demo_mode = config.get("demoMode", True) if config else True
@@ -97,11 +130,17 @@ class CEXService:
             if demo_mode:
                 logger.info(f"[MODO DEMO] Simulando {side} para {symbol} con monto {amount}")
                 
-                # Obtener precio actual para la simulación usando ccxt (incluso sin API keys)
+                # Obtener precio actual para la simulación usando ccxt del exchange configurado
                 price = 0.0
                 try:
+                    # Determinar exchangeId de reserva
+                    exchange_id = "binance"
+                    if config and config.get("exchanges"):
+                        active_ex = next((e for e in config["exchanges"] if e.get("isActive", True)), config["exchanges"][0])
+                        exchange_id = active_ex["exchangeId"]
+
                     # Si no hay instancia de exchange, crear una pública temporal para el precio
-                    temp_exchange = exchange if exchange else getattr(ccxt, config.get("exchangeId", "binance"))()
+                    temp_exchange = exchange if exchange else getattr(ccxt, exchange_id)()
                     ticker = await temp_exchange.fetch_ticker(symbol)
                     price = ticker['last']
                     if not exchange: await temp_exchange.close()

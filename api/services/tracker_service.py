@@ -75,6 +75,15 @@ class TrackerService:
                 }}
             )
 
+            # EMITIR POR SOCKET
+            from api.services.socket_service import socket_service
+            await socket_service.emit_to_user(user_id, "trade_update", {
+                "id": str(trade_id),
+                "currentPrice": current_price,
+                "status": trade["status"],
+                "lastMonitoredAt": datetime.utcnow().isoformat()
+            })
+
             # 3. Lógica de proximidad y frecuencia
             # Si el status es 'monitoring' (esperando compra), comparamos con entryPrice/targetPrice
             if trade["status"] == "monitoring":
@@ -155,17 +164,53 @@ class TrackerService:
         await self._execute_trade_action(trade, side, action_type, user_id, tp_data)
 
     async def _execute_trade_action(self, trade: Dict[str, Any], side: str, action_type: str, user_id: str, tp_data=None):
-        logger.info(f"EJECUTANDO ORDEN: {side} {trade['symbol']} por {action_type}")
-        # Aquí llamaríamos a cex_service.execute_trade o dex_service.execute_trade
-        # Y actualizaríamos el estado en la base de datos
+        trade_id = trade["_id"]
+        symbol = trade["symbol"]
+        market_type = trade["marketType"]
         
-        if action_type == "ENTRY":
-            await db.trades.update_one({"_id": trade["_id"]}, {"$set": {"status": "open", "executedAt": datetime.utcnow()}})
-        elif action_type == "TAKE_PROFIT":
-            # Si es TP parcial, actualizar cuánto queda
-            # Si es TP final, status = 'closed'
-            await db.trades.update_one({"_id": trade["_id"]}, {"$set": {"status": "closed", "executedAt": datetime.utcnow()}})
-        elif action_type == "STOP_LOSS":
-            await db.trades.update_one({"_id": trade["_id"]}, {"$set": {"status": "closed", "executedAt": datetime.utcnow()}})
+        logger.info(f"EJECUTANDO ORDEN: {side} {symbol} por {action_type} para usuario {user_id}")
+        
+        try:
+            # Re-usar lógica existente de los servicios
+            # Nota: AnálisisResult ficticio para no refactorizar todo execute_trade aún
+            from api.models.schemas import AnalysisResult
+            analysis = AnalysisResult(
+                decision=side,
+                symbol=symbol,
+                market_type=market_type,
+                confidence=1.0,
+                reasoning=f"Ejecución automática por TrackerService ({action_type})",
+                parameters={
+                    "amount": trade["amount"],
+                    "leverage": trade.get("leverage", 1),
+                    "tp": trade.get("takeProfits", []),
+                    "sl": trade.get("stopLoss")
+                }
+            )
+
+            if market_type == "DEX":
+                result = await self.dex_service.execute_trade(analysis, user_id=user_id)
+            else:
+                result = await self.cex_service.execute_trade(analysis, user_id=user_id)
+
+            if result.success:
+                status = "open" if action_type == "ENTRY" else "closed"
+                await db.trades.update_one({"_id": trade_id}, {"$set": {"status": status, "executedAt": datetime.utcnow()}})
+                
+                # EMITIR POR SOCKET
+                from api.services.socket_service import socket_service
+                await socket_service.emit_to_user(user_id, "trade_update", {
+                    "id": str(trade_id),
+                    "status": status,
+                    "executedAt": datetime.utcnow().isoformat(),
+                    "action": action_type
+                })
+                
+                logger.info(f"TrackerService: Orden {action_type} ejecutada con éxito para {symbol}")
+            else:
+                logger.error(f"TrackerService: Fallo al ejecutar orden {action_type} para {symbol}: {result.message}")
+
+        except Exception as e:
+            logger.error(f"Error en _execute_trade_action para {trade_id}: {e}")
 
 tracker_service = TrackerService()

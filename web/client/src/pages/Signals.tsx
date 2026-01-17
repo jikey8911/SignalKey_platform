@@ -16,10 +16,12 @@ import {
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/_core/hooks/useAuth';
+import { useSocket } from '@/_core/hooks/useSocket';
+import { useQueryClient } from '@tanstack/react-query';
 
 interface Signal {
-  id: number;
-  userId: number;
+  id: string; // Cambiado a string para compatibilidad con MongoDB
+  userId: string;
   source: string;
   rawText: string;
   decision: string;
@@ -32,22 +34,36 @@ interface Signal {
 }
 
 export default function Signals() {
-  useAuth({ redirectOnUnauthenticated: true });
+  const { user } = useAuth({ redirectOnUnauthenticated: true });
+  const queryClient = useQueryClient();
   const { data: signals, isLoading, refetch } = trpc.trading.getSignals.useQuery();
-  const [autoRefresh, setAutoRefresh] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'processing' | 'accepted' | 'rejected' | 'executing' | 'completed' | 'failed' | 'error'>('all');
   const [filterMarketType, setFilterMarketType] = useState<'all' | 'CEX' | 'DEX' | 'SPOT' | 'FUTURES'>('all');
   const [filterDecision, setFilterDecision] = useState<'all' | 'BUY' | 'SELL' | 'HOLD'>('all');
 
-  // Auto-refresh cada 5 segundos
+  const { lastMessage } = useSocket(user?.openId);
+
+  // Escuchar mensajes del socket
   useEffect(() => {
-    if (!autoRefresh) return;
-    const interval = setInterval(() => {
-      refetch();
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [autoRefresh, refetch]);
+    if (lastMessage && lastMessage.event === 'signal_update') {
+      const updatedSignal = lastMessage.data;
+
+      // Actualizar el cache de react-query directamente para reflejar el cambio al instante
+      queryClient.setQueryData(['trading.getSignals'], (oldData: Signal[] | undefined) => {
+        if (!oldData) return [updatedSignal];
+
+        const exists = oldData.find(s => s.id === updatedSignal.id);
+        if (exists) {
+          // Actualizar señal existente
+          return oldData.map(s => s.id === updatedSignal.id ? { ...s, ...updatedSignal } : s);
+        } else {
+          // Nueva señal al inicio
+          return [updatedSignal, ...oldData];
+        }
+      });
+    }
+  }, [lastMessage, queryClient]);
 
   const getDecisionIcon = (decision: string) => {
     switch (decision) {
@@ -155,9 +171,9 @@ export default function Signals() {
 
   // Filtrar señales
   const filteredSignals = (signals || []).filter((signal: Signal) => {
-    const matchesSearch = signal.symbol.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      signal.source.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      signal.rawText.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = (signal.symbol?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
+      (signal.source?.toLowerCase() || "").includes(searchTerm.toLowerCase()) ||
+      (signal.rawText?.toLowerCase() || "").includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === 'all' || signal.status === filterStatus;
     const matchesMarketType = filterMarketType === 'all' || signal.marketType === filterMarketType;
     const matchesDecision = filterDecision === 'all' || signal.decision === filterDecision;
@@ -186,14 +202,10 @@ export default function Signals() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant={autoRefresh ? "secondary" : "outline"}
-              size="sm"
-              onClick={() => setAutoRefresh(!autoRefresh)}
-              className="gap-2"
-            >
-              {autoRefresh ? "Auto-Refresh ON" : "Auto-Refresh OFF"}
-            </Button>
+            <div className="flex items-center gap-2 px-3 py-1 bg-green-500/10 border border-green-500/20 rounded-full">
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+              <span className="text-[10px] font-bold text-green-600 uppercase tracking-wider">Live</span>
+            </div>
             <Button
               variant="outline"
               size="icon"

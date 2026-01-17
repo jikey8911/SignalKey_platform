@@ -31,7 +31,7 @@ class TelegramUserBot:
         self.api_hash = api_hash
         self.phone_number = phone_number
         self.client = None
-        self.api_url = "http://localhost:8000/webhook/signal"
+        self.message_handler = None # Callback para procesar señales
         
         # Usar StringSession si se proporciona o si se solicita sesión en memoria
         if session_string:
@@ -66,8 +66,11 @@ class TelegramUserBot:
             logger.error(f"Error fetching dialogs for user {self.user_id}: {e}")
         return dialogs
 
-    async def start(self):
+    async def start(self, message_handler=None):
         """Inicia el bot y comienza a escuchar mensajes"""
+        if message_handler:
+            self.message_handler = message_handler
+
         if not self.api_id or not self.api_hash:
             logger.error(f"Missing API credentials for user {self.user_id}")
             return
@@ -80,6 +83,19 @@ class TelegramUserBot:
                 chat_id = str(event.chat_id)
                 text = event.message.message
                 
+                # 0. Verificar si el procesamiento automático está habilitado
+                try:
+                    user = await db.users.find_one({"openId": self.user_id})
+                    if not user:
+                        return
+                    
+                    config = await db.app_configs.find_one({"userId": user["_id"]})
+                    if config and not config.get("isAutoEnabled", True):
+                        logger.info(f"Processing disabled for user {self.user_id}. Skipping message from {chat_id}")
+                        return
+                except Exception as e:
+                    logger.error(f"Error checking auto status for user {self.user_id}: {e}")
+
                 display_text = text if text else "<Mensaje sin texto / Media>"
 
                 # 1. Loguear SIEMPRE en telegram_logs
@@ -94,13 +110,18 @@ class TelegramUserBot:
                         "chatId": chat_id,
                         "chatName": chat_title,
                         "message": display_text,
-                        "timestamp": datetime.utcnow(),
+                        "timestamp": datetime.utcnow().isoformat(),
                         "status": "received",
                         "userId": self.user_id  # Asociar log con usuario
                     }
                     await db.telegram_logs.insert_one(log_entry)
+                    
+                    # EMITIR POR SOCKET
+                    from api.services.socket_service import socket_service
+                    await socket_service.emit_to_user(self.user_id, "telegram_log", log_entry)
+
                 except Exception as e:
-                    logger.error(f"Error saving log for user {self.user_id}: {e}")
+                    logger.error(f"Error saving log and emitting socket for user {self.user_id}: {e}")
 
                 if not text:
                     return
@@ -133,27 +154,28 @@ class TelegramUserBot:
                             {"$set": {"status": "signal_detected"}}
                         )
 
-                        # Enviar a procesar
-                        async with httpx.AsyncClient(timeout=10.0) as client:
-                            try:
-                                payload = {
-                                    "source": f"telegram_{chat_id}",
-                                    "raw_text": text
-                                }
-                                url = f"{self.api_url}?user_id={self.user_id}"
-                                logger.info(f"Sending signal to {url}")
-                                response = await client.post(url, json=payload)
-                                if response.status_code != 200:
-                                     logger.error(f"Error sending signal ({response.status_code}): {response.text}")
-                                else:
-                                     logger.info(f"Signal successfully sent for user {self.user_id}")
-                            except Exception as e:
-                                logger.error(f"Error connecting to API: {e}")
+                        # Enviar a procesar (Priorizar callback directo sobre HTTP)
+                        if self.message_handler:
+                            logger.info(f"Processing signal via direct callback for user {self.user_id}")
+                            # Convertir a objeto TradingSignal
+                            signal_obj = TradingSignal(
+                                source=f"telegram_{chat_id}",
+                                raw_text=text
+                            )
+                            # Ejecutar en segundo plano si es una corrutina
+                            if asyncio.iscoroutinefunction(self.message_handler):
+                                asyncio.create_task(self.message_handler(signal_obj, user_id=self.user_id))
+                            else:
+                                self.message_handler(signal_obj, user_id=self.user_id)
+                        else:
+                            # Fallback asincrónico a petición HTTP (Legacy/Reserva)
+                            asyncio.create_task(self._send_http_signal(chat_id, text))
 
                 except Exception as e:
                     logger.error(f"Error processing signal for user {self.user_id}: {e}")
 
-            # Iniciar el cliente
+            # Configurar autostart y reconexión automática
+            # El cliente de Telethon reconecta por defecto, pero start() asegura que esté activo
             await self.client.start(phone=self.phone_number if self.phone_number else None)
             
             if not await self.client.is_user_authorized():
@@ -161,11 +183,23 @@ class TelegramUserBot:
                 await self.client.disconnect()
                 return
             
-            logger.info(f"Telegram bot started for user {self.user_id}")
+            logger.info(f"Telegram bot started and LISTENING for user {self.user_id}")
 
         except Exception as e:
             logger.error(f"Error starting bot for user {self.user_id}: {e}")
             raise
+    async def _send_http_signal(self, chat_id: str, text: str):
+        """Método de respaldo para enviar señal vía HTTP si no hay callback"""
+        api_url = "http://localhost:8000/webhook/signal"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                payload = {"source": f"telegram_{chat_id}", "raw_text": text}
+                url = f"{api_url}?user_id={self.user_id}"
+                response = await client.post(url, json=payload)
+                if response.status_code != 200:
+                    logger.error(f"HTTP Signal Error ({response.status_code}): {response.text}")
+            except Exception as e:
+                logger.error(f"Error connecting to local API: {e}")
 
     async def stop(self):
         """Detiene el bot"""

@@ -18,6 +18,7 @@ export default function Settings() {
 
   const [formData, setFormData] = useState<{
     demoMode: boolean;
+    isAutoEnabled: boolean;
     aiProvider: 'gemini' | 'openai' | 'perplexity';
     aiApiKey: string;
     geminiApiKey: string;
@@ -47,6 +48,7 @@ export default function Settings() {
     };
   }>({
     demoMode: true,
+    isAutoEnabled: true,
     aiProvider: 'gemini',
     aiApiKey: '',
     geminiApiKey: '',
@@ -80,6 +82,7 @@ export default function Settings() {
     if (config) {
       setFormData({
         demoMode: config.demoMode ?? true,
+        isAutoEnabled: config.isAutoEnabled ?? true,
         aiProvider: config.aiProvider || 'gemini',
         aiApiKey: config.aiApiKey || '',
         geminiApiKey: config.geminiApiKey || '',
@@ -373,18 +376,36 @@ export default function Settings() {
 
             <Card className="p-6">
               <h3 className="text-lg font-semibold mb-4">⚙️ Modo de Operación</h3>
-              <div className="flex items-center gap-4">
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={formData.demoMode}
-                    onChange={(e) => setFormData({ ...formData, demoMode: e.target.checked })}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
-                  <span className="ml-3 text-sm font-medium text-foreground">Modo Demo (Simulación)</span>
-                </label>
+              <div className="space-y-4">
+                <div className="flex items-center gap-4">
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={formData.isAutoEnabled}
+                      onChange={(e) => setFormData({ ...formData, isAutoEnabled: e.target.checked })}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                    <span className="ml-3 text-sm font-medium text-foreground">Procesamiento Automático</span>
+                  </label>
+                </div>
+
+                <div className="flex items-center gap-4">
+                  <label className="relative inline-flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={formData.demoMode}
+                      onChange={(e) => setFormData({ ...formData, demoMode: e.target.checked })}
+                      className="sr-only peer"
+                    />
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                    <span className="ml-3 text-sm font-medium text-foreground">Modo Demo (Simulación)</span>
+                  </label>
+                </div>
               </div>
+              <p className="text-[10px] text-muted-foreground mt-3 italic">
+                * Si desactivas el procesamiento automático, no se recibirán nuevos mensajes ni se generarán señales. Los trades activos seguirán monitoreándose.
+              </p>
             </Card>
           </div>
         </div>

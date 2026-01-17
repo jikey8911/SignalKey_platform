@@ -28,10 +28,13 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("=== Starting SignalKey Platform Services ===")
     
+    # Configurar el procesador de señales global para los bots
+    bot_manager.signal_processor = process_signal_task
+    
     # 1. Iniciar bots de Telegram de usuarios desde BD
     logger.info("Starting Telegram Bot Manager...")
     try:
-        await bot_manager.restart_all_bots()
+        await bot_manager.restart_all_bots(message_handler=process_signal_task)
         logger.info(f"Telegram Bot Manager started with {bot_manager.get_active_bots_count()} active bots")
     except Exception as e:
         logger.error(f"Error starting Telegram Bot Manager: {e}")
@@ -102,11 +105,29 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
     })
     inserted_id = signal_id.inserted_id
     
+    # EMITIR POR SOCKET
+    await socket_service.emit_to_user(user_id, "signal_update", {
+        "id": str(inserted_id),
+        "source": signal.source,
+        "raw_text": signal.raw_text,
+        "status": "processing",
+        "createdAt": datetime.utcnow().isoformat()
+    })
+    
     # Obtener config del usuario para ver la configuración de IA
     config = await get_app_config(user_id)
     
     # Log de la configuración de IA
     if config:
+        # Verificar si el procesamiento automático está habilitado
+        if not config.get("isAutoEnabled", True):
+            logger.info(f"Auto-processing is DISABLED for user {user_id}. Aborting signal processing.")
+            await db.trading_signals.update_one(
+                {"_id": inserted_id},
+                {"$set": {"status": "cancelled", "executionMessage": "Auto-processing disabled by user"}}
+            )
+            return
+
         ai_provider = config.get("aiProvider", "gemini")
         has_api_key = bool(config.get("aiApiKey") or config.get("geminiApiKey"))
         logger.info(f"Config retrieved for user {user_id}: aiProvider={ai_provider}, has_api_key={has_api_key}")
@@ -143,26 +164,71 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
         logger.info(f"Señal RECHAZADA por la IA: {analysis.reasoning}")
         return
 
-    # 2. Ejecutar operación (Solo si fue aprobada: BUY o SELL)
-    logger.info(f"Señal APROBADA por la IA: {analysis.decision} {analysis.symbol}")
-    await db.trading_signals.update_one({"_id": inserted_id}, {"$set": {"status": "executing"}})
-    
-    try:
-        if analysis.market_type == "DEX":
-            result = await dex_service.execute_trade(analysis, user_id=user_id)
-        else:
-            result = await cex_service.execute_trade(analysis, user_id=user_id)
-            
-        logger.info(f"Resultado de ejecución: {'Éxito' if result.success else 'Fallo'} - {result.message}")
-        
-        # Actualizar estado final
+    # 2. Validar Seguridad (Honeypot/Riesgo)
+    if not analysis.is_safe:
+        logger.warning(f"Señal MARCADA COMO INSEGURA por la IA (Score: {analysis.risk_score}): {analysis.reasoning}")
         await db.trading_signals.update_one(
             {"_id": inserted_id},
-            {"$set": {
-                "status": "completed" if result.success else "failed",
-                "executionMessage": result.message
-            }}
+            {"$set": {"status": "rejected_unsafe", "riskScore": analysis.risk_score}}
         )
+        # EMITIR POR SOCKET
+        await socket_service.emit_to_user(user_id, "signal_update", {
+            "id": str(inserted_id),
+            "status": "rejected_unsafe",
+            "riskScore": analysis.risk_score,
+            "reasoning": analysis.reasoning
+        })
+        return
+
+    # 3. Preparar para Supervisión (No ejecutar inmediatamente si es 'limit' o necesita monitoreo)
+    logger.info(f"Señal APROBADA por la IA: {analysis.decision} {analysis.symbol}")
+    await db.trading_signals.update_one({"_id": inserted_id}, {"$set": {"status": "monitoring"}})
+    
+    try:
+        # Obtener límites de inversión para crear el trade document
+        max_amount = config.get("investmentLimits", {}).get("cexMaxAmount" if analysis.market_type == "CEX" else "dexMaxAmount", 100.0)
+        suggested_amount = analysis.parameters.get('amount', 0)
+        amount = min(suggested_amount, max_amount) if suggested_amount > 0 else max_amount
+
+        # Crear documento de Trade en estado 'monitoring'
+        trade_data = {
+            "userId": user["_id"],
+            "signalId": inserted_id,
+            "symbol": analysis.symbol,
+            "side": analysis.decision,
+            "entryPrice": analysis.parameters.get("entry_price") or 0.0,
+            "targetPrice": analysis.parameters.get("entry_price"),
+            "stopLoss": analysis.parameters.get("sl"),
+            "takeProfits": analysis.parameters.get("tp", []),
+            "amount": amount,
+            "leverage": analysis.parameters.get("leverage", 1),
+            "marketType": analysis.market_type,
+            "isDemo": config.get("demoMode", True),
+            "status": "monitoring",
+            "isSafe": analysis.is_safe,
+            "createdAt": datetime.utcnow()
+        }
+        
+        result = await db.trades.insert_one(trade_data)
+        trade_id = str(result.inserted_id)
+        
+        # Notificar al TrackerService para que inicie el monitoreo
+        from api.services.tracker_service import tracker_service
+        await tracker_service.add_trade_to_monitor(trade_id)
+        
+        logger.info(f"Trade {trade_id} enviado a TrackerService para supervisión dinámica")
+        
+        # Actualizar estado final de la señal a 'monitoring'
+        await db.trading_signals.update_one({"_id": inserted_id}, {"$set": {"status": "monitoring"}})
+        
+        # EMITIR POR SOCKET
+        await socket_service.emit_to_user(user_id, "signal_update", {
+            "id": str(inserted_id),
+            "status": "monitoring",
+            "symbol": analysis.symbol,
+            "decision": analysis.decision
+        })
+            
     except Exception as e:
         logger.error(f"Error executing trade: {e}")
         await db.trading_signals.update_one(
@@ -174,6 +240,26 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
 async def receive_signal(signal: TradingSignal, background_tasks: BackgroundTasks, user_id: Optional[str] = "default_user"):
     background_tasks.add_task(process_signal_task, signal, user_id)
     return {"status": "Signal received and processing in background"}
+
+# --- WebSocket Endpoint ---
+from api.services.socket_service import socket_service
+from fastapi import WebSocket, WebSocketDisconnect
+
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    logger.info(f"Incoming WebSocket connection attempt for user: {user_id}")
+    await socket_service.connect(websocket, user_id)
+    try:
+        while True:
+            # Mantener la conexión abierta y escuchar posibles mensajes del cliente
+            data = await websocket.receive_text()
+            # Opcional: Procesar mensajes enviados por el cliente
+            logger.info(f"Message received from client {user_id}: {data}")
+    except WebSocketDisconnect:
+        socket_service.disconnect(websocket, user_id)
+    except Exception as e:
+        logger.error(f"WebSocket error for user {user_id}: {e}")
+        socket_service.disconnect(websocket, user_id)
 
 @app.get("/telegram/dialogs")
 async def get_telegram_dialogs():

@@ -50,6 +50,7 @@ class InvestmentLimits(BaseModel):
 
 class AppConfigSchema(BaseModel):
     userId: Any # ObjectId
+    isAutoEnabled: bool = True # Control maestro de procesos
     demoMode: bool = True
     geminiApiKey: Optional[str] = None
     gmgnApiKey: Optional[str] = None

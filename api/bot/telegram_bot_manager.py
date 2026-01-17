@@ -14,6 +14,7 @@ class TelegramBotManager:
     
     def __init__(self):
         self.bots: Dict[str, TelegramUserBot] = {}
+        self.signal_processor = None # Referencia global a la función de procesamiento
         logger.info("TelegramBotManager initialized")
     
     async def start_user_bot(
@@ -22,7 +23,8 @@ class TelegramBotManager:
         api_id: str, 
         api_hash: str,
         phone_number: str,
-        session_string: Optional[str] = None
+        session_string: Optional[str] = None,
+        message_handler = None
     ) -> TelegramUserBot:
         """
         Inicia un bot de Telegram para un usuario específico
@@ -33,6 +35,7 @@ class TelegramBotManager:
             api_hash: Telegram API Hash del usuario
             phone_number: Número de teléfono del usuario
             session_string: Sesión serializada (opcional, para reconexión)
+            message_handler: Callback para procesar señales detectadas
         
         Returns:
             TelegramUserBot instance
@@ -53,13 +56,14 @@ class TelegramBotManager:
             session_string=session_string
         )
         
-        # Iniciar el bot
-        await bot.start()
+        # Iniciar el bot con el manejador de mensajes (usar el global si no se pasa uno)
+        handler = message_handler or self.signal_processor
+        await bot.start(message_handler=handler)
         
         # Guardar en el diccionario de bots activos
         self.bots[user_id] = bot
         
-        logger.info(f"Bot started successfully for user {user_id}")
+        logger.info(f"Bot started successfully and listening for user {user_id}")
         return bot
     
     async def stop_user_bot(self, user_id: str) -> bool:
@@ -112,10 +116,13 @@ class TelegramBotManager:
         """
         return user_id in self.bots
     
-    async def restart_all_bots(self):
+    async def restart_all_bots(self, message_handler=None):
         """
         Reinicia todos los bots desde la base de datos
         Útil al iniciar la aplicación
+        
+        Args:
+            message_handler: Callback para procesar señales detectadas
         """
         logger.info("Restarting all bots from database...")
         
@@ -140,13 +147,14 @@ class TelegramBotManager:
                     
                     user_id = user.get("openId")
                     
-                    # Iniciar el bot
+                    # Iniciar el bot con el handler
                     await self.start_user_bot(
                         user_id=user_id,
                         api_id=config.get("telegramApiId"),
                         api_hash=config.get("telegramApiHash"),
                         phone_number=config.get("telegramPhoneNumber", ""),
-                        session_string=config.get("telegramSessionString")
+                        session_string=config.get("telegramSessionString"),
+                        message_handler=message_handler
                     )
                     
                     logger.info(f"Restarted bot for user {user_id}")

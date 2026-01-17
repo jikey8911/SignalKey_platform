@@ -1,18 +1,67 @@
-import React, { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { SignalsKeiLayout } from '@/components/SignalsKeiLayout';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { trpc } from '@/lib/trpc';
-import { TrendingUp, TrendingDown, Filter } from 'lucide-react';
+import { TrendingUp, TrendingDown, Filter, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/_core/hooks/useAuth';
+import { useSocket } from '@/_core/hooks/useSocket';
+import { useQueryClient } from '@tanstack/react-query';
+
+interface Trade {
+  id: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  marketType: 'CEX' | 'DEX';
+  price: number;
+  currentPrice?: number;
+  amount: number;
+  pnl?: number;
+  status: string;
+  isDemo: boolean;
+  createdAt: string;
+  executedAt?: string;
+}
 
 export default function Trades() {
-  useAuth({ redirectOnUnauthenticated: true });
-  const { data: trades, isLoading } = trpc.trading.getTrades.useQuery();
+  const { user } = useAuth({ redirectOnUnauthenticated: true });
+  const queryClient = useQueryClient();
+  const { data: trades, isLoading, refetch } = trpc.trading.getTrades.useQuery();
   const [filterMarket, setFilterMarket] = useState<'all' | 'CEX' | 'DEX'>('all');
   const [filterSide, setFilterSide] = useState<'all' | 'BUY' | 'SELL'>('all');
   const [filterMode, setFilterMode] = useState<'all' | 'demo' | 'real'>('all');
   const [searchSymbol, setSearchSymbol] = useState('');
+
+  const { lastMessage } = useSocket(user?.openId);
+
+  // Escuchar actualizaciones de trades por socket
+  useEffect(() => {
+    if (lastMessage && lastMessage.event === 'trade_update') {
+      const updatedData = lastMessage.data;
+
+      queryClient.setQueryData(['trading.getTrades'], (oldData: Trade[] | undefined) => {
+        if (!oldData) return [];
+
+        return oldData.map(trade => {
+          if (trade.id === updatedData.id) {
+            // Calcular nuevo P&L si el precio cambió
+            let pnl = trade.pnl;
+            if (updatedData.currentPrice && trade.status === 'open') {
+              const diff = updatedData.currentPrice - trade.price;
+              pnl = trade.side === 'BUY' ? diff * trade.amount : -diff * trade.amount;
+            }
+
+            return {
+              ...trade,
+              ...updatedData,
+              pnl: updatedData.pnl !== undefined ? updatedData.pnl : pnl
+            };
+          }
+          return trade;
+        });
+      });
+    }
+  }, [lastMessage, queryClient]);
 
   const filteredTrades = useMemo(() => {
     if (!trades) return [];
@@ -20,7 +69,7 @@ export default function Trades() {
       const matchMarket = filterMarket === 'all' || trade.marketType === filterMarket;
       const matchSide = filterSide === 'all' || trade.side === filterSide;
       const matchMode = filterMode === 'all' || (filterMode === 'demo' ? trade.isDemo : !trade.isDemo);
-      const matchSymbol = searchSymbol === '' || trade.symbol.toLowerCase().includes(searchSymbol.toLowerCase());
+      const matchSymbol = searchSymbol === '' || (trade.symbol?.toLowerCase() || "").includes(searchSymbol.toLowerCase());
       return matchMarket && matchSide && matchMode && matchSymbol;
     });
   }, [trades, filterMarket, filterSide, filterMode, searchSymbol]);
@@ -39,11 +88,27 @@ export default function Trades() {
   return (
     <SignalsKeiLayout currentPage="/trades">
       <div className="space-y-6">
-        <div>
-          <h2 className="text-3xl font-bold text-foreground mb-2">Historial de Trades</h2>
-          <p className="text-muted-foreground">
-            Todos los trades ejecutados en modo demo y real
-          </p>
+        <div className="flex justify-between items-start">
+          <div>
+            <h2 className="text-3xl font-bold text-foreground mb-2">Historial de Trades</h2>
+            <p className="text-muted-foreground">
+              Todos los trades ejecutados en modo demo y real
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 px-3 py-1 bg-green-500/10 border border-green-500/20 rounded-full">
+              <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+              <span className="text-[10px] font-bold text-green-600 uppercase tracking-wider">Live</span>
+            </div>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => refetch()}
+              disabled={isLoading}
+            >
+              <RefreshCw size={16} className={isLoading ? "animate-spin" : ""} />
+            </Button>
+          </div>
         </div>
 
         {/* Stats */}
@@ -178,10 +243,10 @@ export default function Trades() {
                       </td>
                       <td className="px-6 py-4 text-sm">
                         <span className={`px-2 py-1 rounded-full text-xs font-semibold ${trade.status === 'filled'
-                            ? 'bg-green-100 text-green-800'
-                            : trade.status === 'pending'
-                              ? 'bg-yellow-100 text-yellow-800'
-                              : 'bg-red-100 text-red-800'
+                          ? 'bg-green-100 text-green-800'
+                          : trade.status === 'pending'
+                            ? 'bg-yellow-100 text-yellow-800'
+                            : 'bg-red-100 text-red-800'
                           }`}>
                           {trade.status}
                         </span>
