@@ -6,6 +6,7 @@ from api.services.dex_service import DEXService
 from api.services.backtest_service import BacktestService
 from api.models.mongodb import db, get_app_config
 import logging
+import asyncio
 from typing import Optional
 from bson import ObjectId
 

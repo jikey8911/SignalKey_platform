@@ -16,7 +16,7 @@ class TelegramUserBot:
         self.api_hash = Config.TELEGRAM_API_HASH
         self.session_file = 'userbot_session' # Session name
         self.client = None
-        self.api_url = "http://localhost:8000/webhook/signal"
+        self.api_url = "http://localhost:8001/webhook/signal"
 
         if not self.api_id or not self.api_hash:
             logger.warning("TELEGRAM_API_ID or TELEGRAM_API_HASH not set. UserBot will not start.")
