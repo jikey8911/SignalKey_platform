@@ -7,7 +7,7 @@ import { useAuth } from '@/_core/hooks/useAuth';
 import { TrendingUp, TrendingDown, DollarSign, Zap } from 'lucide-react';
 
 export default function Dashboard() {
-  const { user } = useAuth();
+  const { user } = useAuth({ redirectOnUnauthenticated: true });
   const { demoMode } = useTrading();
   const { data: balances, isLoading: balancesLoading, refetch: refetchBalances } = trpc.trading.getBalances.useQuery();
   const { data: trades, isLoading: tradesLoading } = trpc.trading.getTrades.useQuery();

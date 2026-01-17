@@ -3,11 +3,11 @@ import { SignalsKeiLayout } from '@/components/SignalsKeiLayout';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { trpc } from '@/lib/trpc';
-import { 
-  AlertCircle, 
-  CheckCircle, 
-  Clock, 
-  XCircle, 
+import {
+  AlertCircle,
+  CheckCircle,
+  Clock,
+  XCircle,
   Zap,
   TrendingUp,
   TrendingDown,
@@ -15,6 +15,7 @@ import {
   Filter
 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
+import { useAuth } from '@/_core/hooks/useAuth';
 
 interface Signal {
   id: number;
@@ -31,6 +32,7 @@ interface Signal {
 }
 
 export default function Signals() {
+  useAuth({ redirectOnUnauthenticated: true });
   const { data: signals, isLoading, refetch } = trpc.trading.getSignals.useQuery();
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -154,8 +156,8 @@ export default function Signals() {
   // Filtrar señales
   const filteredSignals = (signals || []).filter((signal: Signal) => {
     const matchesSearch = signal.symbol.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         signal.source.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         signal.rawText.toLowerCase().includes(searchTerm.toLowerCase());
+      signal.source.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      signal.rawText.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === 'all' || signal.status === filterStatus;
     const matchesMarketType = filterMarketType === 'all' || signal.marketType === filterMarketType;
     const matchesDecision = filterDecision === 'all' || signal.decision === filterDecision;
@@ -192,10 +194,10 @@ export default function Signals() {
             >
               {autoRefresh ? "Auto-Refresh ON" : "Auto-Refresh OFF"}
             </Button>
-            <Button 
-              variant="outline" 
-              size="icon" 
-              onClick={() => refetch()} 
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => refetch()}
               disabled={isLoading}
             >
               <RefreshCw size={16} className={isLoading ? "animate-spin" : ""} />
@@ -386,10 +388,10 @@ export default function Signals() {
                 className="p-6 border-l-4 hover:shadow-lg transition-shadow overflow-hidden"
                 style={{
                   borderLeftColor: signal.status === 'processing' ? '#2563eb' :
-                                 signal.status === 'accepted' ? '#16a34a' :
-                                 signal.status === 'executing' ? '#ea580c' :
-                                 signal.status === 'completed' ? '#059669' :
-                                 signal.status === 'failed' || signal.status === 'error' ? '#dc2626' : '#6b7280'
+                    signal.status === 'accepted' ? '#16a34a' :
+                      signal.status === 'executing' ? '#ea580c' :
+                        signal.status === 'completed' ? '#059669' :
+                          signal.status === 'failed' || signal.status === 'error' ? '#dc2626' : '#6b7280'
                 }}
               >
                 {/* Header */}
@@ -481,7 +483,7 @@ export default function Signals() {
           <Card className="p-12 text-center">
             <AlertCircle className="mx-auto mb-4 text-muted-foreground" size={48} />
             <p className="text-lg text-muted-foreground">
-              {signals?.length === 0 
+              {signals?.length === 0
                 ? "No hay señales aún. Las señales aparecerán aquí cuando se reciban desde Telegram o webhooks."
                 : "No hay señales que coincidan con los filtros seleccionados."}
             </p>

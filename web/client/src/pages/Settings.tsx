@@ -6,14 +6,46 @@ import { trpc } from '@/lib/trpc';
 import { Eye, EyeOff, Save, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { CCXT_EXCHANGES } from '@/constants/exchanges';
+import { useAuth } from '@/_core/hooks/useAuth';
+import { TelegramConfig } from '@/components/TelegramConfig';
 
 export default function Settings() {
+  const { user: authUser } = useAuth({ redirectOnUnauthenticated: true });
   const { data: config, isLoading } = trpc.trading.getConfig.useQuery();
   const updateConfigMutation = trpc.trading.updateConfig.useMutation();
   const [showSecrets, setShowSecrets] = useState(false);
   const [availableChannels, setAvailableChannels] = useState<any[]>([]);
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    demoMode: boolean;
+    aiProvider: 'gemini' | 'openai' | 'perplexity';
+    aiApiKey: string;
+    geminiApiKey: string;
+    gmgnApiKey: string;
+    telegramBotToken: string;
+    telegramChatId: string;
+    telegramChannels: { allow: string[]; deny: string[] };
+    exchanges: Array<{
+      exchangeId: string;
+      apiKey: string;
+      secret: string;
+      password: string;
+      uid: string;
+      isActive: boolean;
+    }>;
+    dexConfig: {
+      walletPrivateKey: string;
+      rpcUrl: string;
+    };
+    investmentLimits: {
+      cexMaxAmount: number;
+      dexMaxAmount: number;
+    };
+    virtualBalances: {
+      cex: number;
+      dex: number;
+    };
+  }>({
     demoMode: true,
     aiProvider: 'gemini',
     aiApiKey: '',
@@ -81,9 +113,23 @@ export default function Settings() {
 
   const handleSave = async () => {
     try {
+      // Validar que si hay un proveedor seleccionado, haya una API key
+      if (formData.aiProvider && !formData.aiApiKey && !formData.geminiApiKey) {
+        toast.error(`Por favor ingresa la API Key para ${formData.aiProvider}`);
+        return;
+      }
+
+      // Debug: ver qué se está enviando
+      console.log('Guardando configuración:', {
+        aiProvider: formData.aiProvider,
+        aiApiKey: formData.aiApiKey ? `${formData.aiApiKey.substring(0, 10)}...` : 'vacío',
+        geminiApiKey: formData.geminiApiKey ? `${formData.geminiApiKey.substring(0, 10)}...` : 'vacío'
+      });
+
       await updateConfigMutation.mutateAsync(formData);
       toast.success('Configuración guardada correctamente');
     } catch (error) {
+      console.error('Error guardando configuración:', error);
       toast.error('Error al guardar la configuración');
     }
   };
@@ -165,7 +211,7 @@ export default function Settings() {
                   </label>
                   <select
                     value={formData.aiProvider}
-                    onChange={(e) => setFormData({ ...formData, aiProvider: e.target.value as any })}
+                    onChange={(e) => setFormData({ ...formData, aiProvider: e.target.value as 'gemini' | 'openai' | 'perplexity' })}
                     className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                   >
                     <option value="gemini">Google Gemini</option>
@@ -176,7 +222,10 @@ export default function Settings() {
                 <InputField
                   label={`${formData.aiProvider.charAt(0).toUpperCase() + formData.aiProvider.slice(1)} API Key`}
                   value={formData.aiApiKey}
-                  onChange={(v: string) => setFormData({ ...formData, aiApiKey: v })}
+                  onChange={(v: string) => {
+                    console.log('Actualizando aiApiKey:', v ? `${v.substring(0, 10)}...` : 'vacío');
+                    setFormData({ ...formData, aiApiKey: v });
+                  }}
                   type="password"
                   placeholder={`Introduce tu token de ${formData.aiProvider}`}
                 />
@@ -188,16 +237,10 @@ export default function Settings() {
               </div>
             </Card>
 
-            <Card className="p-6">
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">📱 Telegram Bot</h3>
-              <div className="space-y-4">
-                <InputField
-                  label="Bot Token"
-                  value={formData.telegramBotToken}
-                  onChange={(v: string) => setFormData({ ...formData, telegramBotToken: v })}
-                  type="password"
-                />
+            {authUser?.openId && <TelegramConfig userId={authUser.openId} />}
 
+            <Card className="p-6">
+              <div className="space-y-4">
                 {/* Channel Selection */}
                 <div className="pt-2">
                   <div className="flex justify-between items-center mb-2">
@@ -206,17 +249,22 @@ export default function Settings() {
                       variant="outline"
                       size="sm"
                       onClick={async () => {
+                        if (!authUser?.openId) {
+                          toast.error("Usuario no autenticado");
+                          return;
+                        }
                         try {
-                          const res = await fetch('http://localhost:8000/telegram/dialogs');
-                          const dialogs = await res.json();
+                          const res = await fetch(`http://localhost:8000/telegram/dialogs/${authUser.openId}`);
+                          const data = await res.json();
+                          const dialogs = data.dialogs;
                           if (Array.isArray(dialogs)) {
                             setAvailableChannels(dialogs);
                             toast.success(`Cargados ${dialogs.length} canales`);
                           } else {
-                            toast.error("Format de respuesta inválido");
+                            toast.error("Formato de respuesta inválido");
                           }
                         } catch (e) {
-                          toast.error("Error cargando canales");
+                          toast.error("Error cargando canales (¿Telegram conectado?)");
                           console.error(e);
                         }
                       }}

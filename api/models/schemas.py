@@ -13,7 +13,16 @@ class AnalysisResult(BaseModel):
     market_type: str  # "CEX", "DEX"
     confidence: float
     reasoning: str
-    parameters: Optional[Dict[str, Any]] = None  # TP, SL, Amount, etc.
+    is_safe: bool = True
+    risk_score: float = 0.0
+    parameters: Optional[Dict[str, Any]] = {
+        "entry_price": None,
+        "entry_type": "market", # "market" o "limit"
+        "tp": [], # Lista de precios objetivo [{price: 1.0, percent: 50}]
+        "sl": None,
+        "leverage": 1,
+        "network": None
+    }
 
 class ExecutionResult(BaseModel):
     success: bool
@@ -57,12 +66,18 @@ class TradeSchema(BaseModel):
     signalId: Optional[Any] = None
     symbol: str
     side: str
-    price: float
+    entryPrice: float
+    targetPrice: Optional[float] = None
+    stopLoss: Optional[float] = None
+    takeProfits: List[Dict[str, Any]] = []
     amount: float
+    leverage: int = 1
     marketType: str
     isDemo: bool = True
     orderId: Optional[str] = None
-    status: str = "pending"
+    status: str = "pending" # "pending", "monitoring", "open", "closed", "cancelled"
     pnl: Optional[float] = None
+    isSafe: bool = True
     createdAt: datetime = Field(default_factory=datetime.utcnow)
     executedAt: Optional[datetime] = None
+    lastMonitoredAt: Optional[datetime] = None

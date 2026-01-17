@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { RefreshCw, Search, MessageSquare, AlertCircle, CheckCircle } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
+import { useAuth } from '@/_core/hooks/useAuth';
 
 interface TelegramLog {
   _id: string;
@@ -16,6 +17,7 @@ interface TelegramLog {
 }
 
 export default function TelegramConsole() {
+  useAuth({ redirectOnUnauthenticated: true });
   const [logs, setLogs] = useState<TelegramLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
@@ -50,7 +52,7 @@ export default function TelegramConsole() {
   // Filtrar logs por búsqueda y estado
   const filteredLogs = logs.filter(log => {
     const matchesSearch = log.message.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         log.chatName.toLowerCase().includes(searchTerm.toLowerCase());
+      log.chatName.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesStatus = filterStatus === 'all' || log.status === filterStatus;
     return matchesSearch && matchesStatus;
   });
@@ -119,10 +121,10 @@ export default function TelegramConsole() {
             >
               {autoRefresh ? "Auto-Refresh ON" : "Auto-Refresh OFF"}
             </Button>
-            <Button 
-              variant="outline" 
-              size="icon" 
-              onClick={fetchLogs} 
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={fetchLogs}
               disabled={loading}
             >
               <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
@@ -217,13 +219,13 @@ export default function TelegramConsole() {
               </div>
             ) : (
               filteredLogs.map((log) => (
-                <div 
-                  key={log._id} 
+                <div
+                  key={log._id}
                   className="p-4 grid grid-cols-12 gap-4 text-sm hover:bg-muted/30 transition-colors border-l-4"
                   style={{
-                    borderLeftColor: log.status === 'signal_detected' ? '#2563eb' : 
-                                   log.status === 'processed' ? '#16a34a' : 
-                                   log.status === 'received' ? '#6b7280' : '#d1d5db'
+                    borderLeftColor: log.status === 'signal_detected' ? '#2563eb' :
+                      log.status === 'processed' ? '#16a34a' :
+                        log.status === 'received' ? '#6b7280' : '#d1d5db'
                   }}
                 >
                   <div className="col-span-1 text-muted-foreground whitespace-nowrap text-xs">
@@ -256,8 +258,8 @@ export default function TelegramConsole() {
           <div className="flex gap-3">
             <AlertCircle className="text-blue-600 flex-shrink-0 mt-0.5" size={18} />
             <div className="text-sm text-blue-900">
-              <strong>Nota:</strong> Esta consola muestra TODOS los mensajes recibidos sin filtrar. 
-              Los mensajes marcados como "SEÑAL DETECTADA" son aquellos que provienen de chats seleccionados en la configuración 
+              <strong>Nota:</strong> Esta consola muestra TODOS los mensajes recibidos sin filtrar.
+              Los mensajes marcados como "SEÑAL DETECTADA" son aquellos que provienen de chats seleccionados en la configuración
               y serán procesados por la IA. Usa la página de "Señales" para ver solo las señales de trading procesadas.
             </div>
           </div>

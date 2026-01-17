@@ -4,8 +4,10 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { trpc } from '@/lib/trpc';
 import { TrendingUp, TrendingDown, Filter } from 'lucide-react';
+import { useAuth } from '@/_core/hooks/useAuth';
 
 export default function Trades() {
+  useAuth({ redirectOnUnauthenticated: true });
   const { data: trades, isLoading } = trpc.trading.getTrades.useQuery();
   const [filterMarket, setFilterMarket] = useState<'all' | 'CEX' | 'DEX'>('all');
   const [filterSide, setFilterSide] = useState<'all' | 'BUY' | 'SELL'>('all');
@@ -169,20 +171,18 @@ export default function Trades() {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-sm">
-                        <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
-                          trade.isDemo ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'
-                        }`}>
+                        <span className={`px-2 py-1 rounded-full text-xs font-semibold ${trade.isDemo ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'
+                          }`}>
                           {trade.isDemo ? '🧪 Demo' : '⚠️ Real'}
                         </span>
                       </td>
                       <td className="px-6 py-4 text-sm">
-                        <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
-                          trade.status === 'filled'
+                        <span className={`px-2 py-1 rounded-full text-xs font-semibold ${trade.status === 'filled'
                             ? 'bg-green-100 text-green-800'
                             : trade.status === 'pending'
-                            ? 'bg-yellow-100 text-yellow-800'
-                            : 'bg-red-100 text-red-800'
-                        }`}>
+                              ? 'bg-yellow-100 text-yellow-800'
+                              : 'bg-red-100 text-red-800'
+                          }`}>
                           {trade.status}
                         </span>
                       </td>

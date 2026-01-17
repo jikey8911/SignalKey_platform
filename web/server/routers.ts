@@ -76,6 +76,12 @@ export const appRouter = router({
         aiApiKey: z.string().optional(),
         geminiApiKey: z.string().optional(),
         gmgnApiKey: z.string().optional(),
+        // Telegram fields
+        telegramApiId: z.string().optional(),
+        telegramApiHash: z.string().optional(),
+        telegramPhoneNumber: z.string().optional(),
+        telegramSessionString: z.string().optional(),
+        telegramIsConnected: z.boolean().optional(),
         telegramBotToken: z.string().optional(),
         telegramChatId: z.string().optional(),
         telegramChannels: z.object({

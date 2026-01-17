@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 from contextlib import asynccontextmanager
 from api.bot.telegram_bot import start_userbot, bot_instance
+from api.bot.telegram_bot_manager import bot_manager
 from api.services.monitor_service import MonitorService
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -27,9 +28,18 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("=== Starting SignalKey Platform Services ===")
     
-    # 1. Iniciar UserBot de Telegram
-    logger.info("Starting Telegram UserBot...")
-    userbot_task = asyncio.create_task(start_userbot())
+    # 1. Iniciar bots de Telegram de usuarios desde BD
+    logger.info("Starting Telegram Bot Manager...")
+    try:
+        await bot_manager.restart_all_bots()
+        logger.info(f"Telegram Bot Manager started with {bot_manager.get_active_bots_count()} active bots")
+    except Exception as e:
+        logger.error(f"Error starting Telegram Bot Manager: {e}")
+
+    # 2. Iniciar Tracker de Trading (Monitoreo de señales)
+    logger.info("Starting Tracker Service...")
+    from api.services.tracker_service import tracker_service
+    await tracker_service.start_monitoring()
     
     # 2. Iniciar Monitor de Precios
     logger.info("Starting Price Monitor Service...")
@@ -44,7 +54,9 @@ async def lifespan(app: FastAPI):
     
     logger.info("Stopping Telegram UserBot...")
     await bot_instance.stop()
-    userbot_task.cancel()
+    
+    logger.info("Stopping all user Telegram bots...")
+    await bot_manager.stop_all_bots()
     
     logger.info("Stopping Price Monitor Service...")
     await monitor_service.stop_monitoring()
@@ -68,6 +80,10 @@ cex_service = CEXService()
 dex_service = DEXService()
 backtest_service = BacktestService()
 
+# Importar y agregar routers
+from api.routers.telegram_router import router as telegram_router
+app.include_router(telegram_router)
+
 async def process_signal_task(signal: TradingSignal, user_id: str = "default_user"):
     logger.info(f"Procesando señal de {signal.source} para usuario {user_id}")
     
@@ -89,10 +105,18 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
     # Obtener config del usuario para ver la configuración de IA
     config = await get_app_config(user_id)
     
+    # Log de la configuración de IA
+    if config:
+        ai_provider = config.get("aiProvider", "gemini")
+        has_api_key = bool(config.get("aiApiKey") or config.get("geminiApiKey"))
+        logger.info(f"Config retrieved for user {user_id}: aiProvider={ai_provider}, has_api_key={has_api_key}")
+    else:
+        logger.warning(f"No config found for user {user_id}, will use environment defaults")
+    
     # 1. Analizar con el servicio de IA (Aprobación de la IA obligatoria)
     try:
         analysis = await ai_service.analyze_signal(signal.raw_text, config=config)
-        logger.info(f"Análisis completado: {analysis.decision} para {analysis.symbol}")
+        logger.info(f"AI Analysis completed: {analysis.decision} for {analysis.symbol} (confidence: {analysis.confidence})")
         
         # Actualizar señal con el análisis
         await db.trading_signals.update_one(
@@ -224,7 +248,7 @@ async def get_connection_status(user_id: str):
                 pass
         
         # Check Telegram
-        if bot_instance.client and bot_instance.client.is_connected():
+        if bot_manager.is_bot_active(user_id):
             status["telegram"] = True
         
         # Check GMGN

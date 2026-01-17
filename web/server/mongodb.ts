@@ -33,7 +33,14 @@ const AppConfigSchema = new Schema({
   aiApiKey: String,
   geminiApiKey: String, // Mantener por compatibilidad temporal
   gmgnApiKey: String,
-  telegramBotToken: String,
+  // Telegram Configuration (per user)
+  telegramApiId: String,
+  telegramApiHash: String,
+  telegramPhoneNumber: String,
+  telegramSessionString: String, // Serialized session
+  telegramIsConnected: { type: Boolean, default: false },
+  telegramLastConnected: Date,
+  telegramBotToken: String, // Legacy field
   telegramChatId: String,
   telegramChannels: {
     allow: [String],
