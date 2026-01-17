@@ -4,6 +4,7 @@ from google import genai
 from openai import AsyncOpenAI
 import httpx
 import re
+from typing import List
 from perplexity import AsyncPerplexity
 from api.core.ports.ai_port import AIPort
 from api.core.domain.signal import RawSignal, SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
@@ -23,12 +24,12 @@ class AIAdapter(AIPort):
         if self._pplx_client:
             await self._pplx_client.close() # El SDK de PPLX usa .close()
 
-    async def analyze_signal(self, signal: RawSignal, config: dict = None) -> SignalAnalysis:
+    async def analyze_signal(self, signal: RawSignal, config: dict = None) -> List[SignalAnalysis]:
         ai_provider = config.get("aiProvider", "gemini") if config else "gemini"
         api_key = self._get_api_key(ai_provider, config)
 
         if not api_key:
-            return self._default_hold("No API Key configured")
+            return [self._default_hold("No API Key configured")]
 
         prompt = self._build_prompt(signal.text)
 
@@ -47,7 +48,7 @@ class AIAdapter(AIPort):
             return self._parse_response(content)
         except Exception as e:
             logger.error(f"Error in AI analysis: {e}")
-            return self._default_hold(str(e))
+            return [self._default_hold(str(e))]
 
     def _get_api_key(self, provider: str, config: dict) -> str:
         if config:
@@ -67,7 +68,7 @@ class AIAdapter(AIPort):
         Tu tarea es extraer parámetros técnicos de un texto descriptivo y devolverlos en formato JSON. 
         Este es un sistema de procesamiento de datos automático.
         
-        REGLAS DE EXTRACCIÓN:
+        REGLAS DE EXTRACCIÓN Y GENERACIÓN:
         1. SÍMBOLO: Si es una alerta de bot (GMGN/Trend), busca la dirección de contrato (CA) o el par (p.ej. BTC/USDT).
         2. MERCADO: 
            - 'SPOT' (CEX/Centralizado sin apalancamiento).
@@ -77,32 +78,37 @@ class AIAdapter(AIPort):
            - 'BUY' si el texto indica una entrada, compra, Long o alerta positiva.
            - 'SELL' si el texto indica una salida, venta o Short.
            - 'HOLD' si el texto no contiene una operación clara, es publicidad, spam o soporte.
-        4. PARÁMETROS: Extrae precios de entrada, TP (Take Profit), SL (Stop Loss) y APALANCAMIENTO (leverage). Usa 1 si no se especifica.
+        4. PARÁMETROS (MANDATORIOS SI DECISIÓN != 'HOLD'):
+           - Si el texto NO contiene entry_price, tp o sl, DEBES generarlos tú basándote en el precio actual (usa tu búsqueda si es posible) o ratios prudentes (ej. SL: 2-5%, TP1: 5-10%).
+           - NUNCA devuelvas 0.0 para entry_price si la decisión es BUY/SELL.
+           - El campo 'leverage' debe ser coherente con el mercado (1 para SPOT/DEX).
         
         TEXTO A PROCESAR:
         "{text}"
         
-        RESPUESTA JSON (Sin preámbulos, solo el objeto):
-        {{
-            "decision": "BUY" | "SELL" | "HOLD",
-            "symbol": "Símbolo o Dirección",
-            "market_type": "SPOT" | "FUTURES" | "DEX",
-            "is_safe": true | false,
-            "risk_score": 0.0 a 10.0,
-            "confidence": 0.0 a 1.0,
-            "reasoning": "Resumen técnico de la extracción",
-            "parameters": {{
-                "entry_price": 0.0,
-                "entry_type": "market" | "limit",
-                "tp": [
-                    {{"price": 0.0, "percent": 50}}
-                ],
-                "sl": 0.0,
-                "leverage": 1,
-                "amount": 0.0,
-                "network": "solana" | "ethereum" | "bsc" | "unknown"
+        RESPUESTA JSON (Sin preámbulos, deveulve un ARRAY [] de objetos si hay múltiples tokens):
+        [
+            {{
+                "decision": "BUY" | "SELL" | "HOLD",
+                "symbol": "Símbolo o Dirección",
+                "market_type": "SPOT" | "FUTURES" | "DEX",
+                "is_safe": true | false,
+                "risk_score": 0.0 a 10.0,
+                "confidence": 0.0 a 1.0,
+                "reasoning": "Resumen técnico de la extracción",
+                "parameters": {{
+                    "entry_price": 0.0,
+                    "entry_type": "market" | "limit",
+                    "tp": [
+                        {{"price": 0.0, "percent": 50}}
+                    ],
+                    "sl": 0.0,
+                    "leverage": 1,
+                    "amount": 0.0,
+                    "network": "solana" | "ethereum" | "bsc" | "unknown"
+                }}
             }}
-        }}
+        ]
         """
 
     async def _call_gemini(self, prompt: str, api_key: str) -> str:
@@ -146,11 +152,11 @@ class AIAdapter(AIPort):
         response.raise_for_status()
         return response.json()['choices'][0]['message']['content']
 
-    def _parse_response(self, content: str) -> SignalAnalysis:
+    def _parse_response(self, content: str) -> List[SignalAnalysis]:
         content = content.strip()
         
-        # 1. Intentar extraer JSON usando regex para ser más robustos contra texto extra
-        json_match = re.search(r'(\{.*\})', content, re.DOTALL)
+        # 1. Intentar extraer JSON usando regex (ahora buscando [] o {})
+        json_match = re.search(r'([\[\{].*[\]\}])', content, re.DOTALL)
         if json_match:
             content = json_match.group(1)
         
@@ -158,8 +164,22 @@ class AIAdapter(AIPort):
             data = json.loads(content)
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse AI JSON: {e} | Content: {content[:100]}...")
-            return self._default_hold(f"Error parseando JSON de IA: {str(e)}")
+            return [self._default_hold(f"Error parseando JSON de IA: {str(e)}")]
 
+        # Si es un objeto único, convertirlo en lista
+        if isinstance(data, dict):
+            items = [data]
+        elif isinstance(data, list):
+            items = data
+        else:
+            return [self._default_hold("Formato de respuesta de IA inválido (no es lista u objeto)")]
+
+        results = []
+        for item in items:
+            results.append(self._parse_single_item(item))
+        return results
+
+    def _parse_single_item(self, data: dict) -> SignalAnalysis:
         params_data = data.get("parameters", {})
         
         tp_list = [TakeProfit(price=t["price"], percent=t["percent"]) for t in params_data.get("tp", []) if isinstance(t, dict) and "price" in t]

@@ -109,14 +109,14 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
         logger.error(f"User {user_id} not found")
         return
 
-    signal_id = await db.trading_signals.insert_one({
+    signal_result = await db.trading_signals.insert_one({
         "userId": user["_id"],
         "source": signal.source,
         "rawText": signal.raw_text,
         "status": "processing", # Estado: La AI la está procesando
         "createdAt": datetime.utcnow()
     })
-    inserted_id = signal_id.inserted_id
+    inserted_id = signal_result.inserted_id
     
     # EMITIR POR SOCKET
     await socket_service.emit_to_user(user_id, "signal_update", {
@@ -129,124 +129,161 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
     
     # Obtener config del usuario para ver la configuración de IA
     config = await get_app_config(user_id)
-    
-    # Log de la configuración de IA
-    if config:
-        # Verificar si el procesamiento automático está habilitado
-        if not config.get("isAutoEnabled", True):
-            logger.info(f"Auto-processing is DISABLED for user {user_id}. Aborting signal processing.")
-            await db.trading_signals.update_one(
-                {"_id": inserted_id},
-                {"$set": {"status": "cancelled", "executionMessage": "Auto-processing disabled by user"}}
-            )
-            return
+    if not config:
+        logger.warning(f"No config found for user {user_id}, using environment defaults")
+        config = {}
 
-        ai_provider = config.get("aiProvider", "gemini")
-        has_api_key = bool(config.get("aiApiKey") or config.get("geminiApiKey"))
-        logger.info(f"Config retrieved for user {user_id}: aiProvider={ai_provider}, has_api_key={has_api_key}")
-    else:
-        logger.warning(f"No config found for user {user_id}, will use environment defaults")
-    
+    # Verificar si el procesamiento automático está habilitado
+    if not config.get("isAutoEnabled", True):
+        logger.info(f"Auto-processing is DISABLED for user {user_id}. Aborting signal processing.")
+        await db.trading_signals.update_one(
+            {"_id": inserted_id},
+            {"$set": {"status": "cancelled", "executionMessage": "Auto-processing disabled by user"}}
+        )
+        return
+
     # 1. Analizar con el servicio de IA (Aprobación de la IA obligatoria)
     try:
-        analysis = await ai_service.analyze_signal(signal.raw_text, config=config)
-        logger.info(f"AI Analysis completed: {analysis.decision} for {analysis.symbol} (confidence: {analysis.confidence})")
+        analyses = await ai_service.analyze_signal(signal.raw_text, config=config)
+        logger.info(f"AI found {len(analyses)} potential tokens in signal")
         
-        # Actualizar señal con el análisis
-        await db.trading_signals.update_one(
-            {"_id": inserted_id},
-            {"$set": {
-                "decision": analysis.decision,
-                "symbol": analysis.symbol,
-                "marketType": analysis.market_type,
-                "confidence": analysis.confidence,
-                "reasoning": analysis.reasoning,
-                "status": "accepted" if analysis.decision != "HOLD" else "rejected"
-            }}
-        )
-    except Exception as e:
-        logger.error(f"Error analyzing signal: {e}")
-        await db.trading_signals.update_one(
-            {"_id": inserted_id},
-            {"$set": {"status": "error", "reasoning": str(e)}}
-        )
-        return
-    
-    # Si la IA decide HOLD, no se aprueba la señal para ejecución
-    if analysis.decision == "HOLD":
-        logger.info(f"Señal RECHAZADA por la IA: {analysis.reasoning}")
-        return
-
-    # 2. Validar Seguridad (Honeypot/Riesgo)
-    if not analysis.is_safe:
-        logger.warning(f"Señal MARCADA COMO INSEGURA por la IA (Score: {analysis.risk_score}): {analysis.reasoning}")
-        await db.trading_signals.update_one(
-            {"_id": inserted_id},
-            {"$set": {"status": "rejected_unsafe", "riskScore": analysis.risk_score}}
-        )
-        # EMITIR POR SOCKET
-        await socket_service.emit_to_user(user_id, "signal_update", {
-            "id": str(inserted_id),
-            "status": "rejected_unsafe",
-            "riskScore": analysis.risk_score,
-            "reasoning": analysis.reasoning
-        })
-        return
-
-    # 3. Preparar para Supervisión (No ejecutar inmediatamente si es 'limit' o necesita monitoreo)
-    logger.info(f"Señal APROBADA por la IA: {analysis.decision} {analysis.symbol}")
-    await db.trading_signals.update_one({"_id": inserted_id}, {"$set": {"status": "monitoring"}})
-    
-    try:
-        # Obtener límites de inversión para crear el trade document
-        max_amount = config.get("investmentLimits", {}).get("cexMaxAmount" if analysis.market_type == "CEX" else "dexMaxAmount", 100.0)
-        suggested_amount = analysis.parameters.get('amount', 0)
-        amount = min(suggested_amount, max_amount) if suggested_amount > 0 else max_amount
-
-        # Crear documento de Trade en estado 'monitoring'
-        trade_data = {
-            "userId": user["_id"],
-            "signalId": inserted_id,
-            "symbol": analysis.symbol,
-            "side": analysis.decision,
-            "entryPrice": analysis.parameters.get("entry_price") or 0.0,
-            "targetPrice": analysis.parameters.get("entry_price"),
-            "stopLoss": analysis.parameters.get("sl"),
-            "takeProfits": analysis.parameters.get("tp", []),
-            "amount": amount,
-            "leverage": analysis.parameters.get("leverage", 1),
-            "marketType": analysis.market_type,
-            "isDemo": config.get("demoMode", True),
-            "status": "monitoring",
-            "isSafe": analysis.is_safe,
-            "createdAt": datetime.utcnow()
-        }
-        
-        result = await db.trades.insert_one(trade_data)
-        trade_id = str(result.inserted_id)
-        
-        # Notificar al TrackerService para que inicie el monitoreo
-        from api.services.tracker_service import tracker_service
-        await tracker_service.add_trade_to_monitor(trade_id)
-        
-        logger.info(f"Trade {trade_id} enviado a TrackerService para supervisión dinámica")
-        
-        # Actualizar estado final de la señal a 'monitoring'
-        await db.trading_signals.update_one({"_id": inserted_id}, {"$set": {"status": "monitoring"}})
-        
-        # EMITIR POR SOCKET
-        await socket_service.emit_to_user(user_id, "signal_update", {
-            "id": str(inserted_id),
-            "status": "monitoring",
-            "symbol": analysis.symbol,
-            "decision": analysis.decision
-        })
+        # Procesar cada análisis de forma independiente
+        for i, analysis in enumerate(analyses):
+            current_signal_id = inserted_id
             
+            # Si hay más de un token, crear nuevos registros de señal para los subsiguientes
+            if i > 0:
+                new_sig = await db.trading_signals.insert_one({
+                    "userId": user["_id"],
+                    "source": signal.source,
+                    "rawText": signal.raw_text,
+                    "status": "processing",
+                    "createdAt": datetime.utcnow()
+                })
+                current_signal_id = new_sig.inserted_id
+            
+            logger.info(f"Processing token {i+1}/{len(analyses)}: {analysis.symbol}")
+            
+            # Actualizar señal con el análisis
+            await db.trading_signals.update_one(
+                {"_id": current_signal_id},
+                {"$set": {
+                    "decision": analysis.decision,
+                    "symbol": analysis.symbol,
+                    "marketType": analysis.market_type,
+                    "confidence": analysis.confidence,
+                    "reasoning": analysis.reasoning,
+                    "status": "accepted" if analysis.decision != "HOLD" else "rejected"
+                }}
+            )
+
+            # EMITIR POR SOCKET
+            await socket_service.emit_to_user(user_id, "signal_update", {
+                "id": str(current_signal_id),
+                "symbol": analysis.symbol,
+                "status": "accepted" if analysis.decision != "HOLD" else "rejected",
+                "decision": analysis.decision
+            })
+
+            # Si la IA decide HOLD, no se aprueba
+            if analysis.decision == "HOLD":
+                logger.info(f"Token {analysis.symbol} RECHAZADO por la IA: {analysis.reasoning}")
+                continue
+
+            # 2. Validar Seguridad (Honeypot/Riesgo)
+            if not analysis.is_safe:
+                logger.warning(f"Token {analysis.symbol} MARCADO COMO INSEGURA por la IA (Score: {analysis.risk_score}): {analysis.reasoning}")
+                await db.trading_signals.update_one(
+                    {"_id": current_signal_id},
+                    {"$set": {"status": "rejected_unsafe", "riskScore": analysis.risk_score}}
+                )
+                await socket_service.emit_to_user(user_id, "signal_update", {
+                    "id": str(current_signal_id),
+                    "status": "rejected_unsafe",
+                    "riskScore": analysis.risk_score,
+                    "reasoning": analysis.reasoning
+                })
+                continue
+
+            # 3. Preparar Trade
+            try:
+                # Obtener límites de inversión
+                market_val = analysis.market_type if isinstance(analysis.market_type, str) else (analysis.market_type.value if hasattr(analysis.market_type, "value") else analysis.market_type)
+                is_cex = market_val in ["CEX", "SPOT", "FUTURES"]
+                
+                max_amount = config.get("investmentLimits", {}).get("cexMaxAmount" if is_cex else "dexMaxAmount", 100.0)
+                
+                # handle if suggested_amount is present
+                suggested_amount = 0
+                if isinstance(analysis.parameters, dict):
+                    suggested_amount = analysis.parameters.get('amount', 0)
+                elif hasattr(analysis.parameters, "amount"):
+                    suggested_amount = analysis.parameters.amount or 0
+                
+                amount = min(suggested_amount, max_amount) if suggested_amount > 0 else max_amount
+
+                # Parámetros del trade
+                if isinstance(analysis.parameters, dict):
+                    tp_list = analysis.parameters.get("tp", [])
+                    entry_price = analysis.parameters.get("entry_price") or 0.0
+                    sl_price = analysis.parameters.get("sl")
+                    leverage = analysis.parameters.get("leverage", 1)
+                else:
+                    tp_list = [{"price": t.price, "percent": t.percent} for t in analysis.parameters.tp]
+                    entry_price = analysis.parameters.entry_price or 0.0
+                    sl_price = analysis.parameters.sl
+                    leverage = analysis.parameters.leverage
+
+                trade_data = {
+                    "userId": user["_id"],
+                    "signalId": current_signal_id,
+                    "symbol": analysis.symbol,
+                    "side": analysis.decision,
+                    "entryPrice": entry_price,
+                    "targetPrice": entry_price,
+                    "stopLoss": sl_price,
+                    "takeProfits": tp_list,
+                    "amount": amount,
+                    "leverage": leverage,
+                    "marketType": market_val,
+                    "isDemo": config.get("demoMode", True),
+                    "status": "monitoring",
+                    "isSafe": analysis.is_safe,
+                    "createdAt": datetime.utcnow()
+                }
+                
+                result = await db.trades.insert_one(trade_data)
+                trade_id = str(result.inserted_id)
+                
+                # Notificar al TrackerService
+                from api.services.tracker_service import tracker_service
+                await tracker_service.add_trade_to_monitor(trade_id)
+                
+                logger.info(f"Trade {trade_id} creado para {analysis.symbol}")
+                
+                # Actualizar señal
+                await db.trading_signals.update_one({"_id": current_signal_id}, {"$set": {"status": "monitoring"}})
+                
+                # EMITIR POR SOCKET
+                await socket_service.emit_to_user(user_id, "signal_update", {
+                    "id": str(current_signal_id),
+                    "status": "monitoring",
+                    "symbol": analysis.symbol,
+                    "decision": analysis.decision
+                })
+                    
+            except Exception as e:
+                logger.error(f"Error creating trade for {analysis.symbol}: {e}")
+                await db.trading_signals.update_one(
+                    {"_id": current_signal_id},
+                    {"$set": {"status": "failed", "executionMessage": str(e)}}
+                )
+
     except Exception as e:
-        logger.error(f"Error executing trade: {e}")
+        logger.error(f"Error in multi-token processing: {e}")
         await db.trading_signals.update_one(
             {"_id": inserted_id},
-            {"$set": {"status": "failed", "executionMessage": str(e)}}
+            {"$set": {"status": "error", "reasoning": f"Multi-token error: {str(e)}"}}
         )
 
 @app.post("/webhook/signal")
@@ -315,6 +352,7 @@ async def initialize_balances(user_id: str):
         virtual_balances = config.get("virtualBalances", {"cex": 10000, "dex": 10})
         
         # Initialize CEX balance
+        from api.models.mongodb import update_virtual_balance
         await update_virtual_balance(user_id, "CEX", "USDT", virtual_balances.get("cex", 10000))
         
         # Initialize DEX balance
@@ -419,7 +457,7 @@ async def get_balances(user_id: str):
          # If no CEX balance in DB, inject one with the real balance finding
          response_list.append({
              "_id": "virtual_cex", 
-             "userId": user_id, 
+             "userId": str(user["_id"]), 
              "marketType": "CEX", 
              "currency": "USDT", 
              "amount": 0.0, # Virtual
@@ -433,7 +471,7 @@ async def get_balances(user_id: str):
     else:
          response_list.append({
              "_id": "virtual_dex",
-             "userId": user_id,
+             "userId": str(user["_id"]),
              "marketType": "DEX",
              "currency": "SOL",
              "amount": 0.0
@@ -471,6 +509,7 @@ async def test_connection(data: ConnectionTestRequest):
     return {"success": success, "message": message}
 
 if __name__ == "__main__":
+    import uvicorn
     import uvicorn
     import os
     port = int(os.getenv("PORT", 8000))
