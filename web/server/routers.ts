@@ -53,6 +53,17 @@ export const appRouter = router({
   }),
 
   trading: router({
+    getTelegramLogs: protectedProcedure.query(async ({ ctx }) => {
+      try {
+        const logs = await fetch('http://localhost:8000/telegram/logs?limit=200')
+          .then(res => res.json())
+          .catch(() => []);
+        return logs || [];
+      } catch (e) {
+        console.error("Error fetching telegram logs:", e);
+        return [];
+      }
+    }),
     getConfig: protectedProcedure.query(async ({ ctx }) => {
       const mongoUser = await User.findOne({ openId: ctx.user.openId });
       if (!mongoUser) return null;

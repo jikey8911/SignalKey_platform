@@ -31,25 +31,49 @@ class DEXService:
         if demo_mode:
             logger.info(f"[MODO DEMO DEX] Simulando {side} para {symbol} con monto {amount}")
             
+            # Obtener precio actual para DEX (usando Jup.ag o similar si es Solana)
+            price = 0.0
+            try:
+                # Simulación de obtención de precio para DEX
+                # En una implementación real, usaríamos un oráculo o API de DEX
+                price = 100.0 # Placeholder para SOL o token
+            except Exception as e:
+                logger.error(f"Error obteniendo precio DEX: {e}")
+
             # Registrar trade demo en MongoDB
             trade_doc = {
                 "userId": config["userId"] if config else None,
                 "symbol": symbol,
                 "side": side,
-                "price": 0.0, # Precio simulado
+                "entryPrice": price,
+                "currentPrice": price,
                 "amount": amount,
                 "marketType": "DEX",
                 "isDemo": True,
-                "status": "completed"
+                "status": "open",
+                "tp": analysis.parameters.get('tp') if analysis.parameters else None,
+                "sl": analysis.parameters.get('sl') if analysis.parameters else None,
+                "createdAt": datetime.utcnow()
             }
             await save_trade(trade_doc)
             
-            # Actualizar balance virtual de SOL (simplificado)
-            # await update_virtual_balance(user_id, "DEX", "SOL", new_amount)
+            # Actualizar balance virtual de SOL
+            user = await db.users.find_one({"openId": user_id})
+            if user:
+                current_balance_doc = await db.virtual_balances.find_one({
+                    "userId": user["_id"],
+                    "marketType": "DEX",
+                    "asset": "SOL"
+                })
+                current_balance = current_balance_doc["amount"] if current_balance_doc else config.get("virtualBalances", {}).get("dex", 10)
+                
+                if side == "BUY":
+                    new_balance = current_balance - amount
+                    await update_virtual_balance(user_id, "DEX", "SOL", new_balance)
             
             return ExecutionResult(
                 success=True,
-                message=f"MODO DEMO DEX: {side} {symbol} registrado (Límite: {max_amount})"
+                message=f"MODO DEMO DEX: {side} {symbol} abierto a {price}. Monitoreando TP/SL."
             )
 
         if not gmgn_api_key or not dex_config.get("walletPrivateKey"):

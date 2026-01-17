@@ -26,16 +26,18 @@ class TelegramUserBot:
             return []
         dialogs = []
         try:
-            # We need to ensure we are connected before fetching dialogs.
-            # Usually start() is called at startup.
             if not self.client.is_connected():
-                 # Maybe we shouldn't force connect here if start failed.
                  return []
                  
-            async for dialog in self.client.iter_dialogs(limit=50):
-                if dialog.is_channel or dialog.is_group:
-                    # Provide ID as string to match JS expectations and avoid bigInt issues
-                    dialogs.append({"id": str(dialog.id), "name": dialog.name})
+            async for dialog in self.client.iter_dialogs(limit=100):
+                # Incluimos todos los tipos de chats para la consola
+                dialogs.append({
+                    "id": str(dialog.id), 
+                    "name": dialog.name,
+                    "is_channel": dialog.is_channel,
+                    "is_group": dialog.is_group,
+                    "is_user": dialog.is_user
+                })
         except Exception as e:
             logger.error(f"Error fetching dialogs: {e}")
         return dialogs
@@ -51,80 +53,78 @@ class TelegramUserBot:
             chat_id = str(event.chat_id)
             text = event.message.message
             
-            if not text:
-                return
+            # Capturamos todos los mensajes, incluso si no tienen texto (pueden ser media)
+            # Pero para el log y procesamiento, preferimos los que tienen contenido
+            display_text = text if text else "<Mensaje sin texto / Media>"
 
-            # Log Log entry
+            # 1. Loguear SIEMPRE en telegram_logs (Consola de Telegram)
             try:
-                chat_title = event.chat.title if hasattr(event.chat, 'title') else "Private/Unknown"
+                chat_title = "Privado"
+                if hasattr(event.chat, 'title'):
+                    chat_title = event.chat.title
+                elif hasattr(event.chat, 'first_name'):
+                    chat_title = f"{event.chat.first_name} {getattr(event.chat, 'last_name', '') or ''}".strip()
+
                 log_entry = {
                     "chatId": chat_id,
                     "chatName": chat_title,
-                    "message": text,
+                    "message": display_text,
                     "timestamp": datetime.utcnow(),
-                    "status": "ignored" # default
+                    "status": "received" # Estado inicial para la consola
                 }
+                await db.telegram_logs.insert_one(log_entry)
             except Exception as e:
-                logger.error(f"Error preparing log: {e}")
-                log_entry = None
+                logger.error(f"Error saving log to telegram_logs: {e}")
 
+            if not text:
+                return
+
+            # 2. Filtrar por chats seleccionados para procesar como SEÑALES
             try:
-                # Fetch all configs (optimization needed for prod)
-                # TODO: This pulls ALL configs. In production, we need to map to specific user.
-                cursor = db.app_configs.find({})
-                configs = await cursor.to_list(length=10)
+                # Obtenemos todas las configuraciones que tengan canales permitidos
+                cursor = db.app_configs.find({"telegramChannels.allow": {"$exists": True, "$ne": []}})
+                configs = await cursor.to_list(length=100)
                 
-                allowed = False
+                # Si no hay configuraciones con allow list, por ahora no procesamos como señal
+                # (El usuario pidió filtrar por chats seleccionados)
+                
                 for config in configs:
-                    channels = config.get("telegramChannels", {})
-                    allow_list = channels.get("allow", [])
-                    deny_list = channels.get("deny", [])
+                    user_id = str(config.get("userId"))
+                    # Buscamos el openId del usuario para la API
+                    user = await db.users.find_one({"_id": config.get("userId")})
+                    user_open_id = user.get("openId") if user else "default_user"
                     
-                    if chat_id in deny_list:
-                        # Explicit deny always wins for this config
-                        continue
+                    allow_list = config.get("telegramChannels", {}).get("allow", [])
                     
-                    if not allow_list: 
-                        # If allow list is missing or empty, LEGACY mode: ALLOW ALL
-                        allowed = True
-                        break
-
                     if chat_id in allow_list:
-                        allowed = True
-                        break
-                
-                # Update log status if allowed
-                if allowed:
-                    if log_entry: log_entry["status"] = "processed"
-                
-                # Save log
-                if log_entry:
-                    await db.telegram_logs.insert_one(log_entry)
+                        logger.info(f"Signal detected in allowed chat {chat_id} for user {user_open_id}")
+                        
+                        # Actualizar el log para indicar que fue procesado como señal
+                        await db.telegram_logs.update_one(
+                            {"chatId": chat_id, "message": text, "timestamp": {"$gte": log_entry["timestamp"]}},
+                            {"$set": {"status": "signal_detected"}}
+                        )
 
-                # If after checking all configs, allowed is still False
-                if not allowed:
-                    return
+                        # Enviar a procesar
+                        async with httpx.AsyncClient() as client:
+                            try:
+                                payload = {
+                                    "source": f"telegram_{chat_id}",
+                                    "raw_text": text
+                                }
+                                # Pasamos el user_id en el query param si la API lo soporta
+                                response = await client.post(f"{self.api_url}?user_id={user_open_id}", json=payload)
+                                if response.status_code != 200:
+                                     logger.error(f"Error sending signal to API: {response.text}")
+                            except Exception as e:
+                                logger.error(f"Error connection to API: {e}")
 
             except Exception as e:
-                logger.error(f"Error checking permissions/logging: {e}")
-
-            logger.info(f"Processing Signal from {chat_id}")
-            
-            async with httpx.AsyncClient() as client:
-                try:
-                    payload = {
-                        "source": f"telegram_{chat_id}",
-                        "raw_text": text
-                    }
-                    response = await client.post(self.api_url, json=payload)
-                    if response.status_code != 200:
-                         logger.error(f"Error sending signal to API: {response.text}")
-                except Exception as e:
-                    logger.error(f"Error connection to API: {e}")
+                logger.error(f"Error checking permissions for signals: {e}")
 
         try:
             await self.client.start()
-            logger.info("Telegram UserBot started!")
+            logger.info("Telegram UserBot started and listening to ALL messages!")
             if not await self.client.is_user_authorized():
                 logger.error("UserBot NOT authorized. Run the setup script manually first.")
                 await self.client.disconnect()

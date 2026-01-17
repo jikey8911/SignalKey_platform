@@ -97,30 +97,36 @@ class CEXService:
             if demo_mode:
                 logger.info(f"[MODO DEMO] Simulando {side} para {symbol} con monto {amount}")
                 
-                # Obtener precio actual para la simulación
-                price = 50000.0 # Default fallback
-                if exchange:
-                    try:
-                        ticker = await exchange.fetch_ticker(symbol)
-                        price = ticker['last']
-                    except:
-                        pass
+                # Obtener precio actual para la simulación usando ccxt (incluso sin API keys)
+                price = 0.0
+                try:
+                    # Si no hay instancia de exchange, crear una pública temporal para el precio
+                    temp_exchange = exchange if exchange else getattr(ccxt, config.get("exchangeId", "binance"))()
+                    ticker = await temp_exchange.fetch_ticker(symbol)
+                    price = ticker['last']
+                    if not exchange: await temp_exchange.close()
+                except Exception as e:
+                    logger.error(f"Error obteniendo precio para modo demo: {e}")
+                    return ExecutionResult(success=False, message=f"No se pudo obtener el precio para {symbol}")
                 
-                # Registrar trade en MongoDB
+                # Registrar trade en MongoDB con estado 'open' para monitoreo
                 trade_doc = {
                     "userId": config["userId"] if config else None,
                     "symbol": symbol,
                     "side": side.upper(),
-                    "price": price,
+                    "entryPrice": price,
+                    "currentPrice": price,
                     "amount": amount,
                     "marketType": "CEX",
                     "isDemo": True,
-                    "status": "completed"
+                    "status": "open", # Abierto para monitoreo de TP/SL
+                    "tp": analysis.parameters.get('tp') if analysis.parameters else None,
+                    "sl": analysis.parameters.get('sl') if analysis.parameters else None,
+                    "createdAt": datetime.utcnow()
                 }
                 await save_trade(trade_doc)
                 
-                # Update virtual balance
-                # Get current virtual balance
+                # Actualizar balance virtual inmediatamente al abrir la posición
                 user = await db.users.find_one({"openId": user_id})
                 if user:
                     current_balance_doc = await db.virtual_balances.find_one({
@@ -131,23 +137,15 @@ class CEXService:
                     
                     current_balance = current_balance_doc["amount"] if current_balance_doc else config.get("virtualBalances", {}).get("cex", 10000)
                     
-                    # Calculate new balance (subtract amount spent on BUY, add on SELL)
+                    # Al comprar en demo, restamos el monto del balance virtual
                     if side == "buy":
                         new_balance = current_balance - amount
-                    else:  # sell
-                        new_balance = current_balance + amount
-                    
-                    # Update in DB
-                    await update_virtual_balance(user_id, "CEX", "USDT", new_balance)
-                    logger.info(f"Virtual balance updated: {current_balance} -> {new_balance}")
-                
-                # Actualizar balance virtual (simplificado: asumiendo USDT como base)
-                # En una implementación real, buscaríamos el balance actual y restaríamos/sumaríamos
-                # await update_virtual_balance(user_id, "CEX", "USDT", new_amount)
+                        await update_virtual_balance(user_id, "CEX", "USDT", new_balance)
+                        logger.info(f"Virtual balance updated (Demo Buy): {current_balance} -> {new_balance}")
                 
                 return ExecutionResult(
                     success=True,
-                    message=f"MODO DEMO: {side.upper()} {symbol} a {price} registrado (Límite: {max_amount})"
+                    message=f"MODO DEMO: Posición {side.upper()} abierta para {symbol} a {price}. Monitoreando TP/SL."
                 )
 
             if not exchange:

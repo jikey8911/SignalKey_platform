@@ -15,20 +15,27 @@ logger = logging.getLogger(__name__)
 
 from contextlib import asynccontextmanager
 from api.bot.telegram_bot import start_userbot, bot_instance
+from api.services.monitor_service import MonitorService
 from fastapi.middleware.cors import CORSMiddleware
+
+monitor_service = MonitorService()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting Telegram UserBot...")
-    # Run in background to not block startup if auth is needed (though auth IS blocking for input)
-    # Ideally, we start it as a task.
     import asyncio
     asyncio.create_task(start_userbot())
+    
+    logger.info("Starting Price Monitor Service...")
+    asyncio.create_task(monitor_service.start_monitoring())
+    
     yield
     # Shutdown
     logger.info("Stopping Telegram UserBot...")
     await bot_instance.stop()
+    logger.info("Stopping Price Monitor Service...")
+    await monitor_service.stop_monitoring()
 
 app = FastAPI(title="Crypto Trading Signal API (MongoDB Refactored)", lifespan=lifespan)
 
@@ -49,25 +56,81 @@ backtest_service = BacktestService()
 async def process_signal_task(signal: TradingSignal, user_id: str = "default_user"):
     logger.info(f"Procesando señal de {signal.source} para usuario {user_id}")
     
+    # 0. Crear registro inicial de la señal en la DB
+    user = await db.users.find_one({"openId": user_id})
+    if not user:
+        logger.error(f"User {user_id} not found")
+        return
+
+    signal_id = await db.trading_signals.insert_one({
+        "userId": user["_id"],
+        "source": signal.source,
+        "rawText": signal.raw_text,
+        "status": "processing", # Estado: La AI la está procesando
+        "createdAt": datetime.utcnow()
+    })
+    inserted_id = signal_id.inserted_id
+    
     # Obtener config del usuario para ver si tiene Gemini API Key
     config = await get_app_config(user_id)
     gemini_key = config.get("geminiApiKey") if config else None
     
-    # 1. Analizar con Gemini (inyectar API key si existe)
-    analysis = await gemini_service.analyze_signal(signal.raw_text, api_key=gemini_key)
-    logger.info(f"Análisis completado: {analysis.decision} para {analysis.symbol}")
+    # 1. Analizar con Gemini (Aprobación de la IA obligatoria)
+    try:
+        analysis = await gemini_service.analyze_signal(signal.raw_text, api_key=gemini_key)
+        logger.info(f"Análisis completado: {analysis.decision} para {analysis.symbol}")
+        
+        # Actualizar señal con el análisis
+        await db.trading_signals.update_one(
+            {"_id": inserted_id},
+            {"$set": {
+                "decision": analysis.decision,
+                "symbol": analysis.symbol,
+                "marketType": analysis.market_type,
+                "confidence": analysis.confidence,
+                "reasoning": analysis.reasoning,
+                "status": "accepted" if analysis.decision != "HOLD" else "rejected"
+            }}
+        )
+    except Exception as e:
+        logger.error(f"Error analyzing signal: {e}")
+        await db.trading_signals.update_one(
+            {"_id": inserted_id},
+            {"$set": {"status": "error", "reasoning": str(e)}}
+        )
+        return
     
+    # Si la IA decide HOLD, no se aprueba la señal para ejecución
     if analysis.decision == "HOLD":
-        logger.info("Decisión: HOLD. No se ejecuta operación.")
+        logger.info(f"Señal RECHAZADA por la IA: {analysis.reasoning}")
         return
 
-    # 2. Ejecutar operación
-    if analysis.market_type == "DEX":
-        result = await dex_service.execute_trade(analysis, user_id=user_id)
-    else:
-        result = await cex_service.execute_trade(analysis, user_id=user_id)
+    # 2. Ejecutar operación (Solo si fue aprobada: BUY o SELL)
+    logger.info(f"Señal APROBADA por la IA: {analysis.decision} {analysis.symbol}")
+    await db.trading_signals.update_one({"_id": inserted_id}, {"$set": {"status": "executing"}})
+    
+    try:
+        if analysis.market_type == "DEX":
+            result = await dex_service.execute_trade(analysis, user_id=user_id)
+        else:
+            result = await cex_service.execute_trade(analysis, user_id=user_id)
+            
+        logger.info(f"Resultado de ejecución: {'Éxito' if result.success else 'Fallo'} - {result.message}")
         
-    logger.info(f"Resultado de ejecución: {'Éxito' if result.success else 'Fallo'} - {result.message}")
+        # Actualizar estado final
+        await db.trading_signals.update_one(
+            {"_id": inserted_id},
+            {"$set": {
+                "status": "completed" if result.success else "failed",
+                "executionMessage": result.message
+            }}
+        )
+    except Exception as e:
+        logger.error(f"Error executing trade: {e}")
+        await db.trading_signals.update_one(
+            {"_id": inserted_id},
+            {"$set": {"status": "failed", "executionMessage": str(e)}}
+        )
 
 @app.post("/webhook/signal")
 async def receive_signal(signal: TradingSignal, background_tasks: BackgroundTasks, user_id: Optional[str] = "default_user"):
