@@ -92,8 +92,19 @@ async def update_virtual_balance(user_id: str, market_type: str, asset: str, amo
     user = await db.users.find_one({"openId": user_id})
     if not user:
         return
+    
+    # Actualizar en la base de datos
     await db.virtual_balances.update_one(
         {"userId": user["_id"], "marketType": market_type, "asset": asset},
         {"$set": {"amount": amount, "updatedAt": datetime.utcnow()}},
         upsert=True
     )
+    
+    # Emitir cambio por socket
+    from api.services.socket_service import socket_service
+    await socket_service.emit_to_user(user_id, "balance_update", {
+        "marketType": market_type,
+        "asset": asset,
+        "amount": amount,
+        "updatedAt": datetime.utcnow().isoformat()
+    })

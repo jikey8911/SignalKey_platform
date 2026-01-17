@@ -41,12 +41,12 @@ class TrackerService:
                 for trade in trades:
                     await self._process_trade_monitoring(trade)
 
-                # Esperar antes de la siguiente iteración (base: 5 minutos)
+                # Esperar antes de la siguiente iteración (base: 30 segundos para actualizaciones más frecuentes)
                 # Nota: Algunos trades se procesarán más rápido internamente si están cerca del precio
-                await asyncio.sleep(300) 
+                await asyncio.sleep(30) 
             except Exception as e:
                 logger.error(f"Error en TrackerService loop: {e}")
-                await asyncio.sleep(60)
+                await asyncio.sleep(10)
 
     async def _process_trade_monitoring(self, trade: Dict[str, Any]):
         trade_id = trade["_id"]
@@ -195,7 +195,17 @@ class TrackerService:
 
             if result.success:
                 status = "open" if action_type == "ENTRY" else "closed"
-                await db.trades.update_one({"_id": trade_id}, {"$set": {"status": status, "executedAt": datetime.utcnow()}})
+                
+                # Obtener el precio actual para el registro final
+                current_price = await self._get_current_price(symbol, market_type, user_id)
+                
+                update_data = {
+                    "status": status, 
+                    "executedAt": datetime.utcnow(),
+                    "exitPrice": current_price if status == "closed" else None
+                }
+                
+                await db.trades.update_one({"_id": trade_id}, {"$set": update_data})
                 
                 # EMITIR POR SOCKET
                 from api.services.socket_service import socket_service
@@ -203,7 +213,8 @@ class TrackerService:
                     "id": str(trade_id),
                     "status": status,
                     "executedAt": datetime.utcnow().isoformat(),
-                    "action": action_type
+                    "action": action_type,
+                    "price": current_price
                 })
                 
                 logger.info(f"TrackerService: Orden {action_type} ejecutada con éxito para {symbol}")

@@ -70,6 +70,11 @@ class DEXService:
                 if side == "BUY":
                     new_balance = current_balance - amount
                     await update_virtual_balance(user_id, "DEX", "SOL", new_balance)
+                    logger.info(f"Virtual balance updated (Demo DEX Buy): {current_balance} -> {new_balance}")
+                elif side == "SELL":
+                    new_balance = current_balance + amount
+                    await update_virtual_balance(user_id, "DEX", "SOL", new_balance)
+                    logger.info(f"Virtual balance updated (Demo DEX Sell): {current_balance} -> {new_balance}")
             
             return ExecutionResult(
                 success=True,

@@ -181,6 +181,13 @@ class CEXService:
                         new_balance = current_balance - amount
                         await update_virtual_balance(user_id, "CEX", "USDT", new_balance)
                         logger.info(f"Virtual balance updated (Demo Buy): {current_balance} -> {new_balance}")
+                    elif side == "sell":
+                        # Al vender en demo, sumamos el monto (simulado) al balance virtual
+                        # Nota: En una venta real de posición, el monto sería amount * (price/entryPrice)
+                        # Pero aquí 'amount' es el valor en USDT que se está vendiendo
+                        new_balance = current_balance + amount
+                        await update_virtual_balance(user_id, "CEX", "USDT", new_balance)
+                        logger.info(f"Virtual balance updated (Demo Sell): {current_balance} -> {new_balance}")
                 
                 return ExecutionResult(
                     success=True,
