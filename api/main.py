@@ -23,19 +23,32 @@ monitor_service = MonitorService()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    logger.info("Starting Telegram UserBot...")
-    import asyncio
-    asyncio.create_task(start_userbot())
+    logger.info("=== Starting SignalKey Platform Services ===")
     
+    # 1. Iniciar UserBot de Telegram
+    logger.info("Starting Telegram UserBot...")
+    userbot_task = asyncio.create_task(start_userbot())
+    
+    # 2. Iniciar Monitor de Precios
     logger.info("Starting Price Monitor Service...")
-    asyncio.create_task(monitor_service.start_monitoring())
+    monitor_task = asyncio.create_task(monitor_service.start_monitoring())
+    
+    logger.info("=== All services are running in background ===")
     
     yield
+    
     # Shutdown
+    logger.info("=== Stopping SignalKey Platform Services ===")
+    
     logger.info("Stopping Telegram UserBot...")
     await bot_instance.stop()
+    userbot_task.cancel()
+    
     logger.info("Stopping Price Monitor Service...")
     await monitor_service.stop_monitoring()
+    monitor_task.cancel()
+    
+    logger.info("=== Shutdown complete ===")
 
 app = FastAPI(title="Crypto Trading Signal API (MongoDB Refactored)", lifespan=lifespan)
 

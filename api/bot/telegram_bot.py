@@ -106,18 +106,23 @@ class TelegramUserBot:
                         )
 
                         # Enviar a procesar
-                        async with httpx.AsyncClient() as client:
+                        async with httpx.AsyncClient(timeout=10.0) as client:
                             try:
                                 payload = {
                                     "source": f"telegram_{chat_id}",
                                     "raw_text": text
                                 }
-                                # Pasamos el user_id en el query param si la API lo soporta
-                                response = await client.post(f"{self.api_url}?user_id={user_open_id}", json=payload)
+                                # Aseguramos que la URL sea correcta (localhost:8000/webhook/signal)
+                                # y pasamos el user_id como parámetro de consulta
+                                url = f"{self.api_url}?user_id={user_open_id}"
+                                logger.info(f"Sending signal to {url}")
+                                response = await client.post(url, json=payload)
                                 if response.status_code != 200:
-                                     logger.error(f"Error sending signal to API: {response.text}")
+                                     logger.error(f"Error sending signal to API ({response.status_code}): {response.text}")
+                                else:
+                                     logger.info(f"Signal successfully sent to API for user {user_open_id}")
                             except Exception as e:
-                                logger.error(f"Error connection to API: {e}")
+                                logger.error(f"Error connecting to API at {self.api_url}: {e}")
 
             except Exception as e:
                 logger.error(f"Error checking permissions for signals: {e}")
