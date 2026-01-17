@@ -6,6 +6,7 @@ class MarketType(str, Enum):
     CEX = "CEX"
     DEX = "DEX"
     SPOT = "SPOT"
+    FUTURES = "FUTURES"
 
 class Decision(str, Enum):
     BUY = "BUY"

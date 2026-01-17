@@ -42,14 +42,22 @@ class MonitorService:
 
         for trade in open_trades:
             try:
-                symbol = trade["symbol"]
+                symbol = str(trade.get("symbol", "")).strip()
+                if not symbol or "/" not in symbol and len(symbol) < 3:
+                    continue
+                    
                 market_type = trade["marketType"]
                 entry_price = trade["entryPrice"]
                 side = trade["side"]
                 tp = trade.get("tp")
                 sl = trade.get("sl")
                 amount = trade["amount"]
-                user = await db.users.find_one({"_id": user_id})
+                
+                trade_user_id = trade.get("userId")
+                if not trade_user_id:
+                    continue
+                    
+                user = await db.users.find_one({"_id": trade_user_id})
                 if not user:
                     continue
                 user_open_id = user["openId"]

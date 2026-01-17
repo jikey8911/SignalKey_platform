@@ -113,74 +113,66 @@ class CEXService:
         return symbol
 
     async def get_current_price(self, symbol: str, user_id: str) -> float:
-        """Obtiene el precio actual de un símbolo para un usuario configurado"""
+        """Obtiene el precio actual buscando en todos los exchanges activos del usuario"""
         symbol = self._normalize_symbol(symbol)
         if "UNKNOWN" in symbol:
             return 0.0
 
         try:
-            exchange, config = await self.get_exchange_instance(user_id)
+            config = await get_app_config(user_id)
+            active_exchanges = []
             
-            # Determinar qué exchangeId usar para la consulta pública si no hay instancia autenticada
-            exchange_id = "binance"
-            if config and config.get("exchanges") and len(config["exchanges"]) > 0:
-                active_ex = next((e for e in config["exchanges"] if e.get("isActive", True)), config["exchanges"][0])
-                exchange_id = active_ex["exchangeId"]
+            if config and config.get("exchanges"):
+                active_exchanges = [e for e in config["exchanges"] if e.get("isActive", True)]
 
-            # Si no hay instancia autenticada, usar caché de públicas
+            # 1. Intentar buscar en cada exchange configurado por el usuario
+            for ex_cfg in active_exchanges:
+                ex_id = ex_cfg["exchangeId"]
+                try:
+                    price = await self._get_price_from_exchange(symbol, user_id, ex_id)
+                    if price > 0:
+                        return price
+                except Exception as e:
+                    logger.debug(f"CEXService: {ex_id} no pudo proveer precio para {symbol}: {e}")
+
+            # 2. Fallback: Si no se encontró en sus exchanges, buscar en binance por defecto (como referencia global)
+            return await self._get_price_from_exchange(symbol, user_id, "binance", is_fallback=True)
+
+        except Exception as e:
+            logger.error(f"CEXService: Error crítico en cadena de búsqueda de precio para {symbol}: {e}")
+            return 0.0
+
+    async def _get_price_from_exchange(self, symbol: str, user_id: str, exchange_id: str, is_fallback: bool = False) -> float:
+        """Helper para obtener precio de un exchange específico (con o sin auth)"""
+        try:
+            # Intentar obtener instancia (autenticada o pública)
+            exchange, _ = await self.get_exchange_instance(user_id, exchange_id)
+            
             if not exchange:
+                # Si no hay instancia auth, usar/crear pública
                 if exchange_id not in self.public_exchanges:
-                    logger.debug(f"Inicializando instancia pública de {exchange_id}")
                     exchange_class = getattr(ccxt, exchange_id)
                     self.public_exchanges[exchange_id] = exchange_class({
                         'enableRateLimit': True,
                         'options': {'defaultType': 'spot'}
                     })
-                
-                pub_exchange = self.public_exchanges[exchange_id]
-                try:
-                    if not pub_exchange.markets:
-                        await pub_exchange.load_markets()
-                    
-                    if symbol not in pub_exchange.symbols:
-                        if exchange_id != "binance":
-                            return await self._get_price_from_binance(symbol)
-                        return 0.0
+                exchange = self.public_exchanges[exchange_id]
 
-                    ticker = await pub_exchange.fetch_ticker(symbol)
-                except Exception as e:
-                    if exchange_id != "binance":
-                        return await self._get_price_from_binance(symbol)
-                    raise e
-            else:
-                if not exchange.markets:
-                    await exchange.load_markets()
+            # Cargar mercados y validar
+            if not exchange.markets:
+                await exchange.load_markets()
+            
+            if symbol in exchange.symbols:
                 ticker = await exchange.fetch_ticker(symbol)
+                return float(ticker['last'])
             
-            return ticker['last']
+            return 0.0
         except Exception as e:
-            logger.error(f"Error en CCXT al obtener precio para {symbol}: {str(e).split('http')[0]}")
+            if not is_fallback:
+                logger.debug(f"CEXService: Error consultando {exchange_id} para {symbol}: {e}")
             return 0.0
 
-    async def _get_price_from_binance(self, symbol: str) -> float:
-        """Helper para reintentar específicamente con Binance"""
-        try:
-            if "binance" not in self.public_exchanges:
-                self.public_exchanges["binance"] = ccxt.binance({
-                    'enableRateLimit': True,
-                    'options': {'defaultType': 'spot'}
-                })
-            
-            binance = self.public_exchanges["binance"]
-            if not binance.markets:
-                await binance.load_markets()
-            
-            if symbol in binance.symbols:
-                ticker = await binance.fetch_ticker(symbol)
-                return ticker['last']
-            return 0.0
-        except:
-            return 0.0
+    # Eliminado _get_price_from_binance ya que está integrado en la lógica dinámica de búsqueda
 
     async def execute_trade(self, analysis: AnalysisResult, user_id: str = "default_user") -> ExecutionResult:
         exchange, config = await self.get_exchange_instance(user_id)

@@ -289,8 +289,17 @@ async def get_telegram_logs(limit: int = 50):
     try:
         cursor = db.telegram_logs.find({}).sort("timestamp", -1).limit(limit)
         logs = await cursor.to_list(length=limit)
-        # Convert ObjectId and datetime to string
-        return [{**log, "_id": str(log["_id"]), "timestamp": log["timestamp"].isoformat()} for log in logs]
+        # Convert ObjectId and datetime to string safely
+        formatted_logs = []
+        for log in logs:
+            log_item = {**log, "_id": str(log["_id"])}
+            ts = log.get("timestamp")
+            if isinstance(ts, datetime):
+                log_item["timestamp"] = ts.isoformat()
+            else:
+                log_item["timestamp"] = str(ts) # Ya es string o algo parseable
+            formatted_logs.append(log_item)
+        return formatted_logs
     except Exception as e:
         logger.error(f"Error fetching logs: {e}")
         return []

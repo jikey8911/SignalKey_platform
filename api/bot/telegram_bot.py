@@ -82,24 +82,17 @@ class TelegramUserBot:
             async def handler(event):
                 chat_id = str(event.chat_id)
                 text = event.message.message
-                
-                # 0. Verificar si el procesamiento automático está habilitado
+                display_text = text if text else "<Mensaje sin texto / Media>"
+
+                # 1. Obtener configuración y loguear/emitir siempre (si es posible)
                 try:
                     user = await db.users.find_one({"openId": self.user_id})
                     if not user:
                         return
                     
-                    config = await db.app_configs.find_one({"userId": user["_id"]})
-                    if config and not config.get("isAutoEnabled", True):
-                        logger.info(f"Processing disabled for user {self.user_id}. Skipping message from {chat_id}")
-                        return
-                except Exception as e:
-                    logger.error(f"Error checking auto status for user {self.user_id}: {e}")
-
-                display_text = text if text else "<Mensaje sin texto / Media>"
-
-                # 1. Loguear SIEMPRE en telegram_logs
-                try:
+                    user_id_obj = user["_id"]
+                    config = await db.app_configs.find_one({"userId": user_id_obj})
+                    
                     chat_title = "Privado"
                     if hasattr(event.chat, 'title'):
                         chat_title = event.chat.title
@@ -110,69 +103,55 @@ class TelegramUserBot:
                         "chatId": chat_id,
                         "chatName": chat_title,
                         "message": display_text,
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": datetime.utcnow(), # Guardar como DATETIME nativo
                         "status": "received",
-                        "userId": self.user_id  # Asociar log con usuario
+                        "userId": self.user_id
                     }
-                    await db.telegram_logs.insert_one(log_entry)
                     
-                    # EMITIR POR SOCKET
+                    # Guardar y emitir para visualización en tiempo real
+                    await db.telegram_logs.insert_one(log_entry)
                     from api.services.socket_service import socket_service
                     await socket_service.emit_to_user(self.user_id, "telegram_log", log_entry)
 
-                except Exception as e:
-                    logger.error(f"Error saving log and emitting socket for user {self.user_id}: {e}")
-
-                if not text:
-                    return
-
-                # 2. Filtrar por chats seleccionados SOLO para este usuario
-                try:
-                    # Obtener configuración del usuario
-                    user = await db.users.find_one({"openId": self.user_id})
-                    if not user:
-                        logger.warning(f"User {self.user_id} not found in database")
+                    # 2. VALIDACIÓN PARA IA: Solo si tiene texto y el procesamiento está habilitado
+                    if not text:
                         return
-                    
-                    config = await db.app_configs.find_one({"userId": user["_id"]})
-                    if not config:
-                        logger.warning(f"Config not found for user {self.user_id}")
+
+                    if config and not config.get("isAutoEnabled", True):
+                        # No logueamos el skip para no saturar si está desactivado el auto
                         return
+
+                    # 3. FILTRADO POR CHATS AUTORIZADOS
+                    allow_list = config.get("telegramChannels", {}).get("allow", []) if config else []
                     
-                    allow_list = config.get("telegramChannels", {}).get("allow", [])
+                    # REQUISITO: Solo procesar con IA si el chat está en la lista
+                    # Si la lista está vacía, NO procesamos ninguno por defecto para evitar 429
+                    if chat_id not in allow_list:
+                        return
+
+                    # 4. PROCESAMIENTO DE SEÑAL
+                    logger.info(f"Signal authorized for AI processing from chat {chat_id} ({chat_title})")
                     
-                    # Si la lista está vacía, se procesan TODOS los canales
-                    # Si tiene canales, solo se procesan los de la lista
-                    should_process = len(allow_list) == 0 or chat_id in allow_list
-                    
-                    if should_process:
-                        logger.info(f"Signal detected in chat {chat_id} for user {self.user_id}")
-                        
-                        # Actualizar el log para indicar que fue procesado como señal
-                        await db.telegram_logs.update_one(
-                            {"chatId": chat_id, "message": text, "timestamp": {"$gte": log_entry["timestamp"]}},
-                            {"$set": {"status": "signal_detected"}}
+                    # Actualizar status en log
+                    await db.telegram_logs.update_one(
+                        {"chatId": chat_id, "message": text, "timestamp": {"$gte": log_entry["timestamp"]}},
+                        {"$set": {"status": "signal_detected"}}
+                    )
+
+                    if self.message_handler:
+                        signal_obj = TradingSignal(
+                            source=f"telegram_{chat_id}",
+                            raw_text=text
                         )
-
-                        # Enviar a procesar (Priorizar callback directo sobre HTTP)
-                        if self.message_handler:
-                            logger.info(f"Processing signal via direct callback for user {self.user_id}")
-                            # Convertir a objeto TradingSignal
-                            signal_obj = TradingSignal(
-                                source=f"telegram_{chat_id}",
-                                raw_text=text
-                            )
-                            # Ejecutar en segundo plano si es una corrutina
-                            if asyncio.iscoroutinefunction(self.message_handler):
-                                asyncio.create_task(self.message_handler(signal_obj, user_id=self.user_id))
-                            else:
-                                self.message_handler(signal_obj, user_id=self.user_id)
+                        if asyncio.iscoroutinefunction(self.message_handler):
+                            asyncio.create_task(self.message_handler(signal_obj, user_id=self.user_id))
                         else:
-                            # Fallback asincrónico a petición HTTP (Legacy/Reserva)
-                            asyncio.create_task(self._send_http_signal(chat_id, text))
+                            self.message_handler(signal_obj, user_id=self.user_id)
+                    else:
+                        asyncio.create_task(self._send_http_signal(chat_id, text))
 
                 except Exception as e:
-                    logger.error(f"Error processing signal for user {self.user_id}: {e}")
+                    logger.error(f"Error in telegram handler for {self.user_id}: {e}")
 
             # Configurar autostart y reconexión automática
             # El cliente de Telethon reconecta por defecto, pero start() asegura que esté activo

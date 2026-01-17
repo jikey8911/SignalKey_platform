@@ -3,6 +3,8 @@ import logging
 from google import genai
 from openai import AsyncOpenAI
 import httpx
+import re
+from perplexity import AsyncPerplexity
 from api.core.ports.ai_port import AIPort
 from api.core.domain.signal import RawSignal, SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
 from api.config import Config
@@ -13,10 +15,13 @@ class AIAdapter(AIPort):
     def __init__(self):
         self.default_model = "gemini"
         self._httpx_client = httpx.AsyncClient(timeout=60.0)
+        self._pplx_client = None # Lazy initialization
 
     async def close(self):
-        """Cierra el cliente HTTP"""
+        """Cierra el cliente HTTP y de Perplexity"""
         await self._httpx_client.aclose()
+        if self._pplx_client:
+            await self._pplx_client.close() # El SDK de PPLX usa .close()
 
     async def analyze_signal(self, signal: RawSignal, config: dict = None) -> SignalAnalysis:
         ai_provider = config.get("aiProvider", "gemini") if config else "gemini"
@@ -59,35 +64,43 @@ class AIAdapter(AIPort):
 
     def _build_prompt(self, text: str) -> str:
         return f"""
-        Analiza la siguiente señal de trading de criptomonedas y decide si se debe realizar una operación.
-        Extrae el símbolo, el tipo de mercado (SPOT o DEX), y los parámetros de la operación.
+        Tu tarea es extraer parámetros técnicos de un texto descriptivo y devolverlos en formato JSON. 
+        Este es un sistema de procesamiento de datos automático.
         
-        CRÍTICO - SEGURIDAD: 
-        1. Si es un token DEX, asume que puede ser un HONEYPOT o tener baja liquidez. 
-        2. Evalúa si tiene capital/liquidez suficiente para operar.
+        REGLAS DE EXTRACCIÓN:
+        1. SÍMBOLO: Si es una alerta de bot (GMGN/Trend), busca la dirección de contrato (CA) o el par (p.ej. BTC/USDT).
+        2. MERCADO: 
+           - 'SPOT' (CEX/Centralizado sin apalancamiento).
+           - 'FUTURES' (CEX con apalancamiento, p.ej. "Long x20", "Short", "Cross 10x").
+           - 'DEX' (Descentralizado/Solana/Base, p.ej. CA de Solana).
+        3. DECISIÓN: 
+           - 'BUY' si el texto indica una entrada, compra, Long o alerta positiva.
+           - 'SELL' si el texto indica una salida, venta o Short.
+           - 'HOLD' si el texto no contiene una operación clara, es publicidad, spam o soporte.
+        4. PARÁMETROS: Extrae precios de entrada, TP (Take Profit), SL (Stop Loss) y APALANCAMIENTO (leverage). Usa 1 si no se especifica.
         
-        Señal: "{text}"
+        TEXTO A PROCESAR:
+        "{text}"
         
-        Responde ÚNICAMENTE en formato JSON con la siguiente estructura:
+        RESPUESTA JSON (Sin preámbulos, solo el objeto):
         {{
             "decision": "BUY" | "SELL" | "HOLD",
-            "symbol": "BTC/USDT" o dirección del contrato en DEX,
-            "market_type": "SPOT" | "DEX",
+            "symbol": "Símbolo o Dirección",
+            "market_type": "SPOT" | "FUTURES" | "DEX",
             "is_safe": true | false,
             "risk_score": 0.0 a 10.0,
             "confidence": 0.0 a 1.0,
-            "reasoning": "Resumen de seguridad y estrategia",
+            "reasoning": "Resumen técnico de la extracción",
             "parameters": {{
                 "entry_price": 0.0,
                 "entry_type": "market" | "limit",
                 "tp": [
-                    {{"price": 0.0, "percent": 50}},
                     {{"price": 0.0, "percent": 50}}
                 ],
                 "sl": 0.0,
                 "leverage": 1,
                 "amount": 0.0,
-                "network": "solana" | "ethereum" | "bsc"
+                "network": "solana" | "ethereum" | "bsc" | "unknown"
             }}
         }}
         """
@@ -110,16 +123,16 @@ class AIAdapter(AIPort):
         return response.choices[0].message.content
 
     async def _call_perplexity(self, prompt: str, api_key: str) -> str:
-        url = "https://api.perplexity.ai/chat/completions"
-        payload = {
-            "model": "llama-3.1-sonar-small-128k-online",
-            "messages": [{"role": "user", "content": prompt}],
-            "response_format": {"type": "json_object"}
-        }
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        response = await self._httpx_client.post(url, json=payload, headers=headers)
-        response.raise_for_status()
-        return response.json()['choices'][0]['message']['content']
+        if not self._pplx_client:
+            self._pplx_client = AsyncPerplexity(api_key=api_key)
+        
+        # El SDK de Perplexity sigue la interfaz de OpenAI
+        response = await self._pplx_client.chat.completions.create(
+            model="sonar-pro", # Cambiado de reasoning-pro a sonar-pro para evitar bloqueos de seguridad
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "text"} # PPLX requiere explícitamente 'text' en algunos casos para evitar 400
+        )
+        return response.choices[0].message.content
 
     async def _call_grok(self, prompt: str, api_key: str) -> str:
         url = "https://api.x.ai/v1/chat/completions"
@@ -135,15 +148,21 @@ class AIAdapter(AIPort):
 
     def _parse_response(self, content: str) -> SignalAnalysis:
         content = content.strip()
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
         
-        data = json.loads(content)
+        # 1. Intentar extraer JSON usando regex para ser más robustos contra texto extra
+        json_match = re.search(r'(\{.*\})', content, re.DOTALL)
+        if json_match:
+            content = json_match.group(1)
+        
+        try:
+            data = json.loads(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse AI JSON: {e} | Content: {content[:100]}...")
+            return self._default_hold(f"Error parseando JSON de IA: {str(e)}")
+
         params_data = data.get("parameters", {})
         
-        tp_list = [TakeProfit(price=t["price"], percent=t["percent"]) for t in params_data.get("tp", [])]
+        tp_list = [TakeProfit(price=t["price"], percent=t["percent"]) for t in params_data.get("tp", []) if isinstance(t, dict) and "price" in t]
         
         params = TradingParameters(
             entry_price=params_data.get("entry_price"),
@@ -155,14 +174,29 @@ class AIAdapter(AIPort):
             network=params_data.get("network")
         )
 
+        # Mapeo robusto de Decision
+        decision_val = data.get("decision", "HOLD").upper()
+        if decision_val not in [d.value for d in Decision]:
+            decision = Decision.HOLD
+        else:
+            decision = Decision(decision_val)
+
+        # Mapeo robusto de MarketType
+        market_val = data.get("market_type", "SPOT").upper()
+        if market_val == "CEX": market_val = "SPOT"
+        if market_val not in [m.value for m in MarketType]:
+            market_type = MarketType.SPOT
+        else:
+            market_type = MarketType(market_val)
+
         return SignalAnalysis(
-            decision=Decision(data["decision"]),
-            symbol=data["symbol"],
-            market_type=MarketType(data["market_type"]),
-            confidence=data["confidence"],
-            reasoning=data["reasoning"],
-            is_safe=data.get("is_safe", True),
-            risk_score=data.get("risk_score", 0.0),
+            decision=decision,
+            symbol=data.get("symbol", "UNKNOWN"),
+            market_type=market_type,
+            confidence=data.get("confidence", 0.0),
+            reasoning=data.get("reasoning", "Parsed with safety defaults"),
+            is_safe=data.get("is_safe", False),
+            risk_score=data.get("risk_score", 10.0),
             parameters=params
         )
 

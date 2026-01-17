@@ -14,7 +14,13 @@ class AIService:
         analysis = await self.adapter.analyze_signal(raw_signal, config)
         
         # Mapear del dominio al esquema legacy para mantener compatibilidad
-        market_type_legacy = "CEX" if analysis.market_type.value == "SPOT" else analysis.market_type.value
+        if analysis.market_type.value == "SPOT":
+            market_type_legacy = "CEX"
+        elif analysis.market_type.value == "FUTURES":
+            market_type_legacy = "FUTURES"
+        else:
+            market_type_legacy = analysis.market_type.value
+            
         return AnalysisResult(
             decision=analysis.decision.value,
             symbol=analysis.symbol,
