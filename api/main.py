@@ -1,4 +1,5 @@
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
+from datetime import datetime
 from api.models.schemas import TradingSignal
 from api.services.gemini_service import GeminiService
 from api.services.cex_service import CEXService
@@ -342,4 +343,5 @@ if __name__ == "__main__":
     import uvicorn
     import os
     port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # Aseguramos que el puerto sea el que espera el frontend (8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)
