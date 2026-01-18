@@ -88,17 +88,28 @@ async def save_trade(trade_data: Dict[str, Any]):
     trade_data["createdAt"] = datetime.utcnow()
     return await db.trades.insert_one(trade_data)
 
-async def update_virtual_balance(user_id: str, market_type: str, asset: str, amount: float):
+async def update_virtual_balance(user_id: str, market_type: str, asset: str, amount: float, is_relative: bool = False):
     user = await db.users.find_one({"openId": user_id})
     if not user:
         return
     
-    # Actualizar en la base de datos
-    await db.virtual_balances.update_one(
-        {"userId": user["_id"], "marketType": market_type, "asset": asset},
-        {"$set": {"amount": amount, "updatedAt": datetime.utcnow()}},
-        upsert=True
-    )
+    if is_relative:
+        # Sumar o restar al balance existente
+        await db.virtual_balances.update_one(
+            {"userId": user["_id"], "marketType": market_type, "asset": asset},
+            {"$inc": {"amount": amount}, "$set": {"updatedAt": datetime.utcnow()}},
+            upsert=True
+        )
+        # Obtener el nuevo balance para emitir
+        balance_doc = await db.virtual_balances.find_one({"userId": user["_id"], "marketType": market_type, "asset": asset})
+        amount = balance_doc["amount"]
+    else:
+        # Establecer valor absoluto
+        await db.virtual_balances.update_one(
+            {"userId": user["_id"], "marketType": market_type, "asset": asset},
+            {"$set": {"amount": amount, "updatedAt": datetime.utcnow()}},
+            upsert=True
+        )
     
     # Emitir cambio por socket
     from api.services.socket_service import socket_service

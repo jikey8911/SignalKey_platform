@@ -72,13 +72,11 @@ class DEXService:
                 current_balance = current_balance_doc["amount"] if current_balance_doc else config.get("virtualBalances", {}).get("dex", 10)
                 
                 if side == "BUY":
-                    new_balance = current_balance - amount
-                    await update_virtual_balance(user_id, "DEX", "SOL", new_balance)
-                    logger.info(f"Virtual balance updated (Demo DEX Buy): {current_balance} -> {new_balance}")
+                    await update_virtual_balance(user_id, "DEX", "SOL", -amount, is_relative=True)
+                    logger.info(f"Virtual balance updated (Demo DEX Buy): -{amount}")
                 elif side == "SELL":
-                    new_balance = current_balance + amount
-                    await update_virtual_balance(user_id, "DEX", "SOL", new_balance)
-                    logger.info(f"Virtual balance updated (Demo DEX Sell): {current_balance} -> {new_balance}")
+                    await update_virtual_balance(user_id, "DEX", "SOL", amount, is_relative=True)
+                    logger.info(f"Virtual balance updated (Demo DEX Sell): +{amount}")
             
             return ExecutionResult(
                 success=True,

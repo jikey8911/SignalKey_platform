@@ -202,19 +202,25 @@ class CEXService:
                 if price <= 0:
                     return ExecutionResult(success=False, message=f"No se pudo obtener el precio para {symbol}")
                 
-                # Registrar trade en MongoDB con estado 'open' para monitoreo
+                # Registrar trade en MongoDB con estado 'pending' para monitoreo de entrada
+                # Si el precio actual ya es igual o mejor que el entry_price, se pone en 'open'
+                entry_price = analysis.parameters.get('entry_price') or price
+                status = "open" if price <= entry_price and side == "buy" else "pending"
+                if side == "sell" and price >= entry_price: status = "open"
+
                 trade_doc = {
                     "userId": config["userId"] if config else None,
                     "symbol": symbol,
                     "side": side.upper(),
-                    "entryPrice": price,
+                    "entryPrice": entry_price,
                     "currentPrice": price,
                     "amount": amount,
-                    "marketType": "CEX",
+                    "marketType": analysis.market_type, # SPOT o FUTURES
                     "isDemo": True,
-                    "status": "open", # Abierto para monitoreo de TP/SL
-                    "tp": analysis.parameters.get('tp') if analysis.parameters else None,
+                    "status": status,
+                    "tp": analysis.parameters.get('tp') if analysis.parameters else [],
                     "sl": analysis.parameters.get('sl') if analysis.parameters else None,
+                    "leverage": analysis.parameters.get('leverage', 1),
                     "createdAt": datetime.utcnow()
                 }
                 await save_trade(trade_doc)
@@ -232,16 +238,11 @@ class CEXService:
                     
                     # Al comprar en demo, restamos el monto del balance virtual
                     if side == "buy":
-                        new_balance = current_balance - amount
-                        await update_virtual_balance(user_id, "CEX", "USDT", new_balance)
-                        logger.info(f"Virtual balance updated (Demo Buy): {current_balance} -> {new_balance}")
+                        await update_virtual_balance(user_id, "CEX", "USDT", -amount, is_relative=True)
+                        logger.info(f"Virtual balance updated (Demo Buy): -{amount}")
                     elif side == "sell":
-                        # Al vender en demo, sumamos el monto (simulado) al balance virtual
-                        # Nota: En una venta real de posición, el monto sería amount * (price/entryPrice)
-                        # Pero aquí 'amount' es el valor en USDT que se está vendiendo
-                        new_balance = current_balance + amount
-                        await update_virtual_balance(user_id, "CEX", "USDT", new_balance)
-                        logger.info(f"Virtual balance updated (Demo Sell): {current_balance} -> {new_balance}")
+                        await update_virtual_balance(user_id, "CEX", "USDT", amount, is_relative=True)
+                        logger.info(f"Virtual balance updated (Demo Sell): +{amount}")
                 
                 return ExecutionResult(
                     success=True,
