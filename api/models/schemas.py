@@ -44,6 +44,13 @@ class DexConfig(BaseModel):
     walletPrivateKey: Optional[str] = None
     rpcUrl: str = "https://api.mainnet-beta.solana.com"
 
+class BotStrategyConfig(BaseModel):
+    maxActiveBots: int = 5
+    tpLevels: int = 3 # Número de niveles de Take Profit
+    tpPercent: float = 2.0 # Porcentaje de cambio para TP por defecto
+    slPercent: float = 1.5 # Porcentaje de cambio para SL por defecto
+    sellPercentPerTP: float = 33.3 # Porcentaje a vender en cada TP
+
 class InvestmentLimits(BaseModel):
     cexMaxAmount: float = 100.0
     dexMaxAmount: float = 1.0
@@ -59,6 +66,7 @@ class AppConfigSchema(BaseModel):
     exchanges: List[ExchangeConfig] = []
     dexConfig: DexConfig = Field(default_factory=DexConfig)
     investmentLimits: InvestmentLimits = Field(default_factory=InvestmentLimits)
+    botStrategy: BotStrategyConfig = Field(default_factory=BotStrategyConfig)
     createdAt: Optional[datetime] = None
     updatedAt: Optional[datetime] = None
 
@@ -76,7 +84,8 @@ class TradeSchema(BaseModel):
     marketType: str
     isDemo: bool = True
     orderId: Optional[str] = None
-    status: str = "pending" # "pending", "monitoring", "open", "closed", "cancelled"
+    status: str = "pending" # "pending", "active", "completed", "failed", "cancelled"
+    currentTPLevel: int = 0
     pnl: Optional[float] = None
     isSafe: bool = True
     createdAt: datetime = Field(default_factory=datetime.utcnow)

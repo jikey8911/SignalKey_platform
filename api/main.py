@@ -5,6 +5,7 @@ from api.services.ai_service import AIService
 from api.services.cex_service import CEXService
 from api.services.dex_service import DEXService
 from api.services.backtest_service import BacktestService
+from api.services.signal_bot_service import SignalBotService
 from api.models.mongodb import db, get_app_config
 import logging
 import asyncio
@@ -51,6 +52,10 @@ async def lifespan(app: FastAPI):
     from api.services.monitor_service import MonitorService
     monitor_service = MonitorService(cex_service=cex_service)
     monitor_task = asyncio.create_task(monitor_service.start_monitoring())
+
+    # 4. Iniciar Monitor de Bots de Señales
+    logger.info("Starting Signal Bot Monitor...")
+    bot_monitor_task = asyncio.create_task(signal_bot_service.monitor_bots())
     
     logger.info("=== All services are running in background ===")
     
@@ -68,6 +73,9 @@ async def lifespan(app: FastAPI):
     logger.info("Stopping Price Monitor Service...")
     await monitor_service.stop_monitoring()
     monitor_task.cancel()
+    
+    logger.info("Stopping Signal Bot Monitor...")
+    bot_monitor_task.cancel()
     
     logger.info("Closing CEX, DEX and AI sessions...")
     await cex_service.close_all()
@@ -91,6 +99,7 @@ ai_service = AIService()
 cex_service = CEXService()
 dex_service = DEXService()
 backtest_service = BacktestService()
+signal_bot_service = SignalBotService()
 
 # Placeholder para servicios que se instancian en lifespan
 tracker_service = None
@@ -205,72 +214,33 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
                 })
                 continue
 
-            # 3. Preparar Trade
+            # 3. Activar Bot de Señal
             try:
-                # Obtener límites de inversión
-                market_val = analysis.market_type if isinstance(analysis.market_type, str) else (analysis.market_type.value if hasattr(analysis.market_type, "value") else analysis.market_type)
-                is_cex = market_val in ["CEX", "SPOT", "FUTURES"]
+                # Activar el bot que gestionará la operación con múltiples TP/SL
+                result = await signal_bot_service.activate_bot(analysis, str(user["_id"]), config)
                 
-                max_amount = config.get("investmentLimits", {}).get("cexMaxAmount" if is_cex else "dexMaxAmount", 100.0)
-                
-                # handle if suggested_amount is present
-                suggested_amount = 0
-                if isinstance(analysis.parameters, dict):
-                    suggested_amount = analysis.parameters.get('amount', 0)
-                elif hasattr(analysis.parameters, "amount"):
-                    suggested_amount = analysis.parameters.amount or 0
-                
-                amount = min(suggested_amount, max_amount) if suggested_amount > 0 else max_amount
-
-                # Parámetros del trade
-                if isinstance(analysis.parameters, dict):
-                    tp_list = analysis.parameters.get("tp", [])
-                    entry_price = analysis.parameters.get("entry_price") or 0.0
-                    sl_price = analysis.parameters.get("sl")
-                    leverage = analysis.parameters.get("leverage", 1)
+                if result.success:
+                    bot_id = result.details.get("botId")
+                    logger.info(f"Bot {bot_id} activado para {analysis.symbol}. Status: active")
+                    
+                    await db.trading_signals.update_one(
+                        {"_id": current_signal_id},
+                        {"$set": {"status": "executing", "tradeId": bot_id}}
+                    )
+                    
+                    await socket_service.emit_to_user(user_id, "signal_update", {
+                        "id": str(current_signal_id),
+                        "status": "executing",
+                        "tradeId": str(bot_id),
+                        "symbol": analysis.symbol,
+                        "decision": analysis.decision
+                    })
                 else:
-                    tp_list = [{"price": t.price, "percent": t.percent} for t in analysis.parameters.tp]
-                    entry_price = analysis.parameters.entry_price or 0.0
-                    sl_price = analysis.parameters.sl
-                    leverage = analysis.parameters.leverage
-
-                trade_data = {
-                    "userId": user["_id"],
-                    "signalId": current_signal_id,
-                    "symbol": analysis.symbol,
-                    "side": analysis.decision,
-                    "entryPrice": entry_price,
-                    "targetPrice": entry_price,
-                    "stopLoss": sl_price,
-                    "takeProfits": tp_list,
-                    "amount": amount,
-                    "leverage": leverage,
-                    "marketType": market_val,
-                    "isDemo": config.get("demoMode", True),
-                    "status": "monitoring",
-                    "isSafe": analysis.is_safe,
-                    "createdAt": datetime.utcnow()
-                }
-                
-                result = await db.trades.insert_one(trade_data)
-                trade_id = str(result.inserted_id)
-                
-                # Notificar al TrackerService
-                from api.services.tracker_service import tracker_service
-                await tracker_service.add_trade_to_monitor(trade_id)
-                
-                logger.info(f"Trade {trade_id} creado para {analysis.symbol}")
-                
-                # Actualizar señal
-                await db.trading_signals.update_one({"_id": current_signal_id}, {"$set": {"status": "monitoring"}})
-                
-                # EMITIR POR SOCKET
-                await socket_service.emit_to_user(user_id, "signal_update", {
-                    "id": str(current_signal_id),
-                    "status": "monitoring",
-                    "symbol": analysis.symbol,
-                    "decision": analysis.decision
-                })
+                    logger.warning(f"No se pudo activar el bot para {analysis.symbol}: {result.message}")
+                    await db.trading_signals.update_one(
+                        {"_id": current_signal_id},
+                        {"$set": {"status": "rejected", "executionMessage": result.message}}
+                    )
                     
             except Exception as e:
                 logger.error(f"Error creating trade for {analysis.symbol}: {e}")

@@ -75,6 +75,13 @@ export default function Settings() {
     virtualBalances: {
       cex: 10000,
       dex: 10
+    },
+    botStrategy: {
+      maxActiveBots: 5,
+      tpLevels: 3,
+      tpPercent: 2.0,
+      slPercent: 1.5,
+      sellPercentPerTP: 33.3
     }
   });
 
@@ -109,6 +116,13 @@ export default function Settings() {
         virtualBalances: {
           cex: config.virtualBalances?.cex ?? 10000,
           dex: config.virtualBalances?.dex ?? 10
+        },
+        botStrategy: {
+          maxActiveBots: config.botStrategy?.maxActiveBots ?? 5,
+          tpLevels: config.botStrategy?.tpLevels ?? 3,
+          tpPercent: config.botStrategy?.tpPercent ?? 2.0,
+          slPercent: config.botStrategy?.slPercent ?? 1.5,
+          sellPercentPerTP: config.botStrategy?.sellPercentPerTP ?? 33.3
         }
       });
     }
@@ -518,6 +532,123 @@ export default function Settings() {
             ))}
           </div>
         </Card>
+      </div>
+    </SignalsKeiLayout>
+  );
+}
+
+
+            {/* Bot Strategy Configuration */}
+            <Card className="p-6 mt-6">
+              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">🤖 Configuración de Bots de Señales</h3>
+              <div className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-foreground mb-2">
+                      Máximo de Bots Activos
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="20"
+                      value={formData.botStrategy.maxActiveBots}
+                      onChange={(e) => setFormData({
+                        ...formData,
+                        botStrategy: { ...formData.botStrategy, maxActiveBots: parseInt(e.target.value) }
+                      })}
+                      className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1">Número máximo de bots que pueden estar activos simultáneamente</p>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-xs font-semibold text-foreground mb-2">
+                      Niveles de Take Profit
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="10"
+                      value={formData.botStrategy.tpLevels}
+                      onChange={(e) => setFormData({
+                        ...formData,
+                        botStrategy: { ...formData.botStrategy, tpLevels: parseInt(e.target.value) }
+                      })}
+                      className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1">Número de niveles de TP para cada bot</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-foreground mb-2">
+                      % Cambio para TP
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0.1"
+                      max="10"
+                      value={formData.botStrategy.tpPercent}
+                      onChange={(e) => setFormData({
+                        ...formData,
+                        botStrategy: { ...formData.botStrategy, tpPercent: parseFloat(e.target.value) }
+                      })}
+                      className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1">Porcentaje de cambio de precio para cada TP</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-foreground mb-2">
+                      % Stop Loss
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0.1"
+                      max="10"
+                      value={formData.botStrategy.slPercent}
+                      onChange={(e) => setFormData({
+                        ...formData,
+                        botStrategy: { ...formData.botStrategy, slPercent: parseFloat(e.target.value) }
+                      })}
+                      className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1">Porcentaje de caída para Stop Loss</p>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-foreground mb-2">
+                      % Venta por TP
+                    </label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="1"
+                      max="100"
+                      value={formData.botStrategy.sellPercentPerTP}
+                      onChange={(e) => setFormData({
+                        ...formData,
+                        botStrategy: { ...formData.botStrategy, sellPercentPerTP: parseFloat(e.target.value) }
+                      })}
+                      className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    <p className="text-[10px] text-muted-foreground mt-1">Porcentaje a vender en cada nivel de TP</p>
+                  </div>
+                </div>
+
+                <div className="p-3 bg-muted rounded-lg">
+                  <p className="text-xs text-muted-foreground">
+                    <strong>Ejemplo:</strong> Con 3 niveles de TP al 2% y 33.3% venta por nivel:
+                    Compra a $100 → TP1: $102 (vende 33.3%) → TP2: $104 (vende 33.3%) → TP3: $106 (vende 33.4%)
+                  </p>
+                </div>
+              </div>
+            </Card>
+          </div>
+        </div>
       </div>
     </SignalsKeiLayout>
   );

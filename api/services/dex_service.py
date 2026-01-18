@@ -84,7 +84,13 @@ class DEXService:
             )
 
         if not gmgn_api_key or not dex_config.get("walletPrivateKey"):
-            return ExecutionResult(success=False, message="Credenciales DEX (GMGN API o Private Key) no configuradas")
+            logger.info("DEX API no configurada, intentando fallback a Exchange DEX market...")
+            # Intentar usar el CEXService para operar en mercados DEX si el exchange lo soporta
+            from api.services.cex_service import CEXService
+            cex = CEXService()
+            # Modificamos el market_type temporalmente para el CEXService
+            analysis.market_type = "CEX" 
+            return await cex.execute_trade(analysis, user_id=user_id)
 
         try:
             network = analysis.parameters.get('network', 'solana') if analysis.parameters else 'solana'
