@@ -8,8 +8,8 @@ logger = logging.getLogger(__name__)
 
 class AIService:
     def __init__(self):
-        self.adapter = AIAdapter()
-
+        self.adapter = AIAdapter() 
+        
     async def analyze_signal(self, text: str, config: dict = None) -> List[AnalysisResult]:
         raw_signal = RawSignal(source="unknown", text=text)
         analyses = await self.adapter.analyze_signal(raw_signal, config)

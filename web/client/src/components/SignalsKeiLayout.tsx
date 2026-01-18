@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { useTrading } from '@/contexts/TradingContext';
 import { Button } from '@/components/ui/button';
 import { Menu, X, LogOut, Settings } from 'lucide-react';
 import { Link } from 'wouter';
+import { useSocket } from '@/_core/hooks/useSocket';
+import { toast } from 'sonner';
 
 interface SignalsKeiLayoutProps {
   children: React.ReactNode;
@@ -14,11 +16,26 @@ export function SignalsKeiLayout({ children, currentPage }: SignalsKeiLayoutProp
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const { logout } = useAuth();
   const { demoMode, setDemoMode } = useTrading();
+  const { lastMessage } = useSocket();
+
+  // Escuchar notificaciones globales del socket
+  useEffect(() => {
+    if (lastMessage && lastMessage.event === 'notification') {
+      const { type, title, message } = lastMessage.data;
+      if (type === 'error') {
+        toast.error(title, { description: message, duration: 5000 });
+      } else if (type === 'success') {
+        toast.success(title, { description: message });
+      } else {
+        toast(title, { description: message });
+      }
+    }
+  }, [lastMessage]);
 
   const navItems = [
     { label: 'Dashboard', href: '/', icon: '📊' },
     { label: 'Señales', href: '/signals', icon: '📡' },
-    { label: 'Trades', href: '/trades', icon: '💱' },
+    { label: 'Bots', href: '/trades', icon: '🤖' },
     { label: 'Backtesting', href: '/backtest', icon: '📈' },
     { label: 'Telegram Console', href: '/telegram-console', icon: '📨' },
     { label: 'Configuración', href: '/settings', icon: '⚙️' },

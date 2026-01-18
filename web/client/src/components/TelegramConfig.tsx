@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { Eye, EyeOff, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
+import { CONFIG } from '@/config';
 
 interface TelegramConfigProps {
     userId: string;
@@ -32,7 +33,7 @@ export function TelegramConfig({ userId }: TelegramConfigProps) {
 
     const fetchTelegramStatus = async () => {
         try {
-            const response = await fetch(`http://localhost:8000/telegram/status/${userId}`);
+            const response = await fetch(`${CONFIG.API_BASE_URL}/telegram/status/${userId}`);
             const data = await response.json();
             setStatus(data);
         } catch (error) {
@@ -48,7 +49,7 @@ export function TelegramConfig({ userId }: TelegramConfigProps) {
 
         setLoading(true);
         try {
-            const response = await fetch(`http://localhost:8000/telegram/auth/start?user_id=${userId}`, {
+            const response = await fetch(`${CONFIG.API_BASE_URL}/telegram/auth/start?user_id=${userId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -80,7 +81,7 @@ export function TelegramConfig({ userId }: TelegramConfigProps) {
 
         setLoading(true);
         try {
-            const response = await fetch(`http://localhost:8000/telegram/auth/verify?user_id=${userId}`, {
+            const response = await fetch(`${CONFIG.API_BASE_URL}/telegram/auth/verify?user_id=${userId}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -111,7 +112,7 @@ export function TelegramConfig({ userId }: TelegramConfigProps) {
 
         setLoading(true);
         try {
-            const response = await fetch(`http://localhost:8000/telegram/disconnect?user_id=${userId}`, {
+            const response = await fetch(`${CONFIG.API_BASE_URL}/telegram/disconnect?user_id=${userId}`, {
                 method: 'POST'
             });
 

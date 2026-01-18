@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useRef, useState, useCallback, ReactNode } from 'react';
 import { useAuth } from '@/_core/hooks/useAuth';
+import { CONFIG } from '@/config';
 
 interface SocketMessage {
     event: string;
@@ -24,12 +25,17 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     const connect = useCallback(() => {
         if (!user?.openId) return;
 
+        // Evitar crear múltiples conexiones si ya existe una activa o conectando
+        if (socketRef.current && (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING)) {
+            console.log('WebSocket ya está conectado o conectando, evitando duplicado');
+            return;
+        }
+
         // Determinar la URL del WebSocket basándose en la ubicación actual
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const host = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-            ? '127.0.0.1:8000'
-            : `${window.location.hostname}:8000`;
-        const wsUrl = `${protocol}//${host}/ws/${user.openId}`;
+        // Usar CONFIG.WS_BASE_URL pero asegurar que el protocolo sea correcto si es wss
+        const wsBase = CONFIG.WS_BASE_URL.replace(/^ws(s)?:/, protocol);
+        const wsUrl = `${wsBase}/ws/${user.openId}`;
 
         console.log(`Intentando conectar a WebSocket Global: ${wsUrl}`);
         const socket = new WebSocket(wsUrl);
@@ -55,10 +61,16 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         socket.onclose = () => {
             console.log('WebSocket Global Desconectado');
             setIsConnected(false);
-            // Intento de reconexión tras 5 segundos
-            reconnectTimeoutRef.current = setTimeout(() => {
-                connect();
-            }, 5000);
+            socketRef.current = null;
+
+            // Solo reconectar si el usuario sigue autenticado
+            if (user?.openId && !reconnectTimeoutRef.current) {
+                console.log('Programando reconexión en 5 segundos...');
+                reconnectTimeoutRef.current = setTimeout(() => {
+                    reconnectTimeoutRef.current = null;
+                    connect();
+                }, 5000);
+            }
         };
 
         socket.onerror = (error) => {
@@ -73,16 +85,22 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         if (user?.openId) {
             connect();
         }
+
         return () => {
+            // Limpiar timeout de reconexión
+            if (reconnectTimeoutRef.current) {
+                clearTimeout(reconnectTimeoutRef.current);
+                reconnectTimeoutRef.current = null;
+            }
+
+            // Cerrar socket si existe
             if (socketRef.current) {
                 console.log('Cerrando WebSocket Global por desmontaje');
                 socketRef.current.close();
-            }
-            if (reconnectTimeoutRef.current) {
-                clearTimeout(reconnectTimeoutRef.current);
+                socketRef.current = null;
             }
         };
-    }, [user?.openId, connect]);
+    }, [user?.openId]); // Removido 'connect' de las dependencias para evitar ciclos
 
     const sendMessage = useCallback((message: any) => {
         if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {

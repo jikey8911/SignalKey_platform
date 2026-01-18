@@ -25,35 +25,71 @@ class AIAdapter(AIPort):
             await self._pplx_client.close() # El SDK de PPLX usa .close()
 
     async def analyze_signal(self, signal: RawSignal, config: dict = None) -> List[SignalAnalysis]:
-        ai_provider = config.get("aiProvider", "gemini") if config else "gemini"
-        api_key = self._get_api_key(ai_provider, config)
+        # Lista de proveedores en orden de prioridad para el failover
+        all_providers = ["gemini", "openai", "perplexity", "grok"]
+        
+        # Obtener el proveedor primario (seleccionado por el usuario)
+        primary_provider = config.get("aiProvider", "gemini") if config else "gemini"
+        
+        # Reordenar la lista para poner el primario al principio
+        priority_list = [primary_provider] + [p for p in all_providers if p != primary_provider]
+        
+        last_error = "No AI providers configured or available"
+        
+        for provider in priority_list:
+            api_key = self._get_api_key(provider, config)
+            if not api_key:
+                continue
+                
+            logger.info(f"Attempting signal analysis with provider: {provider}")
+            
+            try:
+                if provider == "gemini":
+                    content = await self._call_gemini(self._build_prompt(signal.text), api_key)
+                elif provider == "openai":
+                    content = await self._call_openai(self._build_prompt(signal.text), api_key)
+                elif provider == "perplexity":
+                    content = await self._call_perplexity(self._build_prompt(signal.text), api_key)
+                elif provider == "grok":
+                    content = await self._call_grok(self._build_prompt(signal.text), api_key)
+                else:
+                    continue
 
-        if not api_key:
-            return [self._default_hold("No API Key configured")]
-
-        prompt = self._build_prompt(signal.text)
-
-        try:
-            if ai_provider == "gemini":
-                content = await self._call_gemini(prompt, api_key)
-            elif ai_provider == "openai":
-                content = await self._call_openai(prompt, api_key)
-            elif ai_provider == "perplexity":
-                content = await self._call_perplexity(prompt, api_key)
-            elif ai_provider == "grok":
-                content = await self._call_grok(prompt, api_key)
-            else:
-                return self._default_hold(f"Unsupported provider: {ai_provider}")
-
-            return self._parse_response(content)
-        except Exception as e:
-            logger.error(f"Error in AI analysis: {e}")
-            return [self._default_hold(str(e))]
+                analysis = self._parse_response(content)
+                # Si el parseo devolvió un solo item con HOLD por error interno, seguimos intentando
+                if len(analysis) == 1 and analysis[0].decision == Decision.HOLD and "Error" in analysis[0].reasoning:
+                    last_error = analysis[0].reasoning
+                    logger.warning(f"Provider {provider} returned HOLR/Error: {last_error}. Retrying next...")
+                    continue
+                    
+                logger.info(f"Successfully analyzed signal with {provider}")
+                return analysis
+                
+            except Exception as e:
+                last_error = str(e)
+                logger.error(f"Error analyzing with {provider}: {e}")
+                continue
+        
+        # Si llegamos aquí, todos fallaron
+        logger.error(f"All AI providers failed. Last error: {last_error}")
+        return [self._default_hold(f"All AI providers failed. Last error: {last_error}")]
 
     def _get_api_key(self, provider: str, config: dict) -> str:
         if config:
-            key = config.get("aiApiKey") or config.get("geminiApiKey")
+            # Primero intentar el campo específico del nuevo esquema
+            key_map = {
+                "gemini": "geminiApiKey",
+                "openai": "openaiApiKey",
+                "perplexity": "perplexityApiKey",
+                "grok": "grokApiKey"
+            }
+            key = config.get(key_map.get(provider, ""))
             if key: return key
+            
+            # Fallback al campo genérico antiguo si coincide con el proveedor seleccionado
+            if config.get("aiProvider") == provider:
+                key = config.get("aiApiKey") or config.get("geminiApiKey")
+                if key: return key
         
         env_keys = {
             "gemini": "GEMINI_API_KEY",

@@ -8,6 +8,9 @@ import { User, AppConfig, TradingSignal, Trade, VirtualBalance, connectMongo } f
 // Asegurar conexión a MongoDB
 connectMongo();
 
+const BACKEND_PORT = process.env.BACKEND_PORT || "8000";
+const INTERNAL_API_URL = process.env.INTERNAL_API_URL || `http://localhost:${BACKEND_PORT}`;
+
 export const appRouter = router({
   system: systemRouter,
   auth: router({
@@ -55,7 +58,7 @@ export const appRouter = router({
   trading: router({
     getTelegramLogs: protectedProcedure.query(async ({ ctx }) => {
       try {
-        const logs = await fetch('http://localhost:8000/telegram/logs?limit=200')
+        const logs = await fetch(`${INTERNAL_API_URL}/telegram/logs?limit=200`)
           .then(res => res.json())
           .catch(() => []);
         return logs || [];
@@ -76,7 +79,11 @@ export const appRouter = router({
         aiProvider: z.enum(['gemini', 'openai', 'perplexity', 'grok']).optional(),
         aiApiKey: z.string().optional(),
         geminiApiKey: z.string().optional(),
+        openaiApiKey: z.string().optional(),
+        perplexityApiKey: z.string().optional(),
+        grokApiKey: z.string().optional(),
         gmgnApiKey: z.string().optional(),
+        zeroExApiKey: z.string().optional(),
         // Telegram fields
         telegramApiId: z.string().optional(),
         telegramApiHash: z.string().optional(),
@@ -137,7 +144,7 @@ export const appRouter = router({
 
       try {
         // Intentar obtener balances enriquecidos desde la API (incluye balance real del exchange)
-        const res = await fetch(`http://localhost:8000/balances/${ctx.user.openId}`);
+        const res = await fetch(`${INTERNAL_API_URL}/balances/${ctx.user.openId}`);
         if (res.ok) {
           const data = await res.json();
           return data;

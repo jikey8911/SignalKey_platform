@@ -1,8 +1,9 @@
-import ccxt.async_support as ccxt
 import logging
-from typing import Optional, Dict, Any
 from api.models.schemas import AnalysisResult, ExecutionResult
-from api.models.mongodb import get_app_config, save_trade, update_virtual_balance
+from api.models.mongodb import get_app_config, save_trade, update_virtual_balance, db
+from api.services.ccxt_service import ccxt_service
+import ccxt.async_support as ccxt # Para excepciones
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -28,75 +29,70 @@ class CEXService:
         logger.info("CEXService: Todas las sesiones cerradas.")
 
     async def test_connection(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None):
-        try:
-            exchange_class = getattr(ccxt, exchange_id)
-            inst_config = {
-                'apiKey': api_key,
-                'secret': secret,
-                'enableRateLimit': True,
-            }
-            if password:
-                inst_config['password'] = password
-            if uid:
-                inst_config['uid'] = uid
-                
-            instance = exchange_class(inst_config)
-            # Try fetching balance as a connectivity test
-            result = instance.fetch_balance()
-            # Check if it's a coroutine (async) or direct result (sync)
-            import inspect
-            if inspect.iscoroutine(result):
-                await result
-            # Close if method exists
-            if hasattr(instance, 'close'):
-                close_result = instance.close()
-                if inspect.iscoroutine(close_result):
-                    await close_result
-            return True, "Conexión exitosa"
-        except Exception as e:
-            logger.error(f"Error testing connection {exchange_id}: {e}")
-            return False, str(e)
+        """Prueba la conexión delegando a CCXTService"""
+        return await ccxt_service.test_connection_private(exchange_id, api_key, secret, password, uid)
 
-    async def get_exchange_instance(self, user_id: str, exchange_id: str = "binance"):
+    async def fetch_balance(self, user_id: str, exchange_id: Optional[str] = None) -> Dict[str, Any]:
+        """Obtiene el balance total del usuario delegando a CCXTService"""
+        try:
+            config = await get_app_config(user_id)
+            exchanges_config = config.get("exchanges", []) if config else []
+            
+            # Identificar el exchange objetivo
+            ex_cfg = None
+            if exchange_id:
+                ex_cfg = next((e for e in exchanges_config if e["exchangeId"] == exchange_id and e.get("isActive", True)), None)
+            else:
+                ex_cfg = next((e for e in exchanges_config if e.get("isActive", True)), None)
+            
+            if not ex_cfg or not ex_cfg.get("apiKey"):
+                logger.error(f"CEXService: Credenciales no encontradas para {exchange_id or 'active exchange'}")
+                return {}
+
+            return await ccxt_service.fetch_balance_private(
+                ex_cfg["exchangeId"], 
+                ex_cfg["apiKey"], 
+                ex_cfg["secret"], 
+                ex_cfg.get("password"), 
+                ex_cfg.get("uid")
+            )
+        except Exception as e:
+            logger.error(f"CEXService: Error al obtener balance unificado: {e}")
+            return {}
+
+    async def get_exchange_instance(self, user_id: str, exchange_id: Optional[str] = None):
+        """Obtiene una instancia (persistent/cached si existe) usando CCXTService"""
         config = await get_app_config(user_id)
         if not config or "exchanges" not in config:
             return None, None
 
-        # 1. Intentar encontrar el exchange solicitado
-        exchange_config = next((e for e in config["exchanges"] if e["exchangeId"] == exchange_id and e.get("isActive", True)), None)
+        # 1. Identificar configuración
+        ex_cfg = None
+        if exchange_id:
+            ex_cfg = next((e for e in config["exchanges"] if e["exchangeId"] == exchange_id and e.get("isActive", True)), None)
+        else:
+            ex_cfg = next((e for e in config["exchanges"] if e.get("isActive", True)), None)
+            if ex_cfg: exchange_id = ex_cfg["exchangeId"]
         
-        # 2. Si no se encuentra (o es el default 'binance' pero el usuario tiene otro), 
-        # usar el primer exchange activo de la lista
-        if not exchange_config:
-            exchange_config = next((e for e in config["exchanges"] if e.get("isActive", True)), None)
-            if exchange_config:
-                exchange_id = exchange_config["exchangeId"]
-        
-        if not exchange_config or not exchange_config.get("apiKey"):
+        if not ex_cfg or not ex_cfg.get("apiKey"):
             return None, config
 
         cache_key = f"{user_id}_{exchange_id}"
         if cache_key in self.exchanges:
             return self.exchanges[cache_key], config
 
-        try:
-            exchange_class = getattr(ccxt, exchange_id)
-            inst_config = {
-                'apiKey': exchange_config["apiKey"],
-                'secret': exchange_config["secret"],
-                'enableRateLimit': True,
-            }
-            if exchange_config.get("password"):
-                inst_config['password'] = exchange_config["password"]
-            if exchange_config.get("uid"):
-                inst_config['uid'] = exchange_config["uid"]
-                
-            instance = exchange_class(inst_config)
+        # 2. Crear instancia usando CCXTService
+        instance = await ccxt_service.get_private_instance(
+            exchange_id, 
+            ex_cfg["apiKey"], 
+            ex_cfg["secret"], 
+            ex_cfg.get("password"), 
+            ex_cfg.get("uid")
+        )
+        if instance:
             self.exchanges[cache_key] = instance
-            return instance, config
-        except Exception as e:
-            logger.error(f"Error inicializando exchange {exchange_id}: {e}")
-            return None, config
+        
+        return instance, config
 
     def _normalize_symbol(self, symbol: str) -> str:
         """Normaliza el símbolo al formato de ccxt (e.g. BTC/USDT)"""
@@ -129,36 +125,35 @@ class CEXService:
             for ex_cfg in active_exchanges:
                 ex_id = ex_cfg["exchangeId"]
                 try:
-                    price = await self._get_price_from_exchange(symbol, user_id, ex_id)
+                    price = await self.fetch_ticker_price(symbol, user_id, ex_id)
                     if price > 0:
                         return price
                 except Exception as e:
                     logger.debug(f"CEXService: {ex_id} no pudo proveer precio para {symbol}: {e}")
 
-            # 2. Fallback: Si no se encontró en sus exchanges, buscar en binance por defecto (como referencia global)
-            return await self._get_price_from_exchange(symbol, user_id, "binance", is_fallback=True)
+            # 2. Si no hay exchanges configurados, no podemos obtener precio reliable
+            if not active_exchanges:
+                logger.warning(f"CEXService: No hay exchanges activos para obtener precio de {symbol}")
+                return 0.0
+            
+            return 0.0
 
         except Exception as e:
             logger.error(f"CEXService: Error crítico en cadena de búsqueda de precio para {symbol}: {e}")
             return 0.0
 
-    async def _get_price_from_exchange(self, symbol: str, user_id: str, exchange_id: str, is_fallback: bool = False) -> float:
-        """Helper para obtener precio de un exchange específico (con o sin auth)"""
+    async def fetch_ticker_price(self, symbol: str, user_id: str, exchange_id: str, is_fallback: bool = False) -> float:
+        """Helper para obtener el último precio delegando a CCXTService para la instancia pública"""
         try:
-            # Intentar obtener instancia (autenticada o pública)
             exchange, _ = await self.get_exchange_instance(user_id, exchange_id)
             
             if not exchange:
-                # Si no hay instancia auth, usar/crear pública
-                if exchange_id not in self.public_exchanges:
-                    exchange_class = getattr(ccxt, exchange_id)
-                    self.public_exchanges[exchange_id] = exchange_class({
-                        'enableRateLimit': True,
-                        'options': {'defaultType': 'spot'}
-                    })
-                exchange = self.public_exchanges[exchange_id]
+                # Usar CCXTService para instancia pública cacheada
+                exchange = await ccxt_service.create_public_instance(exchange_id)
 
-            # Cargar mercados y validar
+            if not exchange:
+                return 0.0
+
             if not exchange.markets:
                 await exchange.load_markets()
             
@@ -166,10 +161,16 @@ class CEXService:
                 ticker = await exchange.fetch_ticker(symbol)
                 return float(ticker['last'])
             
+            # Intentar buscar sin la barra si es necesario (algunos exchanges tienen formatos raros)
+            alt_symbol = symbol.replace("/", "")
+            if alt_symbol in exchange.symbols:
+                ticker = await exchange.fetch_ticker(alt_symbol)
+                return float(ticker['last'])
+                
             return 0.0
         except Exception as e:
             if not is_fallback:
-                logger.debug(f"CEXService: Error consultando {exchange_id} para {symbol}: {e}")
+                logger.debug(f"CEXService: Error consultando ticker en {exchange_id} para {symbol}: {e}")
             return 0.0
 
     # Eliminado _get_price_from_binance ya que está integrado en la lógica dinámica de búsqueda
@@ -252,11 +253,73 @@ class CEXService:
             if not exchange:
                 return ExecutionResult(success=False, message="Exchange no configurado para trading real")
 
-            # Lógica real
-            logger.info(f"Ejecutando {side} REAL en CEX para {symbol} con monto {amount}")
-            # order = await exchange.create_order(symbol, 'market', side, amount)
-            return ExecutionResult(success=True, message=f"Orden real ejecutada (Simulado). Monto: {amount}")
+            # Lógica real con CCXT
+            logger.info(f"Ejecutando {side.upper()} REAL en {exchange.id} para {symbol} con monto {amount}")
+            
+            # Normalizar tipo de mercado (ccxt usa 'spot', 'swap', 'future', etc.)
+            market_type = 'spot' if analysis.market_type == 'SPOT' else 'swap'
+            
+            try:
+                # Asegurar que el mercado esté cargado
+                await exchange.load_markets()
+                
+                # Crear orden de mercado
+                params = {}
+                if market_type != 'spot' and analysis.parameters:
+                    leverage = analysis.parameters.get('leverage', 1)
+                    # Configurar apalancamiento si es futures/swap y el exchange lo soporta
+                    if hasattr(exchange, 'set_leverage'):
+                        try:
+                            await exchange.set_leverage(leverage, symbol)
+                        except Exception as lev_e:
+                            logger.warning(f"No se pudo establecer apalancamiento: {lev_e}")
+
+                order = await exchange.create_order(
+                    symbol=symbol,
+                    type='market',
+                    side=side.lower(),
+                    amount=amount,
+                    params=params
+                )
+                
+                logger.info(f"Orden real ejecutada con éxito: {order.get('id')}")
+                return ExecutionResult(
+                    success=True, 
+                    order_id=order.get('id'),
+                    message=f"Orden real {side.upper()} ejecutada en {exchange.id}",
+                    details=order
+                )
+            except ccxt.InsufficientFunds as e:
+                return ExecutionResult(success=False, message=f"Fondos insuficientes: {str(e)}")
+            except ccxt.InvalidOrder as e:
+                return ExecutionResult(success=False, message=f"Orden inválida: {str(e)}")
+            except Exception as e:
+                logger.error(f"Error ejecutanzo orden en {exchange.id}: {e}")
+                return ExecutionResult(success=False, message=f"Error en exchange: {str(e)}")
 
         except Exception as e:
             logger.error(f"Error ejecutando trade en CEX: {e}")
-            return ExecutionResult(success=False, message=f"Error en CEX: {str(e)}")
+            return ExecutionResult(success=False, message=f"Error en CEXService: {str(e)}")
+
+    async def fetch_open_orders(self, user_id: str, symbol: Optional[str] = None, exchange_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Obtiene las órdenes abiertas del usuario"""
+        try:
+            exchange, _ = await self.get_exchange_instance(user_id, exchange_id)
+            if not exchange: return []
+            return await exchange.fetch_open_orders(symbol)
+        except Exception as e:
+            logger.error(f"Error fetching open orders from {exchange_id or 'active exchange'}: {e}")
+            return []
+
+    async def fetch_positions(self, user_id: str, symbols: Optional[List[str]] = None, exchange_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Obtiene las posiciones abiertas (para Futures/Swap)"""
+        try:
+            exchange, _ = await self.get_exchange_instance(user_id, exchange_id)
+            if not exchange: return []
+            
+            if hasattr(exchange, 'fetch_positions'):
+                return await exchange.fetch_positions(symbols)
+            return []
+        except Exception as e:
+            logger.error(f"Error fetching positions from {exchange_id or 'active exchange'}: {e}")
+            return []

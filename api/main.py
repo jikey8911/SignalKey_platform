@@ -1,6 +1,6 @@
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
 from datetime import datetime
-from api.models.schemas import TradingSignal
+from api.models.schemas import TradingSignal, AnalysisResult
 from api.services.ai_service import AIService
 from api.services.cex_service import CEXService
 from api.services.dex_service import DEXService
@@ -12,7 +12,7 @@ import asyncio
 from typing import Optional
 from bson import ObjectId
 
-# Configuración de logging
+# Configuración de logging (Watchdog test comment)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -21,6 +21,7 @@ from api.bot.telegram_bot import start_userbot, bot_instance
 from api.bot.telegram_bot_manager import bot_manager
 from api.services.monitor_service import MonitorService
 from fastapi.middleware.cors import CORSMiddleware
+from api.config import Config
 
 # monitor_service = MonitorService() # Se instanciará en lifespan
 
@@ -50,7 +51,7 @@ async def lifespan(app: FastAPI):
     # 3. Iniciar Monitor de Precios
     logger.info("Starting Price Monitor Service...")
     from api.services.monitor_service import MonitorService
-    monitor_service = MonitorService(cex_service=cex_service)
+    monitor_service = MonitorService(cex_service=cex_service, dex_service=dex_service)
     monitor_task = asyncio.create_task(monitor_service.start_monitoring())
 
     # 4. Iniciar Monitor de Bots de Señales
@@ -99,7 +100,7 @@ ai_service = AIService()
 cex_service = CEXService()
 dex_service = DEXService()
 backtest_service = BacktestService()
-signal_bot_service = SignalBotService()
+signal_bot_service = SignalBotService(cex_service=cex_service, dex_service=dex_service)
 
 # Placeholder para servicios que se instancian en lifespan
 tracker_service = None
@@ -242,12 +243,26 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
                         {"$set": {"status": "rejected", "executionMessage": result.message}}
                     )
                     
+                    # Notificar error al usuario si está conectado
+                    await socket_service.emit_to_user(user_id, "notification", {
+                        "type": "error",
+                        "title": "Error al activar Bot",
+                        "message": f"Símbolo: {analysis.symbol}. {result.message}"
+                    })
+                    
             except Exception as e:
                 logger.error(f"Error creating trade for {analysis.symbol}: {e}")
                 await db.trading_signals.update_one(
                     {"_id": current_signal_id},
                     {"$set": {"status": "failed", "executionMessage": str(e)}}
                 )
+                
+                # Notificar error crítico
+                await socket_service.emit_to_user(user_id, "notification", {
+                    "type": "error",
+                    "title": "Error crítico en Signal Bot",
+                    "message": f"Fallo al procesar {analysis.symbol}: {str(e)}"
+                })
 
     except Exception as e:
         logger.error(f"Error in multi-token processing: {e}")
@@ -352,16 +367,14 @@ async def get_connection_status(user_id: str):
         if config.get("aiApiKey"):
             status["gemini"] = True # Mantenemos el nombre de la clave para compatibilidad o actualizamos el frontend
         
-        # Check Exchange
-        exchanges = config.get("exchanges", [])
-        active_ex = next((e for e in exchanges if e.get("isActive") and e.get("apiKey")), None)
-        if active_ex:
-            try:
-                exchange, _ = await cex_service.get_exchange_instance(user_id, active_ex["exchangeId"])
-                if exchange:
-                    status["exchange"] = True
-            except:
-                pass
+        # Check Exchange status dynamically
+        try:
+            # Intentar obtener balance como prueba real de conectividad
+            balance = await cex_service.fetch_balance(user_id)
+            if balance and 'total' in balance:
+                status["exchange"] = True
+        except:
+            pass
         
         # Check Telegram
         if bot_manager.is_bot_active(user_id):
@@ -389,33 +402,19 @@ async def get_balances(user_id: str):
     # 1. Get Config for keys
     config = await get_app_config(user_id)
     
-    # 2. Get Real CEX Balance (if configured)
+    # 2. Get Real CEX Balance (UNIFIED via CEXService)
     cex_balance = 0.0
-    if config:
-        # Try primary exchange
-        exchanges = config.get("exchanges", [])
-        active_ex = next((e for e in exchanges if e.get("isActive")), None)
-        if active_ex:
-             # Reuse CEXService instance method if possible, or manual call
-             # For speed/simplicity here, we use the service's helper
-             # But the service helper requires 'get_exchange_instance' which caches
-             try:
-                 exchange, _ = await cex_service.get_exchange_instance(user_id, active_ex["exchangeId"])
-                 if exchange:
-                     # Fetch total balance in USDT
-                     bal = await exchange.fetch_balance()
-                     # Calculate total USDT value roughly
-                     if 'total' in bal:
-                         cex_balance = bal['total'].get('USDT', 0.0)
-                         # Add other assets value? Complex. For now, just USDT.
-             except Exception as e:
-                 logger.error(f"Error fetching real balance: {e}")
+    try:
+        bal = await cex_service.fetch_balance(user_id)
+        if bal and 'total' in bal:
+            cex_balance = bal['total'].get('USDT', 0.0)
+    except Exception as e:
+        logger.error(f"Error fetching unified real balance: {e}")
 
     # 3. Get DB Balances (Virtual/Tracked)
     balances = await db.virtual_balances.find({"userId": user["_id"]}).to_list(length=100)
     
     # Merge/Override CEX balance if exists in DB or add it
-    # We want to return a list that the frontend understands
     
     response_list = []
     
@@ -469,6 +468,7 @@ class ConnectionTestRequest(BaseModel):
 
 @app.post("/test-connection")
 async def test_connection(data: ConnectionTestRequest):
+    """Prueba la conexión a un exchange usando CEXService/CCXTService"""
     success, message = await cex_service.test_connection(
         data.exchangeId,
         data.apiKey,
@@ -478,10 +478,69 @@ async def test_connection(data: ConnectionTestRequest):
     )
     return {"success": success, "message": message}
 
+@app.post("/signals/{signal_id}/approve")
+async def approve_signal(signal_id: str):
+    try:
+        from api.services.socket_service import socket_service
+        
+        signal_doc = await db.trading_signals.find_one({"_id": ObjectId(signal_id)})
+        if not signal_doc:
+            raise HTTPException(status_code=404, detail="Signal not found")
+        
+        user_id_obj = signal_doc.get("userId")
+        user = await db.users.find_one({"_id": user_id_obj})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_open_id = user["openId"]
+        config = await get_app_config(user_open_id)
+        
+        # Debemos reconstruir el objeto AnalysisResult para el service
+        analysis = AnalysisResult(
+            decision=signal_doc.get("decision", "BUY"),
+            symbol=signal_doc.get("symbol"),
+            market_type=signal_doc.get("marketType", "CEX"),
+            confidence=signal_doc.get("confidence", 1.0),
+            reasoning=signal_doc.get("reasoning", "Aprobación manual"),
+            is_safe=True, # Forzamos safe si el usuario aprueba manualmente
+            risk_score=0.0,
+            parameters=signal_doc.get("parameters", {})
+        )
+        
+        result = await signal_bot_service.activate_bot(analysis, str(user["_id"]), config)
+        
+        if result.success:
+            bot_id = result.details.get("botId")
+            await db.trading_signals.update_one(
+                {"_id": ObjectId(signal_id)},
+                {"$set": {"status": "executing", "tradeId": bot_id}}
+            )
+            
+            await socket_service.emit_to_user(user_open_id, "signal_update", {
+                "id": str(signal_id),
+                "status": "executing",
+                "tradeId": str(bot_id)
+            })
+            
+            await socket_service.emit_to_user(user_open_id, "notification", {
+                "type": "success",
+                "title": "Bot Activado",
+                "message": f"Se ha iniciado el bot para {analysis.symbol} con éxito."
+            })
+            
+            return {"success": True, "botId": str(bot_id)}
+        else:
+            await socket_service.emit_to_user(user_open_id, "notification", {
+                "type": "error",
+                "title": "Error al activar Bot",
+                "message": result.message
+            })
+            return {"success": False, "message": result.message}
+            
+    except Exception as e:
+        logger.error(f"Error manually approving signal {signal_id}: {e}")
+        return {"success": False, "message": str(e)}
+
 if __name__ == "__main__":
     import uvicorn
-    import uvicorn
-    import os
-    port = int(os.getenv("PORT", 8000))
-    # Aseguramos que el puerto sea el que espera el frontend (8000)
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=Config.PORT)

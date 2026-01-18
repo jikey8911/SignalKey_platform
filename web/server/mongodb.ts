@@ -1,7 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { ENV } from './_core/env';
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/signalkey_platform';
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/signalkey_platform';
 
 export const connectMongo = async () => {
   if (mongoose.connection.readyState >= 1) return;
@@ -31,9 +31,13 @@ const AppConfigSchema = new Schema({
   demoMode: { type: Boolean, default: true },
   isAutoEnabled: { type: Boolean, default: true },
   aiProvider: { type: String, enum: ['gemini', 'openai', 'perplexity', 'grok'], default: 'gemini' },
-  aiApiKey: String,
-  geminiApiKey: String, // Mantener por compatibilidad temporal
+  aiApiKey: String, // Fallback/Legacy
+  geminiApiKey: String,
+  openaiApiKey: String,
+  perplexityApiKey: String,
+  grokApiKey: String,
   gmgnApiKey: String,
+  zeroExApiKey: String,
   // Telegram Configuration (per user)
   telegramApiId: String,
   telegramApiHash: String,

@@ -60,7 +60,11 @@ class AppConfigSchema(BaseModel):
     isAutoEnabled: bool = True # Control maestro de procesos
     demoMode: bool = True
     geminiApiKey: Optional[str] = None
+    openaiApiKey: Optional[str] = None
+    perplexityApiKey: Optional[str] = None
+    grokApiKey: Optional[str] = None
     gmgnApiKey: Optional[str] = None
+    zeroExApiKey: Optional[str] = None
     telegramBotToken: Optional[str] = None
     telegramChatId: Optional[str] = None
     exchanges: List[ExchangeConfig] = []

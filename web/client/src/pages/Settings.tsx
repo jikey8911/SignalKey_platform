@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { CCXT_EXCHANGES } from '@/constants/exchanges';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { TelegramConfig } from '@/components/TelegramConfig';
+import { CONFIG } from '@/config';
 
 export default function Settings() {
   const { user: authUser } = useAuth({ redirectOnUnauthenticated: true });
@@ -22,7 +23,10 @@ export default function Settings() {
     aiProvider: 'gemini' | 'openai' | 'perplexity' | 'grok';
     aiApiKey: string;
     geminiApiKey: string;
-    gmgnApiKey: string;
+    openaiApiKey: string;
+    perplexityApiKey: string;
+    grokApiKey: string;
+    zeroExApiKey: string;
     telegramBotToken: string;
     telegramChatId: string;
     telegramChannels: { allow: string[]; deny: string[] };
@@ -46,13 +50,23 @@ export default function Settings() {
       cex: number;
       dex: number;
     };
+    botStrategy: {
+      maxActiveBots: number;
+      tpLevels: number;
+      tpPercent: number;
+      slPercent: number;
+      sellPercentPerTP: number;
+    };
   }>({
     demoMode: true,
     isAutoEnabled: true,
     aiProvider: 'gemini',
     aiApiKey: '',
     geminiApiKey: '',
-    gmgnApiKey: '',
+    openaiApiKey: '',
+    perplexityApiKey: '',
+    grokApiKey: '',
+    zeroExApiKey: '',
     telegramBotToken: '',
     telegramChatId: '',
     telegramChannels: { allow: [] as string[], deny: [] as string[] },
@@ -93,7 +107,10 @@ export default function Settings() {
         aiProvider: config.aiProvider || 'gemini',
         aiApiKey: config.aiApiKey || '',
         geminiApiKey: config.geminiApiKey || '',
-        gmgnApiKey: config.gmgnApiKey || '',
+        openaiApiKey: config.openaiApiKey || '',
+        perplexityApiKey: config.perplexityApiKey || '',
+        grokApiKey: config.grokApiKey || '',
+        zeroExApiKey: config.zeroExApiKey || '',
         telegramBotToken: config.telegramBotToken || '',
         telegramChatId: config.telegramChatId || '',
         telegramChannels: config.telegramChannels || { allow: [], deny: [] },
@@ -130,10 +147,9 @@ export default function Settings() {
 
   const handleSave = async () => {
     try {
-      // Validar que si hay un proveedor seleccionado, haya una API key
-      if (formData.aiProvider && !formData.aiApiKey && !formData.geminiApiKey) {
-        toast.error(`Por favor ingresa la API Key para ${formData.aiProvider}`);
-        return;
+      // Validar que al menos haya una API key configurada (opcional, el failover lo maneja)
+      if (!formData.aiApiKey && !formData.geminiApiKey && !formData.openaiApiKey && !formData.perplexityApiKey && !formData.grokApiKey) {
+        toast.warning("No has configurado ninguna API Key de IA. El análisis fallará.");
       }
 
       // Debug: ver qué se está enviando
@@ -220,38 +236,64 @@ export default function Settings() {
           {/* AI & API Keys */}
           <div className="space-y-6">
             <Card className="p-6">
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">🤖 Inteligencia Artificial</h3>
+              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">🤖 Inteligencia Artificial</h3>
+              <p className="text-xs text-muted-foreground mb-4">
+                Configura múltiples proveedores. El sistema usará el seleccionado como primario y el resto como respaldo (failover).
+              </p>
+
               <div className="space-y-4">
                 <div>
-                  <label className="block text-xs font-semibold text-foreground mb-1">
-                    Proveedor de IA
+                  <label className="block text-xs font-semibold text-primary mb-1 uppercase tracking-wider">
+                    Proveedor Primario (Preferido)
                   </label>
                   <select
                     value={formData.aiProvider}
-                    onChange={(e) => setFormData({ ...formData, aiProvider: e.target.value as 'gemini' | 'openai' | 'perplexity' })}
-                    className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    onChange={(e) => setFormData({ ...formData, aiProvider: e.target.value as any })}
+                    className="w-full px-3 py-2 border border-border rounded bg-muted/30 text-sm font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                   >
-                    <option value="gemini">Google Gemini</option>
-                    <option value="openai">OpenAI (ChatGPT)</option>
-                    <option value="perplexity">Perplexity AI</option>
+                    <option value="gemini">Google Gemini (Recomendado)</option>
+                    <option value="openai">OpenAI (GPT-4o mini)</option>
+                    <option value="perplexity">Perplexity AI (Web Search)</option>
                     <option value="grok">Grok (xAI)</option>
                   </select>
                 </div>
-                <InputField
-                  label={`${formData.aiProvider.charAt(0).toUpperCase() + formData.aiProvider.slice(1)} API Key`}
-                  value={formData.aiApiKey}
-                  onChange={(v: string) => {
-                    console.log('Actualizando aiApiKey:', v ? `${v.substring(0, 10)}...` : 'vacío');
-                    setFormData({ ...formData, aiApiKey: v });
-                  }}
-                  type="password"
-                  placeholder={`Introduce tu token de ${formData.aiProvider}`}
-                />
-                {formData.aiProvider === 'gemini' && (
-                  <div className="text-[10px] text-muted-foreground">
-                    * También puedes usar la clave antigua de Gemini si ya la tenías configurada.
-                  </div>
-                )}
+
+                <div className="pt-2 border-t border-border/50 space-y-3">
+                  <InputField
+                    label="Google Gemini Key"
+                    value={formData.geminiApiKey}
+                    onChange={(v: string) => setFormData({ ...formData, geminiApiKey: v })}
+                    type="password"
+                    placeholder="AIzaSy..."
+                  />
+                  <InputField
+                    label="OpenAI API Key"
+                    value={formData.openaiApiKey}
+                    onChange={(v: string) => setFormData({ ...formData, openaiApiKey: v })}
+                    type="password"
+                    placeholder="sk-..."
+                  />
+                  <InputField
+                    label="Perplexity API Key"
+                    value={formData.perplexityApiKey}
+                    onChange={(v: string) => setFormData({ ...formData, perplexityApiKey: v })}
+                    type="password"
+                    placeholder="pplx-..."
+                  />
+                  <InputField
+                    label="Grok (xAI) API Key"
+                    value={formData.grokApiKey}
+                    onChange={(v: string) => setFormData({ ...formData, grokApiKey: v })}
+                    type="password"
+                    placeholder="xai-..."
+                  />
+                </div>
+
+                <div className="p-2 bg-primary/5 rounded border border-primary/10">
+                  <p className="text-[10px] text-primary/80 italic leading-tight">
+                    💡 <strong>Smart Failover:</strong> Si {formData.aiProvider} falla o alcanza su límite, el bot intentará automáticamente con las otras llaves configuradas.
+                  </p>
+                </div>
               </div>
             </Card>
 
@@ -272,7 +314,7 @@ export default function Settings() {
                           return;
                         }
                         try {
-                          const res = await fetch(`http://localhost:8000/telegram/dialogs/${authUser.openId}`);
+                          const res = await fetch(`${CONFIG.API_BASE_URL}/telegram/dialogs/${authUser.openId}`);
                           const data = await res.json();
                           const dialogs = data.dialogs;
                           if (Array.isArray(dialogs)) {
@@ -367,12 +409,12 @@ export default function Settings() {
           {/* DEX & General */}
           <div className="space-y-6">
             <Card className="p-6">
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">🔄 DEX Config (GMGN)</h3>
+              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">🔄 DEX Config (0x Swap)</h3>
               <div className="space-y-4">
                 <InputField
-                  label="GMGN API Key"
-                  value={formData.gmgnApiKey}
-                  onChange={(v: string) => setFormData({ ...formData, gmgnApiKey: v })}
+                  label="0x Swap API Key"
+                  value={formData.zeroExApiKey}
+                  onChange={(v: string) => setFormData({ ...formData, zeroExApiKey: v })}
                   type="password"
                 />
                 <InputField
@@ -506,7 +548,7 @@ export default function Settings() {
                         }
                         const loadingToast = toast.loading("Probando conexión...");
                         try {
-                          const res = await fetch('http://localhost:8000/test-connection', {
+                          const res = await fetch(`${CONFIG.API_BASE_URL}/test-connection`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(ex)
@@ -532,123 +574,115 @@ export default function Settings() {
             ))}
           </div>
         </Card>
-      </div>
-    </SignalsKeiLayout>
-  );
-}
 
-
-            {/* Bot Strategy Configuration */}
-            <Card className="p-6 mt-6">
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">🤖 Configuración de Bots de Señales</h3>
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-foreground mb-2">
-                      Máximo de Bots Activos
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="20"
-                      value={formData.botStrategy.maxActiveBots}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        botStrategy: { ...formData.botStrategy, maxActiveBots: parseInt(e.target.value) }
-                      })}
-                      className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                    />
-                    <p className="text-[10px] text-muted-foreground mt-1">Número máximo de bots que pueden estar activos simultáneamente</p>
-                  </div>
-                  
-                  <div>
-                    <label className="block text-xs font-semibold text-foreground mb-2">
-                      Niveles de Take Profit
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      max="10"
-                      value={formData.botStrategy.tpLevels}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        botStrategy: { ...formData.botStrategy, tpLevels: parseInt(e.target.value) }
-                      })}
-                      className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                    />
-                    <p className="text-[10px] text-muted-foreground mt-1">Número de niveles de TP para cada bot</p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-foreground mb-2">
-                      % Cambio para TP
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="0.1"
-                      max="10"
-                      value={formData.botStrategy.tpPercent}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        botStrategy: { ...formData.botStrategy, tpPercent: parseFloat(e.target.value) }
-                      })}
-                      className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                    />
-                    <p className="text-[10px] text-muted-foreground mt-1">Porcentaje de cambio de precio para cada TP</p>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-foreground mb-2">
-                      % Stop Loss
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="0.1"
-                      max="10"
-                      value={formData.botStrategy.slPercent}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        botStrategy: { ...formData.botStrategy, slPercent: parseFloat(e.target.value) }
-                      })}
-                      className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                    />
-                    <p className="text-[10px] text-muted-foreground mt-1">Porcentaje de caída para Stop Loss</p>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-foreground mb-2">
-                      % Venta por TP
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min="1"
-                      max="100"
-                      value={formData.botStrategy.sellPercentPerTP}
-                      onChange={(e) => setFormData({
-                        ...formData,
-                        botStrategy: { ...formData.botStrategy, sellPercentPerTP: parseFloat(e.target.value) }
-                      })}
-                      className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                    />
-                    <p className="text-[10px] text-muted-foreground mt-1">Porcentaje a vender en cada nivel de TP</p>
-                  </div>
-                </div>
-
-                <div className="p-3 bg-muted rounded-lg">
-                  <p className="text-xs text-muted-foreground">
-                    <strong>Ejemplo:</strong> Con 3 niveles de TP al 2% y 33.3% venta por nivel:
-                    Compra a $100 → TP1: $102 (vende 33.3%) → TP2: $104 (vende 33.3%) → TP3: $106 (vende 33.4%)
-                  </p>
-                </div>
+        <Card className="p-6 mt-6">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">🤖 Configuración de Bots de Señales</h3>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-2">
+                  Máximo de Bots Activos
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="20"
+                  value={formData.botStrategy.maxActiveBots}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    botStrategy: { ...formData.botStrategy, maxActiveBots: parseInt(e.target.value) }
+                  })}
+                  className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <p className="text-[10px] text-muted-foreground mt-1">Número máximo de bots que pueden estar activos simultáneamente</p>
               </div>
-            </Card>
+
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-2">
+                  Niveles de Take Profit
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  max="10"
+                  value={formData.botStrategy.tpLevels}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    botStrategy: { ...formData.botStrategy, tpLevels: parseInt(e.target.value) }
+                  })}
+                  className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <p className="text-[10px] text-muted-foreground mt-1">Número de niveles de TP para cada bot</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-2">
+                  % Cambio para TP
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="10"
+                  value={formData.botStrategy.tpPercent}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    botStrategy: { ...formData.botStrategy, tpPercent: parseFloat(e.target.value) }
+                  })}
+                  className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <p className="text-[10px] text-muted-foreground mt-1">Porcentaje de cambio de precio para cada TP</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-2">
+                  % Stop Loss
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0.1"
+                  max="10"
+                  value={formData.botStrategy.slPercent}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    botStrategy: { ...formData.botStrategy, slPercent: parseFloat(e.target.value) }
+                  })}
+                  className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <p className="text-[10px] text-muted-foreground mt-1">Porcentaje de caída para Stop Loss</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-2">
+                  % Venta por TP
+                </label>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="1"
+                  max="100"
+                  value={formData.botStrategy.sellPercentPerTP}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    botStrategy: { ...formData.botStrategy, sellPercentPerTP: parseFloat(e.target.value) }
+                  })}
+                  className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <p className="text-[10px] text-muted-foreground mt-1">Porcentaje a vender en cada nivel de TP</p>
+              </div>
+            </div>
+
+            <div className="p-3 bg-muted rounded-lg">
+              <p className="text-xs text-muted-foreground">
+                <strong>Ejemplo:</strong> Con 3 niveles de TP al 2% y 33.3% venta por nivel:
+                Compra a $100 → TP1: $102 (vende 33.3%) → TP2: $104 (vende 33.3%) → TP3: $106 (vende 33.4%)
+              </p>
+            </div>
           </div>
-        </div>
+        </Card>
       </div>
     </SignalsKeiLayout>
   );

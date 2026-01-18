@@ -10,9 +10,9 @@ from api.services.socket_service import socket_service
 logger = logging.getLogger(__name__)
 
 class TrackerService:
-    def __init__(self):
-        self.cex_service = CEXService()
-        self.dex_service = DEXService()
+    def __init__(self, cex_service: CEXService = None, dex_service: DEXService = None):
+        self.cex_service = cex_service or CEXService()
+        self.dex_service = dex_service or DEXService()
         self.is_running = False
 
     async def start_monitoring(self):
@@ -59,7 +59,8 @@ class TrackerService:
 
         try:
             # 1. Obtener precio actual
-            current_price = await self._get_current_price(symbol, market_type, user_id)
+            network = trade.get("network", "ethereum")
+            current_price = await self._get_current_price(symbol, market_type, user_id, network)
             if current_price <= 0: return
 
             # 2. Actualizar precio en DB y emitir por socket
@@ -115,9 +116,9 @@ class TrackerService:
         except Exception as e:
             logger.error(f"Error monitoreando trade {trade_id}: {e}")
 
-    async def _get_current_price(self, symbol: str, market_type: str, user_id: str) -> float:
+    async def _get_current_price(self, symbol: str, market_type: str, user_id: str, network: str = "ethereum") -> float:
         if market_type == "DEX":
-            return 100.0 # Placeholder
+            return await self.dex_service.get_current_price(symbol, network, user_id)
         return await self.cex_service.get_current_price(symbol, user_id)
 
     async def _execute_trade_step(self, trade: Dict[str, Any], new_status: str, action: str, user_id: str, price: float, tp_index: int = None):
@@ -126,9 +127,9 @@ class TrackerService:
         market_type = trade["marketType"]
         
         # Actualizar balance virtual (Simulación Demo)
-        asset = "USDT" if market_type != "DEX" else "SOL"
+        asset = "USDT" if market_type != "DEX" else trade.get("asset", "USDT")
         
-        # Lógica de balance: 
+        # Lógica de balance:
         # ENTRY BUY -> Resta USDT
         # ENTRY SELL -> Resta Asset (Simulado como USDT para simplificar)
         # EXIT (TP/SL) -> Suma USDT + PnL

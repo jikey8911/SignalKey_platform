@@ -10,9 +10,9 @@ from api.models.schemas import AnalysisResult, ExecutionResult
 logger = logging.getLogger(__name__)
 
 class SignalBotService:
-    def __init__(self):
-        self.cex_service = CEXService()
-        self.dex_service = DEXService()
+    def __init__(self, cex_service: CEXService = None, dex_service: DEXService = None):
+        self.cex_service = cex_service or CEXService()
+        self.dex_service = dex_service or DEXService()
 
     async def can_activate_bot(self, user_id: str, config: Dict[str, Any]) -> bool:
         """Verifica si el usuario puede activar un nuevo bot basado en su límite."""
@@ -85,7 +85,47 @@ class SignalBotService:
         suggested_amount = analysis.parameters.get("amount", 0)
         amount = min(suggested_amount, max_amount) if suggested_amount > 0 else max_amount
 
-        # Crear el documento del bot (Trade)
+        # Ejecutar trade inicial (Market Buy/Sell)
+        # Esto manejará tanto Demo como Real a través de CEXService/DEXService
+        execution_result = None
+        if is_cex:
+            # Crear un AnalysisResult parcial para execute_trade
+            exec_analysis = AnalysisResult(
+                decision=analysis.decision,
+                symbol=symbol,
+                market_type=analysis.market_type,
+                confidence=analysis.confidence,
+                reasoning=analysis.reasoning,
+                parameters={
+                    "entry_price": entry_price,
+                    "amount": amount,
+                    "tp": analysis.parameters.get("tp", []),
+                    "sl": analysis.parameters.get("sl"),
+                    "leverage": analysis.parameters.get("leverage", 1)
+                }
+            )
+            execution_result = await self.cex_service.execute_trade(exec_analysis, user_id)
+        else:
+            # Para DEX usamos dex_service
+            execution_result = await self.dex_service.execute_trade(analysis, user_id)
+
+        if not execution_result.success:
+            return execution_result
+
+        # El bot creado por cex_service.execute_trade ya está en la DB si era Demo
+        # Pero SignalBotService crea bots más complejos (con múltiples TP/SL)
+        # BUG POTENCIAL: CEXService crea un trade doc y SignalBotService crea otro.
+        # SOLUCIÓN: Si CEXService ya lo creó, lo actualizamos con los campos extra.
+        # O mejor: SignalBotService hereda el trade creado o actualiza el existente.
+        
+        # Para evitar duplicados en Demo (que CEXService guarda), buscamos el último guardado
+        # o simplemente pasamos el ID si pudiéramos.
+        # Por simplicidad en este sprint: Borramos el simplificado y guardamos el completo 
+        # o actualizamos el que creó CEXService si es demo.
+        
+        trade_id = execution_result.order_id # En demo, order_id suele ser nulo o el string de info
+        
+        # Enriquecer el documento para el monitoreo avanzado
         bot_doc = {
             "userId": user_id,
             "symbol": symbol,
@@ -99,23 +139,32 @@ class SignalBotService:
             "marketType": market_type,
             "isDemo": demo_mode,
             "status": "active",
+            "orderId": trade_id,
             "currentTPLevel": 0,
             "pnl": 0.0,
             "createdAt": datetime.utcnow()
         }
 
-        inserted_id = await save_trade(bot_doc)
-        
-        # Si es demo, actualizar balance virtual
+        # Si CEXService ya guardó un doc (por ser demo), lo actualizamos en lugar de crear uno nuevo
         if demo_mode:
-            asset = "USDT" if is_cex else "SOL"
-            await update_virtual_balance(user_id, "CEX" if is_cex else "DEX", asset, -amount, is_relative=True)
-            logger.info(f"Virtual balance updated (Bot Activation): -{amount} {asset}")
+            # Buscar el trade que acaba de crear CEXService
+            last_demo = await db.trades.find_one(
+                {"userId": user_id, "symbol": symbol, "status": {"$in": ["open", "pending"]}, "isDemo": True},
+                sort=[("createdAt", -1)]
+            )
+            if last_demo:
+                await db.trades.update_one({"_id": last_demo["_id"]}, {"$set": bot_doc})
+                inserted_id = last_demo["_id"]
+            else:
+                inserted_id = await save_trade(bot_doc)
+        else:
+            inserted_id = await save_trade(bot_doc)
 
         return ExecutionResult(
             success=True, 
-            message=f"Bot activado para {symbol} ({market_type}) a {entry_price}",
-            details={"botId": str(inserted_id)}
+            message=execution_result.message,
+            order_id=trade_id,
+            details={"botId": str(inserted_id), "execution": execution_result.details}
         )
 
     async def monitor_bots(self):
@@ -123,32 +172,103 @@ class SignalBotService:
         while True:
             try:
                 active_bots = await db.trades.find({"status": "active"}).to_list(length=100)
+                
+                # Tiempo de espera por defecto
+                next_sleep = 60
+                
                 for bot in active_bots:
-                    await self._process_bot_tick(bot)
+                    # El proceso del tick ahora retorna la distancia mínima al objetivo (%)
+                    min_dist = await self._process_bot_tick(bot)
+                    
+                    # Ajustar el tiempo de espera del siguiente ciclo basado en la cercanía
+                    # de CUALQUIER bot a su objetivo
+                    if min_dist < 2.0:
+                        next_sleep = min(next_sleep, 5)
+                    elif min_dist < 5.0:
+                        next_sleep = min(next_sleep, 20)
+                
+                logger.debug(f"Monitor bots cycle complete. Sleeping for {next_sleep}s")
+                await asyncio.sleep(next_sleep)
             except Exception as e:
                 logger.error(f"Error en monitor_bots: {e}")
-            await asyncio.sleep(60) # Revisar cada minuto
+                await asyncio.sleep(60) 
 
-    async def _process_bot_tick(self, bot: Dict[str, Any]):
-        """Actualiza el estado de un bot individual basado en el precio actual."""
+    async def _process_bot_tick(self, bot: Dict[str, Any]) -> float:
+        """
+        Actualiza el estado de un bot individual basado en el precio actual.
+        Retorna la distancia porcentual mínima al objetivo más cercano (TP o SL).
+        """
         symbol = bot["symbol"]
         current_price = await self._get_current_price(bot)
         
+        if current_price <= 0:
+            return 100.0 # No hay precio disponible, no aceleramos
+            
+        # Calcular P&L actual
+        entry_price = bot["entryPrice"]
+        side = bot.get("side", "BUY")
+        
+        if side == "BUY":
+            pnl = ((current_price - entry_price) / entry_price) * 100
+        else:
+            pnl = ((entry_price - current_price) / entry_price) * 100
+            
+        # 1. ACTUALIZAR BASE DE DATOS Y EMITIR POR SOCKET SIEMPRE
+        try:
+            await db.trades.update_one(
+                {"_id": bot["_id"]},
+                {"$set": {
+                    "currentPrice": current_price,
+                    "pnl": pnl,
+                    "lastMonitoredAt": datetime.utcnow()
+                }}
+            )
+            
+            # Emitir actualización en tiempo real
+            from api.services.socket_service import socket_service
+            user = await db.users.find_one({"_id": bot["userId"]})
+            if user:
+                await socket_service.emit_to_user(user["openId"], "bot_update", {
+                    "id": str(bot["_id"]),
+                    "symbol": symbol,
+                    "currentPrice": current_price,
+                    "pnl": pnl,
+                    "status": bot["status"]
+                })
+        except Exception as e:
+            logger.error(f"Error updating bot tick for {bot['_id']}: {e}")
+
+        # 2. CALCULAR DISTANCIAS A OBJETIVOS PARA FRECUENCIA DINÁMICA
+        # Distancia al Stop Loss
+        dist_sl = abs(current_price - bot["stopLoss"]) / current_price * 100
+        
+        # Distancia al siguiente Take Profit pendiente
+        dist_tp = 100.0
+        pending_tps = [tp for tp in bot["takeProfits"] if tp["status"] == "pending"]
+        if pending_tps:
+            # Encontrar el TP más cercano al precio actual
+            closest_tp_price = min([tp["price"] for tp in pending_tps]) if side == "BUY" else max([tp["price"] for tp in pending_tps])
+            dist_tp = abs(current_price - closest_tp_price) / current_price * 100
+            
+        min_dist = min(dist_sl, dist_tp)
+
+        # 3. VERIFICAR EJECUCIÓN (TP/SL)
         # Verificar Stop Loss
-        if current_price <= bot["stopLoss"]:
+        if (side == "BUY" and current_price <= bot["stopLoss"]) or (side == "SELL" and current_price >= bot["stopLoss"]):
             await self._close_bot(bot, current_price, "failed", "Stop Loss alcanzado")
-            return
+            return min_dist
 
         # Verificar Take Profits
         updated_tps = bot["takeProfits"]
         any_tp_hit = False
         for tp in updated_tps:
-            if tp["status"] == "pending" and current_price >= tp["price"]:
+            is_hit = (side == "BUY" and current_price >= tp["price"]) or (side == "SELL" and current_price <= tp["price"])
+            if tp["status"] == "pending" and is_hit:
                 tp["status"] = "hit"
                 tp["hitAt"] = datetime.utcnow()
                 bot["currentTPLevel"] = tp["level"]
                 any_tp_hit = True
-                logger.info(f"Bot {bot['_id']} alcanzó TP Nivel {tp['level']} para {symbol}")
+                logger.info(f"Bot {bot['_id']} alcanzó TP Nivel {tp['level']} para {symbol} (MARKET EXECUTION)")
 
         if any_tp_hit:
             # Si todos los TP se alcanzaron, cerrar bot
@@ -157,8 +277,10 @@ class SignalBotService:
             else:
                 await db.trades.update_one(
                     {"_id": bot["_id"]},
-                    {"$set": {"takeProfits": updated_tps, "currentTPLevel": bot["currentTPLevel"], "lastMonitoredAt": datetime.utcnow()}}
+                    {"$set": {"takeProfits": updated_tps, "currentTPLevel": bot["currentTPLevel"]}}
                 )
+        
+        return min_dist
 
     async def _get_current_price(self, bot: Dict[str, Any]) -> float:
         """Obtiene el precio actual real usando CEXService."""

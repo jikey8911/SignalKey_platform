@@ -18,6 +18,8 @@ import { Input } from '@/components/ui/input';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { useSocket } from '@/_core/hooks/useSocket';
 import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
+import { CONFIG } from '@/config';
 
 interface Signal {
   id: string; // Cambiado a string para compatibilidad con MongoDB
@@ -188,6 +190,20 @@ export default function Signals() {
     executing: signals?.filter((s: Signal) => s.status === 'executing').length || 0,
     completed: signals?.filter((s: Signal) => s.status === 'completed').length || 0,
     failed: signals?.filter((s: Signal) => s.status === 'failed' || s.status === 'error').length || 0,
+  };
+
+  const handleApprove = async (signalId: string) => {
+    try {
+      const res = await fetch(`${CONFIG.API_BASE_URL}/signals/${signalId}/approve`, {
+        method: 'POST',
+      });
+      const data = await res.json();
+      if (!data.success) {
+        toast.error('Error', { description: data.message });
+      }
+    } catch (e: any) {
+      toast.error('Error', { description: e.message });
+    }
   };
 
   return (
@@ -425,11 +441,23 @@ export default function Signals() {
                       {signal.source} • {new Date(signal.createdAt).toLocaleString()}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2 bg-muted p-3 rounded-lg">
-                    {getStatusIcon(signal.status)}
-                    <span className={`text-sm font-semibold capitalize px-2 py-1 rounded border ${getStatusBadgeColor(signal.status)}`}>
-                      {getStatusLabel(signal.status)}
-                    </span>
+                  <div className="flex flex-col items-end gap-2">
+                    <div className="flex items-center gap-2 bg-muted p-3 rounded-lg">
+                      {getStatusIcon(signal.status)}
+                      <span className={`text-sm font-semibold capitalize px-2 py-1 rounded border ${getStatusBadgeColor(signal.status)}`}>
+                        {getStatusLabel(signal.status)}
+                      </span>
+                    </div>
+                    {['processing', 'accepted', 'rejected', 'failed', 'error'].includes(signal.status) && (
+                      <Button
+                        size="sm"
+                        className="w-full gap-2"
+                        onClick={() => handleApprove(signal.id)}
+                      >
+                        <Zap size={14} />
+                        Aprobar y Ejecutar
+                      </Button>
+                    )}
                   </div>
                 </div>
 

@@ -4,15 +4,18 @@ import ccxt.async_support as ccxt
 from datetime import datetime
 from api.models.mongodb import db, update_virtual_balance
 from api.services.cex_service import CEXService
+from api.services.dex_service import DEXService
 from bson import ObjectId
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 class MonitorService:
-    def __init__(self, cex_service: Optional[CEXService] = None):
+    def __init__(self, cex_service: Optional[CEXService] = None, dex_service: Optional[DEXService] = None):
         self.running = False
-        self.interval = 300 # 5 minutos en segundos
+        self.interval = 60 # Reducido a 1 minuto para mejor monitoreo
         self.cex_service = cex_service or CEXService()
+        self.dex_service = dex_service or DEXService()
 
     async def start_monitoring(self):
         if self.running:
@@ -22,25 +25,30 @@ class MonitorService:
         while self.running:
             try:
                 await self.check_open_positions()
+                await self.push_connection_status()
             except Exception as e:
-                logger.error(f"Error en check_open_positions: {e}")
+                logger.error(f"Error en el ciclo de monitoreo: {e}")
             await asyncio.sleep(self.interval)
 
     async def stop_monitoring(self):
         self.running = False
         await self.cex_service.close_all()
+        await self.dex_service.close_all()
 
     async def check_open_positions(self):
-        # Buscar posiciones abiertas en modo demo
-        cursor = db.trades.find({"status": "open", "isDemo": True})
-        open_trades = await cursor.to_list(length=100)
+        # 1. Monitorear posiciones simuladas (Demo)
+        cursor_demo = db.trades.find({"status": "open", "isDemo": True})
+        open_trades_demo = await cursor_demo.to_list(length=100)
         
-        if not open_trades:
+        # 2. Monitorear posiciones reales si es necesario (Pendiente integración profunda)
+        # Por ahora nos enfocamos en que el servicio sea capaz de consultar el exchange
+        
+        if not open_trades_demo:
             return
 
-        logger.info(f"Monitoreando {len(open_trades)} posiciones abiertas...")
+        logger.info(f"Monitoreando {len(open_trades_demo)} posiciones DEMO abiertas...")
 
-        for trade in open_trades:
+        for trade in open_trades_demo:
             try:
                 symbol = str(trade.get("symbol", "")).strip()
                 if not symbol or "/" not in symbol and len(symbol) < 3:
@@ -67,8 +75,8 @@ class MonitorService:
                 if market_type == "CEX":
                     current_price = await self.cex_service.get_current_price(symbol, user_open_id)
                 else:
-                    # Para DEX, simulación o API externa
-                    current_price = entry_price * 1.01 # Simulación de subida del 1%
+                    network = trade.get("network", "ethereum")
+                    current_price = await self.dex_service.get_current_price(symbol, network, user_open_id)
 
                 if current_price == 0:
                     continue
@@ -126,7 +134,7 @@ class MonitorService:
         if user:
             user_open_id = user["openId"]
             market_type = trade["marketType"]
-            asset = "USDT" if market_type == "CEX" else "SOL"
+            asset = "USDT" if market_type == "CEX" else trade.get("asset", "USDT")
             
             # Obtener balance actual
             balance_doc = await db.virtual_balances.find_one({
@@ -141,3 +149,56 @@ class MonitorService:
                 new_balance = balance_doc["amount"] + trade["amount"] + pnl
                 await update_virtual_balance(user_open_id, market_type, asset, new_balance)
                 logger.info(f"Balance virtual actualizado para {user_open_id}: {new_balance}")
+
+    async def push_connection_status(self):
+        """Envía el estado de conexión a todos los usuarios conectados vía WebSocket"""
+        from api.services.socket_service import socket_service
+        from api.bot.telegram_bot_manager import bot_manager
+        from api.models.mongodb import get_app_config
+
+        active_users = socket_service.active_connections.keys()
+        if not active_users:
+            return
+
+        for user_id in list(active_users):
+            try:
+                status = {
+                    "gemini": False,
+                    "exchange": False,
+                    "telegram": False,
+                    "gmgn": False, # legacy name used in frontend
+                }
+                
+                config = await get_app_config(user_id)
+                if not config:
+                    continue
+                
+                # Check AI Provider
+                if config.get("aiApiKey") or config.get("geminiApiKey"):
+                    status["gemini"] = True
+                
+                # Check Exchange
+                exchanges = config.get("exchanges", [])
+                active_ex = next((e for e in exchanges if e.get("isActive") and e.get("apiKey")), None)
+                if active_ex:
+                    status["exchange"] = True
+                
+                # Check Telegram
+                if bot_manager.is_bot_active(user_id):
+                    status["telegram"] = True
+                
+                # Check ZeroEx (mapped to gmgn in status for frontend compatibility)
+                if config.get("zeroExApiKey") or config.get("gmgnApiKey"):
+                    status["gmgn"] = True
+                
+                # Fetch Real Balance simplified for status (UNIFIED via CEXService)
+                try:
+                    balances = await self.cex_service.fetch_balance(user_id)
+                    if balances and 'total' in balances:
+                        status["balance_usdt"] = balances['total'].get('USDT', 0.0)
+                except Exception as e:
+                    logger.error(f"Error fetching unified balance for status: {e}")
+
+                await socket_service.emit_to_user(user_id, "status_update", status)
+            except Exception as e:
+                logger.error(f"Error pushing status for user {user_id}: {e}")

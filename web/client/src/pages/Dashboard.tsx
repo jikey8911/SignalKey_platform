@@ -1,44 +1,72 @@
-import React from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { SignalsKeiLayout } from '@/components/SignalsKeiLayout';
 import { Card } from '@/components/ui/card';
 import { trpc } from '@/lib/trpc';
 import { useTrading } from '@/contexts/TradingContext';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { TrendingUp, TrendingDown, DollarSign, Zap } from 'lucide-react';
+import { useSocket } from '@/_core/hooks/useSocket';
+import { useQueryClient } from '@tanstack/react-query';
+import { CONFIG } from '@/config';
 
 export default function Dashboard() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
   const { demoMode } = useTrading();
-  const { data: balances, isLoading: balancesLoading, refetch: refetchBalances } = trpc.trading.getBalances.useQuery();
+  const queryClient = useQueryClient();
+  const { data: balances, isLoading: balancesLoading } = trpc.trading.getBalances.useQuery();
   const { data: trades, isLoading: tradesLoading } = trpc.trading.getTrades.useQuery();
-  const [connectionStatus, setConnectionStatus] = React.useState<any>(null);
+  const [connectionStatus, setConnectionStatus] = useState<any>(null);
+  const { lastMessage } = useSocket(user?.openId);
 
-  // Fetch connection status
-  React.useEffect(() => {
+  // Initial status fetch
+  useEffect(() => {
     const fetchStatus = async () => {
       if (!user?.openId) return;
       try {
-        const res = await fetch(`http://localhost:8000/status/${user.openId}`);
+        const res = await fetch(`${CONFIG.API_BASE_URL}/status/${user.openId}`);
         const data = await res.json();
         setConnectionStatus(data);
       } catch (e) {
-        console.error('Error fetching status:', e);
+        console.error('Error fetching initial status:', e);
       }
     };
     fetchStatus();
-    const interval = setInterval(fetchStatus, 10000); // Update every 10s
-    return () => clearInterval(interval);
   }, [user?.openId]);
 
-  // Refetch balances every 30s
-  React.useEffect(() => {
-    const interval = setInterval(() => {
-      refetchBalances();
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [refetchBalances]);
+  // Listen for socket updates
+  useEffect(() => {
+    if (!lastMessage) return;
 
-  const stats = React.useMemo(() => {
+    const { event, data } = lastMessage;
+
+    if (event === 'status_update') {
+      setConnectionStatus(data);
+    } else if (event === 'balance_update') {
+      // Update balances cache
+      queryClient.setQueryData(['trading.getBalances'], (oldData: any[] | undefined) => {
+        if (!oldData) return [data];
+        const exists = oldData.find(b => b.marketType === data.marketType && b.asset === data.asset);
+        if (exists) {
+          return oldData.map(b => b.marketType === data.marketType && b.asset === data.asset ? { ...b, amount: data.amount } : b);
+        } else {
+          return [...oldData, data];
+        }
+      });
+    } else if (event === 'bot_update') {
+      // Update trades cache
+      queryClient.setQueryData(['trading.getTrades'], (oldData: any[] | undefined) => {
+        if (!oldData) return [data];
+        const exists = oldData.find(t => t.id === data.id);
+        if (exists) {
+          return oldData.map(t => t.id === data.id ? { ...t, ...data } : t);
+        } else {
+          return [data, ...oldData];
+        }
+      });
+    }
+  }, [lastMessage, queryClient]);
+
+  const stats = useMemo(() => {
     if (!trades || trades.length === 0) {
       return {
         totalTrades: 0,
@@ -153,7 +181,7 @@ export default function Dashboard() {
               <div>
                 <p className="text-xs text-muted-foreground mb-1">Virtual (Simulación)</p>
                 <p className="text-2xl font-bold text-primary">
-                  {(balances?.find((b: any) => b.marketType === 'DEX')?.amount || 0).toFixed(4)} SOL
+                  {(balances?.find((b: any) => b.marketType === 'DEX')?.amount || 0).toFixed(4)} USDT
                 </p>
               </div>
             )}
@@ -163,7 +191,7 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <StatCard
             icon={Zap}
-            label="Total de Trades"
+            label="Total de Bots"
             value={stats.totalTrades}
           />
           <StatCard
@@ -185,7 +213,7 @@ export default function Dashboard() {
         </div>
 
         <Card className="p-6">
-          <h3 className="text-lg font-semibold text-foreground mb-4">Trades Recientes</h3>
+          <h3 className="text-lg font-semibold text-foreground mb-4">Bots Recientes</h3>
           {tradesLoading ? (
             <div className="space-y-2">
               {[1, 2, 3].map((i) => (
@@ -212,10 +240,10 @@ export default function Dashboard() {
                         : 'text-red-600'
                         }`}
                     >
-                      ${trade.pnl?.toFixed(2) || '0.00'}
+                      {trade.pnl?.toFixed(2) || '0.00'}{trade.pnl !== undefined ? '%' : ''}
                     </p>
                     <p className="text-xs text-muted-foreground">
-                      {new Date(trade.createdAt).toLocaleDateString()}
+                      {new Date(trade.createdAt).toLocaleTimeString()}
                     </p>
                   </div>
                 </div>
@@ -223,7 +251,7 @@ export default function Dashboard() {
             </div>
           ) : (
             <p className="text-center text-muted-foreground py-8">
-              No hay trades aún. ¡Espera las primeras señales!
+              No hay bots activos aún. ¡Espera las primeras señales!
             </p>
           )}
         </Card>

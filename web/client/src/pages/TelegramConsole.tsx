@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { useSocket } from '@/_core/hooks/useSocket';
+import { CONFIG } from '@/config';
 
 interface TelegramLog {
   _id: string;
@@ -29,8 +30,7 @@ export default function TelegramConsole() {
   const fetchLogs = async () => {
     setLoading(true);
     try {
-      const apiUrl = window.location.hostname === 'localhost' ? 'http://localhost:8000' : `http://${window.location.hostname}:8000`;
-      const res = await fetch(`${apiUrl}/telegram/logs?limit=100`);
+      const res = await fetch(`${CONFIG.API_BASE_URL}/telegram/logs?limit=100`);
       const data = await res.json();
       if (Array.isArray(data)) {
         setLogs(data);

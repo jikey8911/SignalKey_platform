@@ -169,7 +169,7 @@ class TelegramUserBot:
             raise
     async def _send_http_signal(self, chat_id: str, text: str):
         """Método de respaldo para enviar señal vía HTTP si no hay callback"""
-        api_url = "http://localhost:8000/webhook/signal"
+        api_url = f"{Config.API_BASE_URL}/webhook/signal"
         async with httpx.AsyncClient(timeout=10.0) as client:
             try:
                 payload = {"source": f"telegram_{chat_id}", "raw_text": text}
@@ -282,7 +282,7 @@ class LegacyTelegramBot:
         self.api_hash = Config.TELEGRAM_API_HASH
         self.session_file = 'userbot_session'
         self.client = None
-        self.api_url = "http://localhost:8000/webhook/signal"
+        self.api_url = f"{Config.API_BASE_URL}/webhook/signal"
 
         if not self.api_id or not self.api_hash:
             logger.warning("TELEGRAM_API_ID or TELEGRAM_API_HASH not set. Legacy bot will not start.")
