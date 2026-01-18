@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from api.models.mongodb import db
 from api.models.schemas import TradeSchema
 from api.services.cex_service import CEXService
@@ -41,9 +41,8 @@ class TrackerService:
                 for trade in trades:
                     await self._process_trade_monitoring(trade)
 
-                # Esperar antes de la siguiente iteración (base: 30 segundos para actualizaciones más frecuentes)
-                # Nota: Algunos trades se procesarán más rápido internamente si están cerca del precio
-                await asyncio.sleep(30) 
+                # Esperar exactamente 39 segundos antes de la siguiente iteración
+                await asyncio.sleep(39) 
             except Exception as e:
                 logger.error(f"Error en TrackerService loop: {e}")
                 await asyncio.sleep(10)
@@ -61,12 +60,12 @@ class TrackerService:
         user_id = user["openId"]
 
         try:
-            # 2. Obtener precio actual
+            # 2. Obtener precio actual (ahora delegando correctamente a DEX/CEX)
             current_price = await self._get_current_price(symbol, market_type, user_id)
-            if not current_price:
+            if not current_price or current_price <= 0:
                 return
 
-            # Actualizar último monitoreo y precio actual en DB
+            # Actualizar precio actual en la colección 'trades'
             await db.trades.update_one(
                 {"_id": trade_id},
                 {"$set": {
@@ -84,30 +83,24 @@ class TrackerService:
                 "lastMonitoredAt": datetime.utcnow().isoformat()
             })
 
+            # ... resto de la lógica de TP/SL ...
             # 3. Lógica de proximidad y frecuencia
-            # Si el status es 'monitoring' (esperando compra), comparamos con entryPrice/targetPrice
             if trade["status"] == "monitoring":
                 target = trade.get("targetPrice") or trade.get("entryPrice")
                 if target:
                     diff_pct = abs(current_price - target) / target * 100
                     if diff_pct < 2.0:
-                        # Estamos cerca! Ejecutar monitoreo de alta frecuencia
-                        logger.info(f"TrackerService: Proximidad detectada para {symbol} ({diff_pct:.2f}%). Iniciando alta frecuencia.")
+                        logger.info(f"TrackerService: Proximidad detectada para {symbol} ({diff_pct:.2f}%).")
                         await self._high_frequency_monitor(trade, target, "BUY", user_id)
 
-            # 4. Lógica de TP/SL si el trade ya está 'open'
             elif trade["status"] == "open":
-                # Ver cada TP
                 for tp in trade.get("takeProfits", []):
                     if current_price >= tp["price"]:
-                        logger.info(f"TrackerService: TP alcanzado para {symbol} ({current_price}). Iniciando maximización.")
                         await self._high_frequency_monitor(trade, tp["price"], "SELL", user_id, tp_data=tp)
-                        break # Procesar un TP a la vez
+                        break
                 
-                # Ver SL
                 sl = trade.get("stopLoss")
                 if sl and current_price <= sl:
-                    logger.info(f"TrackerService: SL alcanzado para {symbol} ({current_price}). Ejecutando cierre.")
                     await self._execute_trade_action(trade, "SELL", "STOP_LOSS", user_id)
 
         except Exception as e:
@@ -116,11 +109,11 @@ class TrackerService:
     async def _get_current_price(self, symbol: str, market_type: str, user_id: str) -> float:
         try:
             if market_type == "DEX":
-                # Implementar obtención de precio real DEX (ej: via GMGN o Jup)
-                return 100.0 # Placeholder
+                return await self.dex_service.get_current_price(symbol, user_id)
             else:
                 return await self.cex_service.get_current_price(symbol, user_id)
-        except:
+        except Exception as e:
+            logger.error(f"TrackerService: Error obteniendo precio para {symbol}: {e}")
             return 0.0
 
     async def _high_frequency_monitor(self, trade: Dict[str, Any], target: float, side: str, user_id: str, tp_data=None):

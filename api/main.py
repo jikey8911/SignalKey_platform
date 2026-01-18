@@ -207,7 +207,7 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
 
             # 3. Preparar Trade
             try:
-                # Obtener límites de inversión
+                # Obtener límites de inversión y definir tipo de mercado
                 market_val = analysis.market_type if isinstance(analysis.market_type, str) else (analysis.market_type.value if hasattr(analysis.market_type, "value") else analysis.market_type)
                 is_cex = market_val in ["CEX", "SPOT", "FUTURES"]
                 
@@ -222,7 +222,7 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
                 
                 amount = min(suggested_amount, max_amount) if suggested_amount > 0 else max_amount
 
-                # Parámetros del trade
+                # Parámetros del trade iniciales
                 if isinstance(analysis.parameters, dict):
                     tp_list = analysis.parameters.get("tp", [])
                     entry_price = analysis.parameters.get("entry_price") or 0.0
@@ -234,12 +234,28 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
                     sl_price = analysis.parameters.sl
                     leverage = analysis.parameters.leverage
 
+                # OBTENER PRECIO ACTUAL ANTES DE CREAR EL TRADE
+                if is_cex:
+                    current_price = await cex_service.get_current_price(analysis.symbol, user_id)
+                else:
+                    current_price = await dex_service.get_current_price(analysis.symbol, user_id)
+                
+                if not current_price or current_price <= 0:
+                    logger.warning(f"No se pudo obtener el precio actual para {analysis.symbol}. Usando entry_price de la señal.")
+                    current_price = entry_price or 1.0
+
+                # Si entry_price de la señal es 0, lo igualamos al precio actual de mercado
+                if not entry_price or entry_price <= 0:
+                    entry_price = current_price
+
                 trade_data = {
                     "userId": user["_id"],
                     "signalId": current_signal_id,
                     "symbol": analysis.symbol,
                     "side": analysis.decision,
-                    "entryPrice": entry_price,
+                    "entryPrice": entry_price, # Precio objetivo/entrada
+                    "executionPrice": current_price if config.get("demoMode", True) else None, # Precio de ejecución real (market en simulación)
+                    "currentPrice": current_price, # Precio actual de seguimiento
                     "targetPrice": entry_price,
                     "stopLoss": sl_price,
                     "takeProfits": tp_list,
@@ -247,17 +263,36 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
                     "leverage": leverage,
                     "marketType": market_val,
                     "isDemo": config.get("demoMode", True),
-                    "status": "monitoring",
+                    "status": "open" if config.get("demoMode", True) else "monitoring",
                     "isSafe": analysis.is_safe,
-                    "createdAt": datetime.utcnow()
+                    "createdAt": datetime.utcnow(),
+                    "lastMonitoredAt": datetime.utcnow()
                 }
+                
+                # SI ES MODO DEMO, ACTUALIZAR BALANCE VIRTUAL
+                if config.get("demoMode", True):
+                    asset = "USDT" if is_cex else "SOL"
+                    market_bal = "CEX" if is_cex else "DEX"
+                    
+                    cur_bal_doc = await db.virtual_balances.find_one({
+                        "userId": user["_id"],
+                        "marketType": market_bal,
+                        "asset": asset
+                    })
+                    
+                    initial_bal = config.get("virtualBalances", {}).get(market_bal.lower(), 10000 if is_cex else 10)
+                    cur_bal = cur_bal_doc["amount"] if cur_bal_doc else initial_bal
+                    
+                    new_bal = cur_bal - amount if analysis.decision == "BUY" else cur_bal + amount
+                    await update_virtual_balance(user_id, market_bal, asset, new_bal)
+                    logger.info(f"Balance Virtual {market_bal} actualizado: {cur_bal} -> {new_bal} ({asset})")
                 
                 result = await db.trades.insert_one(trade_data)
                 trade_id = str(result.inserted_id)
                 
                 # Notificar al TrackerService
-                from api.services.tracker_service import tracker_service
-                await tracker_service.add_trade_to_monitor(trade_id)
+                if tracker_service:
+                    await tracker_service.add_trade_to_monitor(trade_id)
                 
                 logger.info(f"Trade {trade_id} creado para {analysis.symbol}")
                 

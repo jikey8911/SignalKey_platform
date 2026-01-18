@@ -10,6 +10,45 @@ class DEXService:
     def __init__(self):
         self.base_url = "https://gmgn.ai"
 
+    async def get_current_price(self, symbol: str, user_id: str) -> float:
+        """
+        Obtiene el precio actual de un token DEX usando la API de GMGN.ai
+        """
+        config = await get_app_config(user_id)
+        api_key = config.get("gmgnApiKey")
+        
+        # El símbolo en DEX suele ser el CA (Contract Address)
+        # Si recibimos un símbolo corto (ej: $BONK), necesitamos mapearlo o buscarlo
+        # Por ahora asumimos que 'symbol' puede ser el address si viene de una señal analizada correctamente
+        address = symbol
+        
+        # Determinar red (solana por defecto para DEX en este contexto)
+        network = "solana" # Podría extraerse del símbolo si viene como 'solana:address'
+        if ":" in address:
+            network, address = address.split(":")
+            
+        if not api_key:
+            logger.warning(f"DEXService: No GMGN API Key found for user {user_id}. Using mock price for {address}")
+            return 1.0 # Mock fallback
+
+        try:
+            async with httpx.AsyncClient() as client:
+                # Endpoint hipotético basado en docs de GMGN
+                url = f"https://gmgn.ai/api/v1/token/info/{network}/{address}"
+                headers = {"Authorization": f"Bearer {api_key}"}
+                response = await client.get(url, headers=headers, timeout=10.0)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get("success"):
+                        return float(data["data"]["token"]["price"])
+                
+                logger.error(f"DEXService: Error GMGN API ({response.status_code}): {response.text}")
+                return 0.0
+        except Exception as e:
+            logger.error(f"DEXService: Error consultando precio en GMGN: {e}")
+            return 0.0
+
     async def close_all(self):
         """Cierra sesiones abiertas si las hubiera (para consistencia con CEXService)"""
         logger.info("DEXService: Sesiones cerradas.")
