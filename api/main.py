@@ -108,7 +108,9 @@ monitor_service = None
 
 # Importar y agregar routers
 from api.routers.telegram_router import router as telegram_router
+from api.routers.backtest_router import router as backtest_router
 app.include_router(telegram_router)
+app.include_router(backtest_router)
 
 async def process_signal_task(signal: TradingSignal, user_id: str = "default_user"):
     logger.info(f"Procesando señal de {signal.source} para usuario {user_id}")

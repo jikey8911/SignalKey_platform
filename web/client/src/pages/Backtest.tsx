@@ -2,8 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { SignalsKeiLayout } from '@/components/SignalsKeiLayout';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Play, BarChart3, TrendingUp, TrendingDown } from 'lucide-react';
+import { Play, BarChart3, TrendingUp, TrendingDown, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { useAuth } from '@/_core/hooks/useAuth';
+import { CONFIG } from '@/config';
 
 interface Candle {
   time: number;
@@ -34,33 +36,139 @@ interface BacktestResults {
   trades: Trade[];
 }
 
+interface Exchange {
+  exchangeId: string;
+  isActive: boolean;
+}
+
+interface Symbol {
+  symbol: string;
+  baseAsset: string;
+  quoteAsset: string;
+  price: number;
+  priceChange: number;
+  priceChangePercent: number;
+  volume: number;
+}
+
 export default function Backtest() {
+  const { user } = useAuth();
+
+  // Exchange, Market, Symbol selection
+  const [exchanges, setExchanges] = useState<Exchange[]>([]);
+  const [selectedExchange, setSelectedExchange] = useState<string>('');
+  const [markets, setMarkets] = useState<string[]>([]);
+  const [selectedMarket, setSelectedMarket] = useState<string>('spot');
+  const [symbols, setSymbols] = useState<Symbol[]>([]);
+  const [selectedSymbol, setSelectedSymbol] = useState<string>('');
+
+  // Loading states
+  const [loadingExchanges, setLoadingExchanges] = useState(false);
+  const [loadingMarkets, setLoadingMarkets] = useState(false);
+  const [loadingSymbols, setLoadingSymbols] = useState(false);
+
+  // Backtest config
   const [symbol, setSymbol] = useState('BTC/USDT');
   const [timeframe, setTimeframe] = useState('1h');
   const [days, setDays] = useState(30);
   const [isRunning, setIsRunning] = useState(false);
   const [results, setResults] = useState<BacktestResults | null>(null);
 
+  // Fetch user exchanges on mount
+  useEffect(() => {
+    if (user?.openId) {
+      fetchExchanges();
+    }
+  }, [user?.openId]);
+
+  // Fetch markets when exchange is selected
+  useEffect(() => {
+    if (selectedExchange && user?.openId) {
+      fetchMarkets();
+    }
+  }, [selectedExchange, user?.openId]);
+
+  // Fetch symbols when market is selected
+  useEffect(() => {
+    if (selectedExchange && selectedMarket && user?.openId) {
+      fetchSymbols();
+    }
+  }, [selectedExchange, selectedMarket, user?.openId]);
+
+  const fetchExchanges = async () => {
+    setLoadingExchanges(true);
+    try {
+      const response = await fetch(`${CONFIG.API_BASE_URL}/backtest/exchanges/${user?.openId}`);
+      const data = await response.json();
+      setExchanges(data);
+
+      // Auto-select if only one exchange
+      if (data.length === 1) {
+        setSelectedExchange(data[0].exchangeId);
+      }
+    } catch (error) {
+      console.error('Error fetching exchanges:', error);
+      toast.error('Error al cargar exchanges');
+    } finally {
+      setLoadingExchanges(false);
+    }
+  };
+
+  const fetchMarkets = async () => {
+    setLoadingMarkets(true);
+    try {
+      const response = await fetch(`${CONFIG.API_BASE_URL}/backtest/markets/${user?.openId}/${selectedExchange}`);
+      const data = await response.json();
+      setMarkets(data.markets || []);
+
+      // Default to 'spot' if available
+      if (data.markets && data.markets.includes('spot')) {
+        setSelectedMarket('spot');
+      } else if (data.markets && data.markets.length > 0) {
+        setSelectedMarket(data.markets[0]);
+      }
+    } catch (error) {
+      console.error('Error fetching markets:', error);
+      toast.error('Error al cargar mercados');
+    } finally {
+      setLoadingMarkets(false);
+    }
+  };
+
+  const fetchSymbols = async () => {
+    setLoadingSymbols(true);
+    try {
+      const response = await fetch(`${CONFIG.API_BASE_URL}/backtest/symbols/${user?.openId}/${selectedExchange}?market_type=${selectedMarket}`);
+      const data = await response.json();
+      setSymbols(data.symbols || []);
+    } catch (error) {
+      console.error('Error fetching symbols:', error);
+      toast.error('Error al cargar símbolos');
+    } finally {
+      setLoadingSymbols(false);
+    }
+  };
+
   const handleRunBacktest = async () => {
     setIsRunning(true);
     try {
       toast.loading('Ejecutando backtesting...');
-      
+
       // Simular resultados de backtesting con datos de velas
       await new Promise(resolve => setTimeout(resolve, 2000));
-      
+
       // Generar datos de velas simuladas
       const candles: Candle[] = [];
       let basePrice = 45000;
       const now = Date.now();
-      
+
       for (let i = 0; i < 100; i++) {
         const variation = (Math.random() - 0.5) * 1000;
         const open = basePrice;
         const close = basePrice + variation;
         const high = Math.max(open, close) + Math.random() * 500;
         const low = Math.min(open, close) - Math.random() * 500;
-        
+
         candles.push({
           time: now - (100 - i) * 3600000,
           open,
@@ -68,10 +176,10 @@ export default function Backtest() {
           low,
           close,
         });
-        
+
         basePrice = close;
       }
-      
+
       // Generar trades simulados
       const trades: Trade[] = [];
       for (let i = 10; i < candles.length - 5; i += 15) {
@@ -82,7 +190,7 @@ export default function Backtest() {
             price: candles[i].close,
             side: 'BUY',
           });
-          
+
           // SELL después de algunos candles
           const sellIndex = i + Math.floor(Math.random() * 5) + 2;
           if (sellIndex < candles.length) {
@@ -97,7 +205,7 @@ export default function Backtest() {
           }
         }
       }
-      
+
       const mockResults: BacktestResults = {
         symbol,
         timeframe,
@@ -111,7 +219,7 @@ export default function Backtest() {
         candles,
         trades,
       };
-      
+
       setResults(mockResults);
       toast.success('Backtesting completado');
     } catch (error) {
@@ -134,7 +242,7 @@ export default function Backtest() {
     const minPrice = Math.min(...candles.map(c => c.low)) * 0.99;
     const maxPrice = Math.max(...candles.map(c => c.high)) * 1.01;
     const priceRange = maxPrice - minPrice;
-    
+
     const width = 1000;
     const height = 400;
     const candleWidth = width / candles.length;
@@ -171,10 +279,10 @@ export default function Backtest() {
           const closeY = priceToY(candle.close);
           const highY = priceToY(candle.high);
           const lowY = priceToY(candle.low);
-          
+
           const isGreen = candle.close >= candle.open;
           const color = isGreen ? '#10b981' : '#ef4444';
-          
+
           return (
             <g key={`candle-${index}`}>
               {/* Wick */}
@@ -197,17 +305,17 @@ export default function Backtest() {
         {trades.map((trade, index) => {
           const candleIndex = candles.findIndex(c => c.time === trade.time);
           if (candleIndex === -1) return null;
-          
+
           const x = timeToX(candleIndex) + candleWidth / 2;
           const y = priceToY(trade.price) - 20;
           const isBuy = trade.side === 'BUY';
           const markerColor = isBuy ? '#3b82f6' : '#f59e0b';
-          
+
           return (
             <g key={`trade-${index}`}>
               {/* Marker Circle */}
               <circle cx={x} cy={y} r={6} fill={markerColor} stroke="white" strokeWidth="2" />
-              
+
               {/* Label */}
               <text
                 x={x}
@@ -220,7 +328,7 @@ export default function Backtest() {
               >
                 {isBuy ? '↓ BUY' : '↑ SELL'}
               </text>
-              
+
               {/* Profit Label for SELL */}
               {!isBuy && trade.profit !== undefined && (
                 <text
@@ -258,19 +366,63 @@ export default function Backtest() {
         {/* Configuration */}
         <Card className="p-6">
           <h3 className="text-lg font-semibold text-foreground mb-4">Configuración</h3>
+
+          {/* Exchange and Market Selection */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <div>
               <label className="block text-sm font-semibold text-foreground mb-2">
-                Símbolo
+                Exchange
               </label>
-              <input
-                type="text"
-                value={symbol}
-                onChange={(e) => setSymbol(e.target.value)}
-                placeholder="BTC/USDT"
-                className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-              />
+              {loadingExchanges ? (
+                <div className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg bg-background">
+                  <Loader2 className="animate-spin" size={16} />
+                  <span className="text-muted-foreground">Cargando...</span>
+                </div>
+              ) : exchanges.length === 0 ? (
+                <div className="px-4 py-2 border border-border rounded-lg bg-background text-muted-foreground">
+                  No hay exchanges configurados
+                </div>
+              ) : (
+                <select
+                  value={selectedExchange}
+                  onChange={(e) => setSelectedExchange(e.target.value)}
+                  className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="">Seleccionar exchange</option>
+                  {exchanges.map((ex) => (
+                    <option key={ex.exchangeId} value={ex.exchangeId}>
+                      {ex.exchangeId.toUpperCase()}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-foreground mb-2">
+                Mercado
+              </label>
+              {loadingMarkets ? (
+                <div className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg bg-background">
+                  <Loader2 className="animate-spin" size={16} />
+                  <span className="text-muted-foreground">Cargando...</span>
+                </div>
+              ) : (
+                <select
+                  value={selectedMarket}
+                  onChange={(e) => setSelectedMarket(e.target.value)}
+                  disabled={!selectedExchange || markets.length === 0}
+                  className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                >
+                  {markets.map((market) => (
+                    <option key={market} value={market}>
+                      {market.toUpperCase()}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+
             <div>
               <label className="block text-sm font-semibold text-foreground mb-2">
                 Timeframe
@@ -288,23 +440,84 @@ export default function Backtest() {
                 <option value="1d">1 día</option>
               </select>
             </div>
-            <div>
-              <label className="block text-sm font-semibold text-foreground mb-2">
-                Días históricos
-              </label>
-              <input
-                type="number"
-                value={days}
-                onChange={(e) => setDays(parseInt(e.target.value))}
-                min="1"
-                max="365"
-                className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-            </div>
           </div>
+
+          {/* Symbols List */}
+          {selectedExchange && selectedMarket && (
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-foreground mb-2">
+                Símbolos Disponibles
+              </label>
+              {loadingSymbols ? (
+                <div className="flex items-center justify-center gap-2 p-8 border border-border rounded-lg bg-background">
+                  <Loader2 className="animate-spin" size={24} />
+                  <span className="text-muted-foreground">Cargando símbolos...</span>
+                </div>
+              ) : symbols.length === 0 ? (
+                <div className="p-4 border border-border rounded-lg bg-background text-muted-foreground text-center">
+                  No hay símbolos disponibles
+                </div>
+              ) : (
+                <div className="border border-border rounded-lg bg-background max-h-64 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-muted border-b border-border">
+                      <tr>
+                        <th className="text-left py-2 px-4 font-semibold">Símbolo</th>
+                        <th className="text-right py-2 px-4 font-semibold">Precio</th>
+                        <th className="text-right py-2 px-4 font-semibold">Cambio 24h</th>
+                        <th className="text-center py-2 px-4 font-semibold">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {symbols.map((sym) => (
+                        <tr
+                          key={sym.symbol}
+                          className="border-b border-border hover:bg-muted/50 cursor-pointer"
+                          onClick={() => {
+                            setSelectedSymbol(sym.symbol);
+                            setSymbol(sym.symbol);
+                          }}
+                        >
+                          <td className="py-3 px-4 font-medium">{sym.symbol}</td>
+                          <td className="py-3 px-4 text-right">${sym.price.toFixed(2)}</td>
+                          <td className={`py-3 px-4 text-right font-semibold ${sym.priceChangePercent >= 0 ? 'text-green-500' : 'text-red-500'
+                            }`}>
+                            {sym.priceChangePercent >= 0 ? '+' : ''}{sym.priceChangePercent.toFixed(2)}%
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            {selectedSymbol === sym.symbol && (
+                              <span className="text-xs bg-primary text-primary-foreground px-2 py-1 rounded">
+                                Seleccionado
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Days Input */}
+          <div className="mb-6">
+            <label className="block text-sm font-semibold text-foreground mb-2">
+              Días históricos
+            </label>
+            <input
+              type="number"
+              value={days}
+              onChange={(e) => setDays(parseInt(e.target.value))}
+              min="1"
+              max="365"
+              className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+
           <Button
             onClick={handleRunBacktest}
-            disabled={isRunning}
+            disabled={isRunning || !selectedSymbol}
             className="flex items-center gap-2 w-full md:w-auto"
           >
             <Play size={18} />
@@ -321,7 +534,7 @@ export default function Backtest() {
                 <BarChart3 className="text-primary" size={24} />
                 <h3 className="text-lg font-semibold text-foreground">Resultados</h3>
               </div>
-              
+
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                 <StatBox label="Total de Trades" value={results.totalTrades} />
                 <StatBox label="Win Rate" value={results.winRate} unit="%" />
@@ -341,7 +554,7 @@ export default function Backtest() {
               <div className="overflow-x-auto">
                 <CandleChart candles={results.candles} trades={results.trades} />
               </div>
-              
+
               {/* Legend */}
               <div className="flex gap-6 mt-4 text-sm">
                 <div className="flex items-center gap-2">

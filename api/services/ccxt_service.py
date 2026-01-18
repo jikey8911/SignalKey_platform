@@ -149,4 +149,97 @@ class CCXTService:
                 pass
         self.public_instances = {}
 
+    async def get_markets(self, exchange_id: str) -> list:
+        """
+        Obtiene los tipos de mercado disponibles para un exchange
+        
+        Args:
+            exchange_id: ID del exchange
+            
+        Returns:
+            Lista de tipos de mercado únicos (spot, future, swap, etc.)
+        """
+        try:
+            instance = await self.create_public_instance(exchange_id)
+            if not instance:
+                return []
+            
+            await instance.load_markets()
+            
+            # Extraer tipos de mercado únicos
+            market_types = set()
+            for market_id, market in instance.markets.items():
+                market_type = market.get('type', 'spot')
+                market_types.add(market_type)
+            
+            return sorted(list(market_types))
+            
+        except Exception as e:
+            logger.error(f"Error fetching markets for {exchange_id}: {e}")
+            return []
+
+    async def get_symbols_with_tickers(self, exchange_id: str, market_type: str = 'spot') -> list:
+        """
+        Obtiene símbolos con datos de precio y cambio porcentual
+        
+        Args:
+            exchange_id: ID del exchange
+            market_type: Tipo de mercado (spot, future, swap, etc.)
+            
+        Returns:
+            Lista de diccionarios con symbol, price, priceChange, priceChangePercent
+        """
+        try:
+            instance = await self.create_public_instance(exchange_id)
+            if not instance:
+                return []
+            
+            await instance.load_markets()
+            
+            # Filtrar símbolos por tipo de mercado
+            filtered_symbols = []
+            for symbol, market in instance.markets.items():
+                if market.get('type', 'spot') == market_type and market.get('active', True):
+                    filtered_symbols.append(symbol)
+            
+            # Limitar a 100 símbolos para evitar sobrecarga
+            filtered_symbols = filtered_symbols[:100]
+            
+            # Obtener tickers
+            try:
+                tickers = await instance.fetch_tickers(filtered_symbols)
+            except Exception as e:
+                logger.warning(f"Error fetching tickers for {exchange_id}, trying individual fetch: {e}")
+                # Si falla fetch_tickers, intentar uno por uno (más lento pero más confiable)
+                tickers = {}
+                for symbol in filtered_symbols[:20]:  # Limitar aún más si es individual
+                    try:
+                        ticker = await instance.fetch_ticker(symbol)
+                        tickers[symbol] = ticker
+                    except:
+                        continue
+            
+            # Formatear respuesta
+            result = []
+            for symbol, ticker in tickers.items():
+                market = instance.markets.get(symbol, {})
+                result.append({
+                    'symbol': symbol,
+                    'baseAsset': market.get('base', ''),
+                    'quoteAsset': market.get('quote', ''),
+                    'price': ticker.get('last', 0),
+                    'priceChange': ticker.get('change', 0),
+                    'priceChangePercent': ticker.get('percentage', 0),
+                    'volume': ticker.get('quoteVolume', 0)
+                })
+            
+            # Ordenar por volumen descendente
+            result.sort(key=lambda x: x['volume'], reverse=True)
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error fetching symbols with tickers for {exchange_id}: {e}")
+            return []
+
 ccxt_service = CCXTService()
