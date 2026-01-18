@@ -29,46 +29,73 @@ class SignalBotService:
             return ExecutionResult(success=False, message="Límite de bots activos alcanzado")
 
         demo_mode = config.get("demoMode", True)
-        market_type = analysis.market_type # "CEX" o "DEX"
-        symbol = analysis.symbol
+        market_type = analysis.market_type # "CEX", "FUTURES" o "DEX"
         
-        # Determinar precios de TP y SL basados en porcentajes de la configuración
+        # Normalizar símbolo usando CEXService
+        symbol = self.cex_service._normalize_symbol(analysis.symbol)
+        
+        # Obtener precio actual real para la entrada
+        current_price = await self.cex_service.get_current_price(symbol, user_id)
+        if current_price <= 0:
+            # Fallback a precio de la IA si no se puede obtener el real
+            current_price = analysis.parameters.get("entry_price") or 0.0
+            
+        if current_price <= 0:
+            return ExecutionResult(success=False, message=f"No se pudo obtener precio para {symbol}")
+
+        # Determinar precios de TP y SL
+        # Prioridad: 1. Parámetros de la IA, 2. Configuración de estrategia del bot
         strategy = config.get("botStrategy", {})
         tp_levels_count = strategy.get("tpLevels", 3)
         tp_percent_step = strategy.get("tpPercent", 2.0)
         sl_percent = strategy.get("slPercent", 1.5)
         
-        # Obtener precio de entrada (simulado o real)
-        entry_price = 0.0
-        if demo_mode:
-            # Simulación de precio de entrada
-            entry_price = analysis.parameters.get("entry_price") or 100.0 # Placeholder
-        else:
-            # Aquí se llamaría al servicio real para obtener precio o ejecutar orden market
-            pass
-
+        entry_price = current_price
+        
         # Calcular niveles de TP
         take_profits = []
-        for i in range(1, tp_levels_count + 1):
-            price = entry_price * (1 + (tp_percent_step * i / 100))
-            take_profits.append({
-                "level": i,
-                "price": price,
-                "percent": strategy.get("sellPercentPerTP", 33.3),
-                "status": "pending"
-            })
+        ai_tps = analysis.parameters.get("tp", [])
+        
+        if ai_tps and len(ai_tps) > 0:
+            # Usar TPs de la IA si vienen definidos
+            for i, tp in enumerate(ai_tps):
+                take_profits.append({
+                    "level": i + 1,
+                    "price": tp.get("price"),
+                    "percent": tp.get("percent", strategy.get("sellPercentPerTP", 33.3)),
+                    "status": "pending"
+                })
+        else:
+            # Generar TPs basados en porcentajes de configuración
+            for i in range(1, tp_levels_count + 1):
+                price = entry_price * (1 + (tp_percent_step * i / 100))
+                take_profits.append({
+                    "level": i,
+                    "price": price,
+                    "percent": strategy.get("sellPercentPerTP", 33.3),
+                    "status": "pending"
+                })
 
-        stop_loss = entry_price * (1 - (sl_percent / 100))
+        # Stop Loss
+        stop_loss = analysis.parameters.get("sl") or (entry_price * (1 - (sl_percent / 100)))
+
+        # Monto de inversión
+        is_cex = market_type in ["CEX", "SPOT", "FUTURES"]
+        max_amount = config.get("investmentLimits", {}).get("cexMaxAmount" if is_cex else "dexMaxAmount", 10.0)
+        suggested_amount = analysis.parameters.get("amount", 0)
+        amount = min(suggested_amount, max_amount) if suggested_amount > 0 else max_amount
 
         # Crear el documento del bot (Trade)
         bot_doc = {
             "userId": user_id,
             "symbol": symbol,
-            "side": "BUY",
+            "side": analysis.decision.upper(),
             "entryPrice": entry_price,
+            "currentPrice": entry_price,
             "stopLoss": stop_loss,
             "takeProfits": take_profits,
-            "amount": config.get("investmentLimits", {}).get("cexMaxAmount" if market_type == "CEX" else "dexMaxAmount", 10.0),
+            "amount": amount,
+            "leverage": analysis.parameters.get("leverage", 1),
             "marketType": market_type,
             "isDemo": demo_mode,
             "status": "active",
@@ -81,13 +108,13 @@ class SignalBotService:
         
         # Si es demo, actualizar balance virtual
         if demo_mode:
-            asset = "USDT" if market_type == "CEX" else "SOL"
-            # Lógica de balance virtual aquí...
-            pass
+            asset = "USDT" if is_cex else "SOL"
+            await update_virtual_balance(user_id, "CEX" if is_cex else "DEX", asset, -amount, is_relative=True)
+            logger.info(f"Virtual balance updated (Bot Activation): -{amount} {asset}")
 
         return ExecutionResult(
             success=True, 
-            message=f"Bot activado para {symbol} ({market_type}) en modo {'DEMO' if demo_mode else 'REAL'}",
+            message=f"Bot activado para {symbol} ({market_type}) a {entry_price}",
             details={"botId": str(inserted_id)}
         )
 
@@ -134,8 +161,10 @@ class SignalBotService:
                 )
 
     async def _get_current_price(self, bot: Dict[str, Any]) -> float:
-        # Lógica para obtener precio real vía CCXT o DEX API
-        return bot["entryPrice"] * 1.01 # Simulación temporal
+        """Obtiene el precio actual real usando CEXService."""
+        user = await db.users.find_one({"_id": bot["userId"]})
+        user_id = user["openId"] if user else "default_user"
+        return await self.cex_service.get_current_price(bot["symbol"], user_id)
 
     async def _close_bot(self, bot: Dict[str, Any], exit_price: float, status: str, reason: str):
         pnl = ((exit_price - bot["entryPrice"]) / bot["entryPrice"]) * 100
