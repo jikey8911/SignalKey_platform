@@ -548,16 +548,35 @@ export default function Settings() {
                         }
                         const loadingToast = toast.loading("Probando conexión...");
                         try {
+                          // 1. Probar conexión básica
                           const res = await fetch(`${CONFIG.API_BASE_URL}/test-connection`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(ex)
                           });
                           const data = await res.json();
-                          toast.dismiss(loadingToast);
+
                           if (data.success) {
-                            toast.success("Conexión Exitosa: " + data.message);
+                            // 2. Si es exitosa, intentar cargar tipos de mercados disponibles
+                            try {
+                              const marketsRes = await fetch(`${CONFIG.API_BASE_URL}/backtest/markets/${authUser?.openId}/${ex.exchangeId}`);
+                              const marketsData = await marketsRes.json();
+                              const marketsList = marketsData.markets || [];
+
+                              toast.dismiss(loadingToast);
+                              toast.success(
+                                <div>
+                                  <div className="font-bold">Conexión Exitosa</div>
+                                  <div className="text-xs mt-1">Mercados disponibles: {marketsList.join(', ') || 'Ninguno detectado'}</div>
+                                </div>
+                              );
+                            } catch (mError) {
+                              console.error("Error fetching markets for test:", mError);
+                              toast.dismiss(loadingToast);
+                              toast.success("Conexión Exitosa (No se pudieron cargar detalles de mercados)");
+                            }
                           } else {
+                            toast.dismiss(loadingToast);
                             toast.error("Error: " + data.message);
                           }
                         } catch (e: any) {
@@ -566,7 +585,7 @@ export default function Settings() {
                         }
                       }}
                     >
-                      Probar 🔌
+                      Probar y Ver Mercados 🔌
                     </Button>
                   </div>
                 </div>

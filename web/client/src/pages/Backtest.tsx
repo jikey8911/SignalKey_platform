@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Play, BarChart3, TrendingUp, TrendingDown, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/_core/hooks/useAuth';
+import { trpc } from '@/lib/trpc';
 import { CONFIG } from '@/config';
 
 interface Candle {
@@ -55,17 +56,9 @@ export default function Backtest() {
   const { user } = useAuth();
 
   // Exchange, Market, Symbol selection
-  const [exchanges, setExchanges] = useState<Exchange[]>([]);
   const [selectedExchange, setSelectedExchange] = useState<string>('');
-  const [markets, setMarkets] = useState<string[]>([]);
   const [selectedMarket, setSelectedMarket] = useState<string>('spot');
-  const [symbols, setSymbols] = useState<Symbol[]>([]);
   const [selectedSymbol, setSelectedSymbol] = useState<string>('');
-
-  // Loading states
-  const [loadingExchanges, setLoadingExchanges] = useState(false);
-  const [loadingMarkets, setLoadingMarkets] = useState(false);
-  const [loadingSymbols, setLoadingSymbols] = useState(false);
 
   // Backtest config
   const [symbol, setSymbol] = useState('BTC/USDT');
@@ -74,80 +67,40 @@ export default function Backtest() {
   const [isRunning, setIsRunning] = useState(false);
   const [results, setResults] = useState<BacktestResults | null>(null);
 
-  // Fetch user exchanges on mount
+  // TRPC Queries
+  const { data: exchanges = [], isLoading: loadingExchanges } = trpc.backtest.getExchanges.useQuery(undefined, {
+    enabled: !!user?.openId
+  });
+
+  const { data: marketData, isLoading: loadingMarkets } = trpc.backtest.getMarkets.useQuery(
+    { exchangeId: selectedExchange },
+    { enabled: !!selectedExchange && !!user?.openId }
+  );
+  const markets = marketData?.markets || [];
+
+  const { data: symbolData, isLoading: loadingSymbols } = trpc.backtest.getSymbols.useQuery(
+    { exchangeId: selectedExchange, marketType: selectedMarket },
+    { enabled: !!selectedExchange && !!selectedMarket && !!user?.openId }
+  );
+  const symbols = symbolData?.symbols || [];
+
+  // Auto-select exchange effect
   useEffect(() => {
-    if (user?.openId) {
-      fetchExchanges();
+    if (exchanges.length === 1 && !selectedExchange) {
+      setSelectedExchange(exchanges[0].exchangeId);
     }
-  }, [user?.openId]);
+  }, [exchanges, selectedExchange]);
 
-  // Fetch markets when exchange is selected
+  // Auto-select market effect
   useEffect(() => {
-    if (selectedExchange && user?.openId) {
-      fetchMarkets();
-    }
-  }, [selectedExchange, user?.openId]);
-
-  // Fetch symbols when market is selected
-  useEffect(() => {
-    if (selectedExchange && selectedMarket && user?.openId) {
-      fetchSymbols();
-    }
-  }, [selectedExchange, selectedMarket, user?.openId]);
-
-  const fetchExchanges = async () => {
-    setLoadingExchanges(true);
-    try {
-      const response = await fetch(`${CONFIG.API_BASE_URL}/backtest/exchanges/${user?.openId}`);
-      const data = await response.json();
-      setExchanges(data);
-
-      // Auto-select if only one exchange
-      if (data.length === 1) {
-        setSelectedExchange(data[0].exchangeId);
-      }
-    } catch (error) {
-      console.error('Error fetching exchanges:', error);
-      toast.error('Error al cargar exchanges');
-    } finally {
-      setLoadingExchanges(false);
-    }
-  };
-
-  const fetchMarkets = async () => {
-    setLoadingMarkets(true);
-    try {
-      const response = await fetch(`${CONFIG.API_BASE_URL}/backtest/markets/${user?.openId}/${selectedExchange}`);
-      const data = await response.json();
-      setMarkets(data.markets || []);
-
-      // Default to 'spot' if available
-      if (data.markets && data.markets.includes('spot')) {
+    if (markets.length > 0) {
+      if (markets.includes('spot')) {
         setSelectedMarket('spot');
-      } else if (data.markets && data.markets.length > 0) {
-        setSelectedMarket(data.markets[0]);
+      } else {
+        setSelectedMarket(markets[0]);
       }
-    } catch (error) {
-      console.error('Error fetching markets:', error);
-      toast.error('Error al cargar mercados');
-    } finally {
-      setLoadingMarkets(false);
     }
-  };
-
-  const fetchSymbols = async () => {
-    setLoadingSymbols(true);
-    try {
-      const response = await fetch(`${CONFIG.API_BASE_URL}/backtest/symbols/${user?.openId}/${selectedExchange}?market_type=${selectedMarket}`);
-      const data = await response.json();
-      setSymbols(data.symbols || []);
-    } catch (error) {
-      console.error('Error fetching symbols:', error);
-      toast.error('Error al cargar símbolos');
-    } finally {
-      setLoadingSymbols(false);
-    }
-  };
+  }, [markets]);
 
   const handleRunBacktest = async () => {
     setIsRunning(true);

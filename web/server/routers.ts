@@ -157,6 +157,40 @@ export const appRouter = router({
       return await VirtualBalance.find({ userId: mongoUser._id });
     }),
   }),
+
+  backtest: router({
+    getExchanges: protectedProcedure.query(async ({ ctx }) => {
+      try {
+        const res = await fetch(`${INTERNAL_API_URL}/backtest/exchanges/${ctx.user.openId}`);
+        return await res.json();
+      } catch (e) {
+        console.error("Error proxying getExchanges:", e);
+        return [];
+      }
+    }),
+    getMarkets: protectedProcedure
+      .input(z.object({ exchangeId: z.string() }))
+      .query(async ({ ctx, input }) => {
+        try {
+          const res = await fetch(`${INTERNAL_API_URL}/backtest/markets/${ctx.user.openId}/${input.exchangeId}`);
+          return await res.json();
+        } catch (e) {
+          console.error("Error proxying getMarkets:", e);
+          return { markets: [] };
+        }
+      }),
+    getSymbols: protectedProcedure
+      .input(z.object({ exchangeId: z.string(), marketType: z.string() }))
+      .query(async ({ ctx, input }) => {
+        try {
+          const res = await fetch(`${INTERNAL_API_URL}/backtest/symbols/${ctx.user.openId}/${input.exchangeId}?market_type=${input.marketType}`);
+          return await res.json();
+        } catch (e) {
+          console.error("Error proxying getSymbols:", e);
+          return { symbols: [] };
+        }
+      }),
+  }),
 });
 
 export type AppRouter = typeof appRouter;

@@ -1,5 +1,7 @@
 import ccxt.async_support as ccxt
 import logging
+import aiohttp
+from aiohttp.resolver import ThreadedResolver
 from typing import Optional, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
@@ -7,6 +9,16 @@ logger = logging.getLogger(__name__)
 class CCXTService:
     def __init__(self):
         self.public_instances = {}
+
+    def _create_custom_session(self):
+        """Creates an aiohttp session with ThreadedResolver to bypass Windows Async DNS issues"""
+        try:
+            resolver = ThreadedResolver()
+            connector = aiohttp.TCPConnector(resolver=resolver)
+            return aiohttp.ClientSession(connector=connector)
+        except Exception as e:
+            logger.error(f"Error creating custom session: {e}")
+            return None
 
     async def create_public_instance(self, exchange_id: str):
         exchange_id = exchange_id.lower()
@@ -22,6 +34,12 @@ class CCXTService:
                     'fetchCurrencies': False
                 }
             })
+            
+            # Inject custom session for Windows DNS fix
+            session = self._create_custom_session()
+            if session:
+                instance.session = session
+
             if exchange_id == 'okx':
                 instance.has['fetchCurrencies'] = False
             self.public_instances[exchange_id] = instance
@@ -62,6 +80,11 @@ class CCXTService:
             if uid: config['uid'] = uid
             
             instance = exchange_class(config)
+            
+            # Inject custom session for Windows DNS fix
+            session = self._create_custom_session()
+            if session:
+                instance.session = session
             
             # Forzar desactivación de fetchCurrencies en el objeto 'has' para OKX
             if exchange_id == 'okx':

@@ -86,8 +86,11 @@ monitor_service = None
 # Importar y agregar routers
 from api.routers.telegram_router import router as telegram_router
 from api.routers.backtest_router import router as backtest_router
+from api.routers.websocket_router import router as websocket_router
+
 app.include_router(telegram_router)
 app.include_router(backtest_router)
+app.include_router(websocket_router)
 
 async def process_signal_task(signal: TradingSignal, user_id: str = "default_user"):
     """

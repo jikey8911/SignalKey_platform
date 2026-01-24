@@ -4,12 +4,30 @@ import { ENV } from './_core/env';
 const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/signalkey_platform';
 
 export const connectMongo = async () => {
-  if (mongoose.connection.readyState >= 1) return;
+  if (mongoose.connection.readyState >= 1) {
+    console.log('[MongoDB] Connection already active');
+    return;
+  }
   try {
-    await mongoose.connect(MONGODB_URI);
-    console.log('Connected to MongoDB');
+    console.log('[MongoDB] Attempting to connect to:', MONGODB_URI);
+    await mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 5000 });
+    console.log('[MongoDB] Connected successfully');
+
+    // Add event listeners for connection events
+    mongoose.connection.on('connected', () => {
+      console.log('[MongoDB] Mongoose default connection open to ' + MONGODB_URI);
+    });
+
+    mongoose.connection.on('error', (err) => {
+      console.error('[MongoDB] Mongoose default connection error: ' + err);
+    });
+
+    mongoose.connection.on('disconnected', () => {
+      console.log('[MongoDB] Mongoose default connection disconnected');
+    });
+
   } catch (error) {
-    console.error('MongoDB connection error:', error);
+    console.error('[MongoDB] Connection error:', error);
   }
 };
 

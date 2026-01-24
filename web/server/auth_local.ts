@@ -68,33 +68,35 @@ authRouter.post("/login", async (req, res) => {
             return res.status(401).json({ error: "Invalid credentials" });
         }
 
-        // Handle case where user exists but has no password (OAuth user trying to use local login?)
-        // In strict local mode, we might just fail. 
-        // Or we could allow setting a password if one doesn't exist? For now, fail.
-
         const isValid = await bcrypt.compare(password, user.password);
 
         if (!isValid) {
             return res.status(401).json({ error: "Invalid credentials" });
         }
 
-        const token = await sdk.signSession({
-            openId: user.openId,
-            appId: process.env.VITE_APP_ID || "signalkey-dev",
-            name: user.name || username
-        });
+        try {
+            const token = await sdk.signSession({
+                openId: user.openId,
+                appId: process.env.VITE_APP_ID || "signalkey-dev",
+                name: user.name || username
+            });
 
-        res.cookie(COOKIE_NAME, token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            maxAge: ONE_YEAR_MS,
-            path: "/",
-        });
+            res.cookie(COOKIE_NAME, token, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === "production",
+                maxAge: ONE_YEAR_MS,
+                path: "/",
+            });
 
-        // Update last signed in
-        await User.updateOne({ _id: user._id }, { $set: { lastSignedIn: new Date() } });
+            // Update last signed in
+            await User.updateOne({ _id: user._id }, { $set: { lastSignedIn: new Date() } });
 
-        return res.json({ success: true, user: { openId: user.openId, name: user.name } });
+            return res.json({ success: true, user: { openId: user.openId, name: user.name } });
+
+        } catch (signError) {
+            console.error("[Auth] Session signing error:", signError);
+            throw signError;
+        }
 
     } catch (error) {
         console.error("Login error:", error);

@@ -1,5 +1,6 @@
 from api.src.infrastructure.adapters.persistence.mongodb_signal_repository import MongoDBSignalRepository
 from api.src.infrastructure.adapters.ai.ai_adapter import AIAdapter
+from api.src.infrastructure.adapters.exchange.cex_adapter import CEXAdapter
 from api.src.application.use_cases.process_signal import ProcessSignalUseCase
 from api.models.mongodb import db
 from api.services.ai_service import AIService
@@ -17,6 +18,7 @@ class Container:
         self.signal_repository = MongoDBSignalRepository(db)
         self.ai_service_internal = AIService()
         self.ai_adapter = AIAdapter(self.ai_service_internal)
+        self.cex_adapter = CEXAdapter() # Nuevo adaptador CEX
         self.notification_adapter = SocketNotificationAdapter()
         
         # Necesitamos el bot_service que se define en main.py originalmente
