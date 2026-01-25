@@ -87,10 +87,58 @@ monitor_service = None
 from api.routers.telegram_router import router as telegram_router
 from api.routers.backtest_router import router as backtest_router
 from api.routers.websocket_router import router as websocket_router
+from api.routers.ml_router import router as ml_router
+from api.routers.market_data_router import router as market_data_router
 
 app.include_router(telegram_router)
 app.include_router(backtest_router)
 app.include_router(websocket_router)
+app.include_router(ml_router)
+app.include_router(market_data_router)
+
+@app.get("/status/{user_id}")
+async def get_user_status(user_id: str):
+    """
+    Retorna el estado del sistema para un usuario específico.
+    Usado por el Dashboard para mostrar información en tiempo real.
+    """
+    try:
+        # Buscar usuario
+        user = await db.users.find_one({"openId": user_id})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Obtener configuración
+        config = await db.app_configs.find_one({"userId": user["_id"]})
+        
+        # Contar bots activos
+        active_bots = await db.trades.count_documents({
+            "userId": user["_id"],
+            "status": "active"
+        })
+        
+        # Contar señales recientes (últimas 24h)
+        from datetime import datetime, timedelta
+        recent_signals = await db.signals.count_documents({
+            "userId": user["_id"],
+            "createdAt": {"$gte": datetime.utcnow() - timedelta(hours=24)}
+        })
+        
+        return {
+            "user_id": user_id,
+            "is_auto_enabled": config.get("isAutoEnabled", False) if config else False,
+            "demo_mode": config.get("demoMode", True) if config else True,
+            "active_bots": active_bots,
+            "recent_signals_24h": recent_signals,
+            "telegram_connected": bool(config.get("telegramBotToken")) if config else False,
+            "ai_provider": config.get("aiProvider", "gemini") if config else "gemini",
+            "status": "online"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting status for {user_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 async def process_signal_task(signal: TradingSignal, user_id: str = "default_user"):
     """

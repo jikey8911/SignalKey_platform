@@ -183,7 +183,17 @@ export const appRouter = router({
       .input(z.object({ exchangeId: z.string(), marketType: z.string() }))
       .query(async ({ ctx, input }) => {
         try {
-          const res = await fetch(`${INTERNAL_API_URL}/backtest/symbols/${ctx.user.openId}/${input.exchangeId}?market_type=${input.marketType}`);
+          console.log(`[TRPC] getSymbols for ${input.exchangeId} ${input.marketType}`);
+          const url = `${INTERNAL_API_URL}/backtest/symbols/${ctx.user.openId}/${input.exchangeId}?market_type=${input.marketType}`;
+          const res = await fetch(url);
+          console.log(`[TRPC] getSymbols status: ${res.status}`);
+
+          if (!res.ok) {
+            const text = await res.text();
+            console.error(`[TRPC] Backtest API Error: ${text}`);
+            return { symbols: [] };
+          }
+
           return await res.json();
         } catch (e) {
           console.error("Error proxying getSymbols:", e);

@@ -1,0 +1,21 @@
+test_train_and_predict_flow (api.tests.test_end_to_end.TestEndToEnd.test_train_and_predict_flow) ... FAIL
+
+======================================================================
+FAIL: test_train_and_predict_flow (api.tests.test_end_to_end.TestEndToEnd.test_train_and_predict_flow)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Python314\Lib\asyncio\runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Python314\Lib\asyncio\base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "E:\antigravity\signaalKei_platform\api\tests\test_end_to_end.py", line 100, in test_train_and_predict_flow
+    self.assertIn(prediction['decision'], ['BUY', 'SELL', 'HOLD'])
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'BUY/SELL (Check Strategy)' not found in ['BUY', 'SELL', 'HOLD']
+
+----------------------------------------------------------------------
+Ran 1 test in 4.399s
+
+FAILED (failures=1)

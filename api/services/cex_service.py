@@ -92,7 +92,23 @@ class CEXService:
         if instance:
             self.exchanges[cache_key] = instance
         
+        if instance:
+            self.exchanges[cache_key] = instance
+        
         return instance, config
+
+    async def get_public_exchange_instance(self, exchange_id: str):
+        """Obtiene una instancia PÚBLICA (sin claves) para datos de mercado"""
+        if not exchange_id: return None
+        
+        if exchange_id in self.public_exchanges:
+            return self.public_exchanges[exchange_id]
+            
+        instance = await ccxt_service.create_public_instance(exchange_id)
+        if instance:
+            self.public_exchanges[exchange_id] = instance
+            
+        return instance
 
     def _normalize_symbol(self, symbol: str) -> str:
         """Normaliza el símbolo al formato de ccxt (e.g. BTC/USDT)"""

@@ -64,8 +64,13 @@ export default function Backtest() {
   const [symbol, setSymbol] = useState('BTC/USDT');
   const [timeframe, setTimeframe] = useState('1h');
   const [days, setDays] = useState(30);
+  const [strategy, setStrategy] = useState('auto'); // 'sma', 'standard', 'sniper', 'auto'
+  const [useAI, setUseAI] = useState(true); // Deprecated in UI but used for API compat if needed
   const [isRunning, setIsRunning] = useState(false);
   const [results, setResults] = useState<BacktestResults | null>(null);
+
+  // Computed property for API
+  const apiUseAI = strategy !== 'sma';
 
   // TRPC Queries
   const { data: exchanges = [], isLoading: loadingExchanges } = trpc.backtest.getExchanges.useQuery(undefined, {
@@ -78,9 +83,16 @@ export default function Backtest() {
   );
   const markets = marketData?.markets || [];
 
-  const { data: symbolData, isLoading: loadingSymbols } = trpc.backtest.getSymbols.useQuery(
+  const { data: symbolData, isLoading: loadingSymbols, refetch: refetchSymbols, isFetching: isFetchingSymbols } = trpc.backtest.getSymbols.useQuery(
     { exchangeId: selectedExchange, marketType: selectedMarket },
-    { enabled: !!selectedExchange && !!selectedMarket && !!user?.openId }
+    {
+      enabled: !!selectedExchange && !!selectedMarket && !!user?.openId,
+      refetchOnWindowFocus: false,
+      staleTime: 0,
+      gcTime: 0, // Replaces cacheTime in v5
+      // keepPreviousData is also deprecated, use placeholderData if needed, but let's just remove it if errored or keep if v4
+      // Error log didn't mention keepPreviousData so assuming it refers to v5 types where cacheTime is gone.
+    }
   );
   const symbols = symbolData?.symbols || [];
 
@@ -102,25 +114,93 @@ export default function Backtest() {
     }
   }, [markets]);
 
-  const handleRunBacktest = async () => {
-    setIsRunning(true);
+  const handleTrainModel = async () => {
+    if (!selectedSymbol) return;
+    const toastId = toast.loading(`Entrenando modelo LSTM para ${selectedSymbol}... (Esto puede tardar)`);
     try {
-      toast.loading('Ejecutando backtesting...');
+      const res = await fetch(`${CONFIG.API_BASE_URL}/ml/train`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol: selectedSymbol,
+          days: 365,
+          epochs: 20
+        })
+      });
+      if (res.ok) toast.success("Entrenamiento iniciado en segundo plano", { id: toastId });
+      else throw new Error("Error iniciando entrenamiento");
+    } catch (e: any) {
+      toast.error(e.message, { id: toastId });
+    }
+  };
 
-      // Simular resultados de backtesting con datos de velas
-      await new Promise(resolve => setTimeout(resolve, 2000));
+  const handleRunBacktest = async () => {
+    if (!user?.openId) {
+      toast.error('Usuario no autenticado');
+      return;
+    }
 
-      // Generar datos de velas simuladas
+    if (!selectedSymbol) {
+      toast.error('Por favor selecciona un símbolo');
+      return;
+    }
+
+    // Check if model needs training for local strategy
+    if (strategy === 'local_lstm') {
+      toast.info("Nota: Asegúrese de haber entrenado el modelo para este par previamente.");
+    }
+
+    setIsRunning(true);
+    const toastId = toast.loading(`Ejecutando backtesting (${strategy})...`);
+
+    try {
+      // Llamar al endpoint real de backtesting
+      const response = await fetch(
+        `${CONFIG.API_BASE_URL}/backtest/run?` + new URLSearchParams({
+          user_id: user.openId,
+          symbol: selectedSymbol,
+          exchange_id: selectedExchange || 'binance',
+          days: days.toString(),
+          timeframe: timeframe,
+          use_ai: apiUseAI.toString(),
+          strategy: strategy
+        }),
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || 'Error al ejecutar backtesting');
+      }
+
+      const data = await response.json();
+
+      // Transformar datos del backend al formato del frontend
+      // El backend retorna trades con formato diferente
+      const transformedTrades: Trade[] = data.trades?.map((t: any) => ({
+        time: new Date(t.time).getTime(),
+        price: t.price,
+        side: t.type as 'BUY' | 'SELL',
+        profit: t.pnl
+      })) || [];
+
+      // Generar velas simuladas para visualización (el backend no las retorna aún)
+      // TODO: En el futuro, el backend debería retornar las velas históricas
       const candles: Candle[] = [];
-      let basePrice = 45000;
+      let basePrice = transformedTrades[0]?.price || 45000;
       const now = Date.now();
 
       for (let i = 0; i < 100; i++) {
-        const variation = (Math.random() - 0.5) * 1000;
+        const variation = (Math.random() - 0.5) * (basePrice * 0.02);
         const open = basePrice;
         const close = basePrice + variation;
-        const high = Math.max(open, close) + Math.random() * 500;
-        const low = Math.min(open, close) - Math.random() * 500;
+        const high = Math.max(open, close) * (1 + Math.random() * 0.01);
+        const low = Math.min(open, close) * (1 - Math.random() * 0.01);
 
         candles.push({
           time: now - (100 - i) * 3600000,
@@ -133,50 +213,28 @@ export default function Backtest() {
         basePrice = close;
       }
 
-      // Generar trades simulados
-      const trades: Trade[] = [];
-      for (let i = 10; i < candles.length - 5; i += 15) {
-        if (Math.random() > 0.5) {
-          // BUY
-          trades.push({
-            time: candles[i].time,
-            price: candles[i].close,
-            side: 'BUY',
-          });
-
-          // SELL después de algunos candles
-          const sellIndex = i + Math.floor(Math.random() * 5) + 2;
-          if (sellIndex < candles.length) {
-            const sellPrice = candles[sellIndex].close;
-            const profit = ((sellPrice - candles[i].close) / candles[i].close) * 100;
-            trades.push({
-              time: candles[sellIndex].time,
-              price: sellPrice,
-              side: 'SELL',
-              profit,
-            });
-          }
-        }
-      }
-
-      const mockResults: BacktestResults = {
-        symbol,
+      const backtestResults: BacktestResults = {
+        symbol: data.symbol,
         timeframe,
         days,
-        totalTrades: trades.filter(t => t.side === 'BUY').length,
-        winRate: Math.floor(Math.random() * 60) + 30,
-        profitFactor: (Math.random() * 2 + 0.5).toFixed(2),
-        maxDrawdown: (Math.random() * 30 + 5).toFixed(2),
-        totalReturn: (Math.random() * 100 - 20).toFixed(2),
-        sharpeRatio: (Math.random() * 2 + 0.5).toFixed(2),
+        totalTrades: data.total_trades || 0,
+        winRate: data.win_rate || 0,
+        profitFactor: data.profit_factor?.toString() || '0',
+        maxDrawdown: data.max_drawdown?.toString() || '0',
+        totalReturn: data.profit_percentage?.toFixed(2) || '0',
+        sharpeRatio: data.sharpe_ratio?.toString() || '0',
         candles,
-        trades,
+        trades: transformedTrades,
       };
 
-      setResults(mockResults);
-      toast.success('Backtesting completado');
-    } catch (error) {
-      toast.error('Error al ejecutar backtesting');
+      setResults(backtestResults);
+      toast.success(
+        `Backtesting completado (${(data as any).strategy_name || strategy})`,
+        { id: toastId }
+      );
+    } catch (error: any) {
+      console.error('Error en backtesting:', error);
+      toast.error(error.message || 'Error al ejecutar backtesting', { id: toastId });
     } finally {
       setIsRunning(false);
     }
@@ -320,6 +378,17 @@ export default function Backtest() {
         <Card className="p-6">
           <h3 className="text-lg font-semibold text-foreground mb-4">Configuración</h3>
 
+          {/* Debug Info */}
+          <div className="bg-muted/50 p-2 text-xs font-mono mb-4 rounded border border-yellow-500/20 flex justify-between items-center">
+            <span>
+              DEBUG: Exch={selectedExchange || '?'} | Mkt={selectedMarket || '?'} |
+              Syms={symbols.length} | Load={loadingSymbols || isFetchingSymbols ? 'YES' : 'NO'}
+            </span>
+            <Button variant="ghost" size="sm" onClick={() => refetchSymbols()} className="h-6 text-xs">
+              Refetch Symbols
+            </Button>
+          </div>
+
           {/* Exchange and Market Selection */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
             <div>
@@ -342,7 +411,7 @@ export default function Backtest() {
                   className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
                 >
                   <option value="">Seleccionar exchange</option>
-                  {exchanges.map((ex) => (
+                  {exchanges.map((ex: Exchange) => (
                     <option key={ex.exchangeId} value={ex.exchangeId}>
                       {ex.exchangeId.toUpperCase()}
                     </option>
@@ -367,7 +436,7 @@ export default function Backtest() {
                   disabled={!selectedExchange || markets.length === 0}
                   className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
                 >
-                  {markets.map((market) => (
+                  {markets.map((market: string) => (
                     <option key={market} value={market}>
                       {market.toUpperCase()}
                     </option>
@@ -422,7 +491,7 @@ export default function Backtest() {
                       </tr>
                     </thead>
                     <tbody>
-                      {symbols.map((sym) => (
+                      {symbols.map((sym: Symbol) => (
                         <tr
                           key={sym.symbol}
                           className="border-b border-border hover:bg-muted/50 cursor-pointer"
@@ -468,6 +537,78 @@ export default function Backtest() {
             />
           </div>
 
+          {/* Strategy Selection */}
+          <div className="mb-6">
+            <label className="block text-sm font-semibold text-foreground mb-2">
+              Estrategia
+            </label>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div
+                onClick={() => setStrategy('auto')}
+                className={`cursor-pointer p-4 rounded-lg border-2 transition-all ${strategy === 'auto' ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'
+                  }`}
+              >
+                <div className="font-bold flex items-center gap-2">🏆 Torneo (Auto)</div>
+                <div className="text-xs text-muted-foreground mt-1">Prueba todas y selecciona la mejor</div>
+              </div>
+
+              <div
+                onClick={() => setStrategy('local_lstm')}
+                className={`cursor-pointer p-4 rounded-lg border-2 transition-all ${strategy === 'local_lstm' ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'
+                  }`}
+              >
+                <div className="font-bold flex items-center gap-2">🧠 Neural Net (Local)</div>
+                <div className="text-xs text-muted-foreground mt-1">PyTorch LSTM (Entrenable)</div>
+                {strategy === 'local_lstm' && selectedSymbol && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-2 w-full text-xs h-7"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleTrainModel();
+                    }}
+                  >
+                    Entrenar Ahora
+                  </Button>
+                )}
+              </div>
+
+              <div
+                onClick={() => setStrategy('sniper')}
+                className={`cursor-pointer p-4 rounded-lg border-2 transition-all ${strategy === 'sniper' ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'
+                  }`}
+              >
+                <div className="font-bold flex items-center gap-2">🎯 AI Sniper</div>
+                <div className="text-xs text-muted-foreground mt-1">Alta precisión (&gt;60% WR)</div>
+              </div>
+
+              <div
+                onClick={() => setStrategy('standard')}
+                className={`cursor-pointer p-4 rounded-lg border-2 transition-all ${strategy === 'standard' ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'
+                  }`}
+              >
+                <div className="font-bold flex items-center gap-2">🤖 AI Standard</div>
+                <div className="text-xs text-muted-foreground mt-1">Balanceado</div>
+              </div>
+
+              <div
+                onClick={() => setStrategy('sma')}
+                className={`cursor-pointer p-4 rounded-lg border-2 transition-all ${strategy === 'sma' ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'
+                  }`}
+              >
+                <div className="font-bold flex items-center gap-2">📈 SMA Clásico</div>
+                <div className="text-xs text-muted-foreground mt-1">Cruce de medias</div>
+              </div>
+            </div>
+
+            {(strategy === 'standard' || strategy === 'sniper' || strategy === 'auto') && (
+              <div className="mt-3 p-2 bg-blue-500/10 border border-blue-500/20 rounded text-xs text-blue-600 dark:text-blue-400">
+                ℹ️ Requiere API Key de IA configurada
+              </div>
+            )}
+          </div>
+
           <Button
             onClick={handleRunBacktest}
             disabled={isRunning || !selectedSymbol}
@@ -481,6 +622,43 @@ export default function Backtest() {
         {/* Results */}
         {results && (
           <>
+            {/* Deploy Bot Banner (If Recommended) */}
+            {(results as any).recommended && (
+              <Card className="p-6 bg-gradient-to-r from-green-500/10 to-blue-500/10 border-green-500/30 mb-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-xl font-bold text-green-600 dark:text-green-400 flex items-center gap-2">
+                      🏆 Estrategia Ganadora: {(results as any).strategy_name || strategy}
+                    </h3>
+                    <p className="text-muted-foreground mt-1">
+                      Esta estrategia obtuvo los mejores resultados en el torneo.
+                    </p>
+                  </div>
+                  <Button
+                    onClick={async () => {
+                      try {
+                        toast.loading("Creando bot...");
+                        const res = await fetch(`${CONFIG.API_BASE_URL}/backtest/deploy_bot?` + new URLSearchParams({
+                          user_id: user?.openId || '',
+                          symbol: results.symbol,
+                          strategy: (results as any).strategy_id || strategy,
+                          initial_balance: '1000'
+                        }), { method: 'POST' });
+                        const data = await res.json();
+                        if (res.ok) toast.success("Bot creado exitosamente! Ver en Dashboard.");
+                        else throw new Error(data.detail);
+                      } catch (e: any) {
+                        toast.error(e.message);
+                      }
+                    }}
+                    className="bg-green-600 hover:bg-green-700 text-white"
+                  >
+                    🚀 Crear Bot con esta Estrategia
+                  </Button>
+                </div>
+              </Card>
+            )}
+
             {/* Metrics */}
             <Card className="p-6">
               <div className="flex items-center gap-2 mb-6">

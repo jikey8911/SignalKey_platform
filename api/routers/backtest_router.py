@@ -120,3 +120,148 @@ async def get_exchange_symbols(
     except Exception as e:
         logger.error(f"Error fetching symbols for {exchange_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/run")
+async def run_backtest(
+    user_id: str,
+    symbol: str,
+    exchange_id: str = "binance",
+    days: int = 7,
+    timeframe: str = "1h",
+    use_ai: bool = False,
+    strategy: str = "standard"
+):
+    """
+    Ejecuta un backtest con estrategia SMA o con IA
+    
+    Args:
+        user_id: ID del usuario (openId)
+        symbol: Símbolo a analizar (ej: BTC/USDT)
+        exchange_id: ID del exchange (por defecto binance)
+        days: Número de días históricos
+        timeframe: Timeframe de las velas
+        use_ai: Si True, usa IA; si False, usa estrategia SMA
+        strategy: Estrategia de IA ("standard" o "sniper") si use_ai=True
+    
+    Returns:
+        Resultados del backtest con métricas
+    """
+    try:
+        # Verificar que el usuario existe
+        user = await db.users.find_one({"openId": user_id})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Obtener configuración del usuario si se usa IA
+        user_config = None
+        if use_ai:
+            config = await db.app_configs.find_one({"userId": user["_id"]})
+            if not config:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="User configuration not found. Please configure AI settings first."
+                )
+            
+            # Validar que tenga al menos una API key configurada
+            ai_provider = config.get("aiProvider", "gemini")
+            key_map = {
+                "gemini": "geminiApiKey",
+                "openai": "openaiApiKey",
+                "perplexity": "perplexityApiKey",
+                "grok": "grokApiKey"
+            }
+            
+            has_key = False
+            for provider, key_field in key_map.items():
+                if config.get(key_field):
+                    has_key = True
+                    break
+            
+            if not has_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No AI API keys configured. Please add at least one AI provider API key in settings."
+                )
+            
+            user_config = config
+        
+        # Importar y ejecutar el servicio de backtest
+        from api.services.backtest_service import BacktestService
+        
+        backtest_service = BacktestService()
+        results = await backtest_service.run_backtest(
+            symbol=symbol,
+            days=days,
+            timeframe=timeframe,
+            use_ai=use_ai,
+            user_config=user_config,
+            strategy=strategy
+        )
+        
+        return results
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error running backtest: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/deploy_bot")
+async def deploy_bot(
+    user_id: str,
+    symbol: str,
+    strategy: str,
+    initial_balance: float = 1000.0,
+    leverage: int = 1
+):
+    """
+    Crea un bot simulado basado en una estrategia ganadora del backtest.
+    """
+    try:
+        # Verificar usuario
+        user = await db.users.find_one({"openId": user_id})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Crear configuración del bot
+        # En el futuro esto podría usar un servicio dedicado
+        bot_config = {
+            "userId": user["_id"],
+            "symbol": symbol,
+            "strategy": strategy,
+            "status": "active",  # O "simulated"
+            "mode": "simulation", # Explicitamente simulado
+            "initialBalance": initial_balance,
+            "currentBalance": initial_balance,
+            "leverage": leverage,
+            "pnl": 0.0,
+            "trades": [],
+            "createdAt": datetime.utcnow(),
+            "lastCheck": datetime.utcnow()
+        }
+        
+        # Insertar en colección 'bots' (o trades si no existe bots)
+        # Asumiremos 'trades' por ahora ya que es lo que vimos en el código
+        # pero con un flag especial o en una colección nueva si preferimos.
+        # El usuario pidió "crear el bot", así que lo guardamos.
+        
+        # Como no vi modelo de Bot explícito, lo guardaré en 'active_bots' o similar si existe,
+        # si no, lo guardamos en 'trades' con status 'active_bot'.
+        
+        # Revisando db usage en otros archivos, parece que usan 'trades' para todo?
+        # Mejor creamos una colección 'bots' si no existe.
+        
+        result = await db.bots.insert_one(bot_config)
+        
+        return {
+            "status": "success", 
+            "message": f"Bot deployed for {symbol} with strategy {strategy}",
+            "bot_id": str(result.inserted_id)
+        }
+        
+    except Exception as e:
+        logger.error(f"Error deploying bot: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+

@@ -16,4 +16,9 @@ export const CONFIG = {
     get WS_BASE_URL() {
         return (import.meta as any).env?.VITE_WS_URL || this.API_BASE_URL.replace(/^http/, 'ws');
     },
+
+    // Alias for backward compatibility
+    get API_URL() {
+        return this.API_BASE_URL;
+    },
 };

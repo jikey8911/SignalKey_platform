@@ -1,0 +1,11 @@
+{
+  "symbol": "BTC/USDT",
+  "timeframe": "1h",
+  "last_trained": "2026-01-24T07:48:04.190018",
+  "accuracy": 0.4879518151283264,
+  "final_loss": 0.6795880794525146,
+  "test_loss": 0.7841932773590088,
+  "epochs": 100,
+  "data_points": 887,
+  "model_version": "v1_lstm_local"
+}

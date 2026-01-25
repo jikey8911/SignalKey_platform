@@ -1,0 +1,11 @@
+{
+  "symbol": "BTC/TRY",
+  "timeframe": "1h",
+  "last_trained": "2026-01-24T07:49:02.470370",
+  "accuracy": 0.4939759075641632,
+  "final_loss": 0.6838841438293457,
+  "test_loss": 1.4154337644577026,
+  "epochs": 100,
+  "data_points": 887,
+  "model_version": "v1_lstm_local"
+}

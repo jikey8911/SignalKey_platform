@@ -265,4 +265,91 @@ class CCXTService:
             logger.error(f"Error fetching symbols with tickers for {exchange_id}: {e}")
             return []
 
+    async def get_symbols(self, exchange_id: str, market_type: str = 'spot') -> list:
+        """
+        Obtiene lista de símbolos activos para un tipo de mercado.
+        API lightweight (solo load_markets).
+        """
+        try:
+            instance = await self.create_public_instance(exchange_id)
+            if not instance:
+                return []
+            
+            await instance.load_markets()
+            
+            # Logic based on user snippet
+            symbols = [
+                symbol for symbol, info in instance.markets.items() 
+                if info.get('type') == market_type and info.get('active')
+            ]
+            
+            return sorted(symbols)
+        except Exception as e:
+            logger.error(f"Error fetching symbols for {exchange_id}: {e}")
+            return []
+
+    async def get_historical_ohlcv(self, symbol: str, exchange_id: str, timeframe: str = '1h', days_back: int = 365) -> list:
+        from datetime import datetime, timedelta
+        """
+        Obtiene datos históricos OHLCV para un símbolo.
+        
+        Args:
+            symbol: Símbolo (ej. BTC/USDT)
+            exchange_id: Exchange ID (ej. binance)
+            timeframe: Timeframe (ej. 1h, 4h, 1d)
+            days_back: Cantidad de días hacia atrás
+            
+        Returns:
+            Lista de OHLCV [[timestamp, open, high, low, close, volume], ...]
+        """
+        try:
+            exchange = await self.create_public_instance(exchange_id)
+            if not exchange:
+                return []
+            
+            # Calcular fecha de inicio
+            since_dt = datetime.utcnow() - timedelta(days=days_back)
+            since = int(since_dt.timestamp() * 1000)
+            
+            all_ohlcv = []
+            fetch_since = since
+            limit = 1000
+            
+            # Fetch loop
+            while True:
+                try:
+                    ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, fetch_since, limit=limit)
+                    if not ohlcv:
+                        break
+                        
+                    all_ohlcv.extend(ohlcv)
+                    
+                    # Actualizar fetch_since para la sguiente página
+                    last_timestamp = ohlcv[-1][0]
+                    if last_timestamp == fetch_since:
+                         # Si el exchange devuelve el mismo timestamp, avanzar manualmente un poco para evitar loop
+                         # (Depende del exchange, algunos requieren timestamp del siguiente candle)
+                         fetch_since += 1 
+                         # O mejor, break si no avanzamos, pero intentemos +1ms o timeframe ms
+                    else:
+                        fetch_since = last_timestamp + 1
+                        
+                    # Break si llegamos al presente
+                    if last_timestamp >= (datetime.utcnow().timestamp() * 1000) - (60000): # Menos 1 min margen
+                        break
+                        
+                    # Safety break para evitar loops infinitos
+                    if len(all_ohlcv) > days_back * 24 * 60: # Rough limit
+                        break
+                        
+                except Exception as e:
+                    logger.warning(f"Error fetching page for {symbol}: {e}")
+                    break
+                    
+            return all_ohlcv
+            
+        except Exception as e:
+            logger.error(f"Error fetching historical ohlcv for {symbol} on {exchange_id}: {e}")
+            return []
+
 ccxt_service = CCXTService()
