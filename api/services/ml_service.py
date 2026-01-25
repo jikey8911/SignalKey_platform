@@ -8,6 +8,7 @@ import logging
 import pickle
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Tuple
+import traceback
 
 # No external ML libs to avoid dependency hell on Python 3.14
 # from sklearn.preprocessing import MinMaxScaler 
@@ -303,6 +304,7 @@ class MLService:
                     
             except Exception as e:
                 logger.error(f"Error processing {symbol} for global model: {e}")
+                logger.error(traceback.format_exc())
                 continue
                 
         if processed_count == 0:
@@ -331,6 +333,7 @@ class MLService:
         model.train()
         history = {'loss': []}
         
+        logger.info(f"Starting Global Model training for {epochs} epochs...")
         for epoch in range(epochs):
             optimizer.zero_grad()
             output = model(X_train_tensor)
@@ -338,6 +341,8 @@ class MLService:
             loss.backward()
             optimizer.step()
             history['loss'].append(loss.item())
+            if (epoch + 1) % 5 == 0 or epoch == 0:
+                logger.info(f"Global Model - Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
             
         # 6. Save Global Model
         # Use "GLOBAL" as symbol name
@@ -458,6 +463,7 @@ class MLService:
             model.train()
             history = {'loss': []}
             
+            logger.info(f"Starting training for {symbol} ({epochs} epochs)...")
             for epoch in range(epochs):
                 optimizer.zero_grad()
                 output = model(X_train_tensor)
@@ -465,6 +471,8 @@ class MLService:
                 loss.backward()
                 optimizer.step()
                 history['loss'].append(loss.item())
+                if (epoch + 1) % 5 == 0 or epoch == 0:
+                    logger.info(f"Model {symbol} - Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
             
             # 4. Save
             model_path = f"{self.models_dir}/{safe_symbol}_{timeframe}_lstm.pth"
@@ -507,6 +515,7 @@ class MLService:
             
         except Exception as e:
             logger.error(f"Error training: {e}")
+            logger.error(traceback.format_exc())
             raise e
 
     def predict(self, symbol: str, timeframe: str, candles: List[Dict]) -> Dict[str, Any]:

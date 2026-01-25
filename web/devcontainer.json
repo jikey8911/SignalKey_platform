@@ -1,0 +1,10 @@
+{
+  "name": "SignalKey Dev Container",
+  "forwardPorts": [8000, 3000],
+  "portsAttributes": {
+    "8000": {
+      "label": "API",
+      "visibility": "public"
+    }
+  }
+}
