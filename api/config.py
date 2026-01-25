@@ -7,8 +7,16 @@ class Config:
     # API Keys
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+    TELEGRAM_API_ID = os.getenv("TELEGRAM_API_ID")
+    TELEGRAM_API_HASH = os.getenv("TELEGRAM_API_HASH")
     GMGN_API_KEY = os.getenv("GMGN_API_KEY")
-    
+    XAI_API_KEY = os.getenv("XAI_API_KEY")
+    ZERO_EX_API_KEY = os.getenv("ZERO_EX_API_KEY")
+    ZERO_EX_BASE_URL = os.getenv("ZERO_EX_BASE_URL", "https://api.0x.org")
+    PORT = int(os.getenv("PORT", 8000))
+    API_BASE_URL = os.getenv("API_BASE_URL", f"http://localhost:{PORT}")
+    MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017/signalkey_platform")
+     
     # CEX Config (Example for CCXT)
     EXCHANGE_ID = os.getenv("EXCHANGE_ID", "binance")
     CEX_API_KEY = os.getenv("CEX_API_KEY")

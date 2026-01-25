@@ -1,0 +1,11 @@
+{
+  "symbol": "XRP/USDT",
+  "timeframe": "1h",
+  "last_trained": "2026-01-24T07:38:58.024678",
+  "accuracy": 0.5361445546150208,
+  "final_loss": 0.6862382292747498,
+  "test_loss": 0.7097859382629395,
+  "epochs": 90,
+  "data_points": 887,
+  "model_version": "v1_lstm_local"
+}

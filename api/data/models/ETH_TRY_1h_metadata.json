@@ -1,0 +1,11 @@
+{
+  "symbol": "ETH/TRY",
+  "timeframe": "1h",
+  "last_trained": "2026-01-24T07:48:36.002525",
+  "accuracy": 0.4879518151283264,
+  "final_loss": 0.679702639579773,
+  "test_loss": 1.1383992433547974,
+  "epochs": 100,
+  "data_points": 887,
+  "model_version": "v1_lstm_local"
+}

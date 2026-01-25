@@ -1,0 +1,43 @@
+import pytest
+from unittest.mock import AsyncMock, MagicMock, patch
+from api.bot.telegram_bot import TelegramUserBot
+from api.services.signal_bot_service import SignalBotService
+from api.models.schemas import AnalysisResult
+from api.core.domain.signal import Decision
+
+@pytest.mark.asyncio
+async def test_telegram_bot_init():
+    with patch('telethon.TelegramClient'):
+        bot = TelegramUserBot("user1", "api_id", "api_hash")
+        assert bot.user_id == "user1"
+        assert bot.client is None
+
+@pytest.mark.asyncio
+async def test_signal_bot_service_activation():
+    mock_cex = MagicMock()
+    mock_cex._normalize_symbol.return_value = "BTC/USDT"
+    mock_cex.get_current_price = AsyncMock(return_value=50000.0)
+    
+    mock_dex = MagicMock()
+    
+    service = SignalBotService(cex_service=mock_cex, dex_service=mock_dex)
+    
+    analysis = MagicMock()
+    analysis.symbol = "BTCUSDT"
+    analysis.decision = "BUY"
+    analysis.market_type = "CEX"
+    analysis.parameters = {"amount": 100}
+    
+    mock_db = MagicMock()
+    mock_db.trades.count_documents = AsyncMock(return_value=0)
+    
+    with patch('api.services.signal_bot_service.db', mock_db):
+        with patch('api.services.signal_bot_service.save_trade', new_callable=AsyncMock):
+             config = {
+                 "demoMode": True, 
+                 "_id": "user_id",
+                 "botStrategy": {"maxActiveBots": 5, "tpLevels": 3, "tpPercent": 2.0, "slPercent": 1.5}
+             }
+             result = await service.activate_bot(analysis, "user1", config)
+             assert result.success is True
+             assert "BTC/USDT" in result.message

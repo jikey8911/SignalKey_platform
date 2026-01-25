@@ -1,4 +1,4 @@
-import { float, int, mysqlEnum, mysqlTable, text, timestamp, varchar } from "drizzle-orm/mysql-core";
+import { float, int, mysqlEnum, mysqlTable, text, timestamp, varchar, json } from "drizzle-orm/mysql-core";
 
 /**
  * Core user table backing auth flow.
@@ -25,19 +25,50 @@ export const users = mysqlTable("users", {
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
-export const appConfig = mysqlTable("app_config", {
+export const appConfig = mysqlTable("app_configs", {
   id: int("id").autoincrement().primaryKey(),
   userId: int("userId").notNull().references(() => users.id),
+
+  // App Settings
   demoMode: int("demoMode").default(1).notNull(),
+  isAutoEnabled: int("isAutoEnabled").default(1).notNull(),
+  aiProvider: varchar("aiProvider", { length: 20 }).default("gemini"),
+
+  // API Keys & Configs
   geminiApiKey: text("geminiApiKey"),
+  aiApiKey: text("aiApiKey"), // Often same as geminiApiKey but kept for flexibility
+  grokApiKey: text("grokApiKey"),
+  openaiApiKey: text("openaiApiKey"),
+  perplexityApiKey: text("perplexityApiKey"),
+
   gmgnApiKey: text("gmgnApiKey"),
+  zeroExApiKey: text("zeroExApiKey"),
+
+  // Telegram Config
   telegramBotToken: text("telegramBotToken"),
+  telegramChatId: text("telegramChatId"),
+  telegramApiHash: text("telegramApiHash"),
+  telegramApiId: text("telegramApiId"),
+  telegramPhoneNumber: text("telegramPhoneNumber"),
+  telegramSessionString: text("telegramSessionString"),
+  telegramIsConnected: int("telegramIsConnected").default(0),
+  telegramLastConnected: timestamp("telegramLastConnected"),
+
+  // JSON Complex Objects
+  telegramChannels: json("telegramChannels"),
+  dexConfig: json("dexConfig"),
+  investmentLimits: json("investmentLimits"),
+  virtualBalances: json("virtualBalances"),
+  exchanges: json("exchanges"),
+
+  // Deprecated / Compatibility Fields (Kept for now)
   exchangeId: varchar("exchangeId", { length: 64 }).default("binance"),
   cexApiKey: text("cexApiKey"),
   cexSecret: text("cexSecret"),
   cexPassword: text("cexPassword"),
   cexUid: text("cexUid"),
   dexWalletPrivateKey: text("dexWalletPrivateKey"),
+
   createdAt: timestamp("createdAt").defaultNow().notNull(),
   updatedAt: timestamp("updatedAt").defaultNow().onUpdateNow().notNull(),
 });

@@ -9,8 +9,11 @@ import Dashboard from "./pages/Dashboard";
 import Signals from "./pages/Signals";
 import Trades from "./pages/Trades";
 import Backtest from "./pages/Backtest";
+import Training from "./pages/Training";
 import Settings from "./pages/Settings";
+import TelegramConsole from "./pages/TelegramConsole";
 import Home from "./pages/Home";
+import Login from "./pages/Login";
 
 function Router() {
   return (
@@ -19,7 +22,10 @@ function Router() {
       <Route path={"/signals"} component={Signals} />
       <Route path={"/trades"} component={Trades} />
       <Route path={"/backtest"} component={Backtest} />
+      <Route path={"/training"} component={Training} />
+      <Route path={"/telegram-console"} component={TelegramConsole} />
       <Route path={"/settings"} component={Settings} />
+      <Route path={"/login"} component={Login} />
       <Route path={"/404"} component={NotFound} />
       <Route component={NotFound} />
     </Switch>
@@ -31,15 +37,19 @@ function Router() {
 //   to keep consistent foreground/background color across components
 // - If you want to make theme switchable, pass `switchable` ThemeProvider and use `useTheme` hook
 
+import { SocketProvider } from "./contexts/SocketContext";
+
 function App() {
   return (
     <ErrorBoundary>
       <ThemeProvider defaultTheme="light">
         <TradingProvider>
-          <TooltipProvider>
-            <Toaster />
-            <Router />
-          </TooltipProvider>
+          <SocketProvider>
+            <TooltipProvider>
+              <Toaster />
+              <Router />
+            </TooltipProvider>
+          </SocketProvider>
         </TradingProvider>
       </ThemeProvider>
     </ErrorBoundary>
