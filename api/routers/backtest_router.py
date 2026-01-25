@@ -4,8 +4,10 @@ Endpoints para backtesting - Exchanges, Markets y Symbols
 from fastapi import APIRouter, HTTPException
 from typing import Optional, List, Dict, Any
 import logging
+from datetime import datetime
 from api.models.mongodb import db
 from api.services.ccxt_service import ccxt_service
+from api.services.ml_service import MLService
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +198,8 @@ async def run_backtest(
             timeframe=timeframe,
             use_ai=use_ai,
             user_config=user_config,
-            strategy=strategy
+            strategy=strategy,
+            user_id=user_id  # Pasar user_id para obtener balance virtual
         )
         
         return results
@@ -263,5 +266,76 @@ async def deploy_bot(
         
     except Exception as e:
         logger.error(f"Error deploying bot: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ml_models")
+async def get_ml_models():
+    """
+    Obtiene la lista de modelos ML entrenados disponibles
+    
+    Returns:
+        Lista de modelos con sus metadatos (símbolo, accuracy, última fecha de entrenamiento)
+    """
+    try:
+        ml_service = MLService()
+        models = await ml_service.get_models_status()
+        
+        logger.info(f"Found {len(models)} trained ML models")
+        return {"models": models}
+        
+    except Exception as e:
+        logger.error(f"Error fetching ML models: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/virtual_balance/{user_id}")
+async def get_virtual_balance(
+    user_id: str,
+    market_type: str = "CEX",
+    asset: str = "USDT"
+):
+    """
+    Obtiene el balance virtual del usuario para backtesting
+    
+    Args:
+        user_id: ID del usuario (openId)
+        market_type: Tipo de mercado (CEX/DEX)
+        asset: Asset del balance (USDT, BTC, etc.)
+    
+    Returns:
+        Balance virtual del usuario
+    """
+    try:
+        # Buscar usuario
+        user = await db.users.find_one({"openId": user_id})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Buscar balance virtual
+        balance_doc = await db.virtual_balances.find_one({
+            "userId": user["_id"],
+            "marketType": market_type,
+            "asset": asset
+        })
+        
+        if balance_doc:
+            balance = float(balance_doc.get("amount", 10000.0))
+        else:
+            # Balance por defecto si no existe
+            balance = 10000.0
+            logger.warning(f"No virtual balance found for {user_id}, using default: {balance}")
+        
+        return {
+            "userId": user_id,
+            "marketType": market_type,
+            "asset": asset,
+            "balance": balance
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching virtual balance: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 

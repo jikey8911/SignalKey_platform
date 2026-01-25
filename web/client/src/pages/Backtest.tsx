@@ -64,10 +64,17 @@ export default function Backtest() {
   const [symbol, setSymbol] = useState('BTC/USDT');
   const [timeframe, setTimeframe] = useState('1h');
   const [days, setDays] = useState(30);
-  const [strategy, setStrategy] = useState('auto'); // 'sma', 'standard', 'sniper', 'auto'
-  const [useAI, setUseAI] = useState(true); // Deprecated in UI but used for API compat if needed
+  const [strategy, setStrategy] = useState('auto'); // 'sma', 'standard', 'sniper', 'auto', 'local_lstm'
+  const [selectedModel, setSelectedModel] = useState<string>(''); // Selected ML model
+  const [useAI, setUseAI] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
   const [results, setResults] = useState<BacktestResults | null>(null);
+
+  // ML Models and Virtual Balance
+  const [mlModels, setMlModels] = useState<any[]>([]);
+  const [virtualBalance, setVirtualBalance] = useState<number>(10000);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [loadingBalance, setLoadingBalance] = useState(false);
 
   // Computed property for API
   const apiUseAI = strategy !== 'sma';
@@ -113,6 +120,54 @@ export default function Backtest() {
       }
     }
   }, [markets]);
+
+  // Fetch ML Models
+  useEffect(() => {
+    const fetchModels = async () => {
+      setLoadingModels(true);
+      try {
+        const res = await fetch(`${CONFIG.API_BASE_URL}/backtest/ml_models`);
+        if (res.ok) {
+          const data = await res.json();
+          setMlModels(data.models || []);
+        }
+      } catch (e) {
+        console.error('Error fetching ML models:', e);
+      } finally {
+        setLoadingModels(false);
+      }
+    };
+
+    if (user?.openId) {
+      fetchModels();
+    }
+  }, [user]);
+
+  // Fetch Virtual Balance
+  useEffect(() => {
+    const fetchBalance = async () => {
+      if (!user?.openId) return;
+
+      setLoadingBalance(true);
+      try {
+        const res = await fetch(
+          `${CONFIG.API_BASE_URL}/backtest/virtual_balance/${user.openId}?market_type=CEX&asset=USDT`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          setVirtualBalance(data.balance || 10000);
+        }
+      } catch (e) {
+        console.error('Error fetching virtual balance:', e);
+      } finally {
+        setLoadingBalance(false);
+      }
+    };
+
+    if (user?.openId) {
+      fetchBalance();
+    }
+  }, [user]);
 
   const handleTrainModel = async () => {
     if (!selectedSymbol) return;
@@ -537,6 +592,67 @@ export default function Backtest() {
             />
           </div>
 
+          {/* Virtual Balance Display */}
+          <div className="mb-6">
+            <label className="block text-sm font-semibold text-foreground mb-2">
+              Balance Virtual (USDT)
+            </label>
+            <div className="px-4 py-3 border border-border rounded-lg bg-muted/30">
+              {loadingBalance ? (
+                <div className="flex items-center gap-2">
+                  <Loader2 className="animate-spin" size={16} />
+                  <span className="text-muted-foreground">Cargando...</span>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between">
+                  <span className="text-2xl font-bold text-primary">
+                    ${virtualBalance.toLocaleString()}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    Balance inicial para backtest
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ML Models Selector (only for local_lstm strategy) */}
+          {strategy === 'local_lstm' && (
+            <div className="mb-6">
+              <label className="block text-sm font-semibold text-foreground mb-2">
+                Modelo ML Entrenado
+              </label>
+              {loadingModels ? (
+                <div className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg bg-background">
+                  <Loader2 className="animate-spin" size={16} />
+                  <span className="text-muted-foreground">Cargando modelos...</span>
+                </div>
+              ) : mlModels.length === 0 ? (
+                <div className="p-4 border border-yellow-500/20 rounded-lg bg-yellow-500/10 text-yellow-600 text-sm">
+                  ⚠️ No hay modelos entrenados. Entrena un modelo primero.
+                </div>
+              ) : (
+                <select
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  <option value="">Seleccionar modelo...</option>
+                  {mlModels.map((model) => (
+                    <option key={model.id} value={model.id}>
+                      {model.symbol} - {model.timeframe} (Accuracy: {(model.accuracy * 100).toFixed(1)}%)
+                    </option>
+                  ))}
+                </select>
+              )}
+              {selectedModel && (
+                <div className="mt-2 p-2 bg-blue-500/10 border border-blue-500/20 rounded text-xs text-blue-600">
+                  ℹ️ Modelo seleccionado: {mlModels.find(m => m.id === selectedModel)?.symbol}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Strategy Selection */}
           <div className="mb-6">
             <label className="block text-sm font-semibold text-foreground mb-2">
@@ -633,6 +749,18 @@ export default function Backtest() {
                     <p className="text-muted-foreground mt-1">
                       Esta estrategia obtuvo los mejores resultados en el torneo.
                     </p>
+                    {/* Tournament Results Summary */}
+                    {(results as any).tournament_results && (
+                      <div className="mt-3 flex gap-4 text-sm">
+                        {(results as any).tournament_results.map((r: any) => (
+                          <div key={r.id} className="flex items-center gap-2">
+                            <span className={r.id === (results as any).strategy_id ? 'font-bold text-green-600' : 'text-muted-foreground'}>
+                              {r.name}: {r.profit.toFixed(2)}%
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <Button
                     onClick={async () => {
@@ -642,7 +770,7 @@ export default function Backtest() {
                           user_id: user?.openId || '',
                           symbol: results.symbol,
                           strategy: (results as any).strategy_id || strategy,
-                          initial_balance: '1000'
+                          initial_balance: virtualBalance.toString()
                         }), { method: 'POST' });
                         const data = await res.json();
                         if (res.ok) toast.success("Bot creado exitosamente! Ver en Dashboard.");
@@ -658,6 +786,41 @@ export default function Backtest() {
                 </div>
               </Card>
             )}
+
+            {/* Strategy Info Card */}
+            <Card className="p-6 mb-6 bg-gradient-to-r from-blue-500/5 to-purple-500/5">
+              <h3 className="text-lg font-semibold text-foreground mb-3">🧠 Información de la Estrategia</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Estrategia Usada</p>
+                  <p className="text-sm font-semibold text-foreground">
+                    {(results as any).strategy_name || (results as any).strategy_used || strategy}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Balance Inicial</p>
+                  <p className="text-sm font-semibold text-primary">
+                    ${((results as any).initial_balance || virtualBalance).toLocaleString()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Balance Final</p>
+                  <p className={`text-sm font-semibold ${((results as any).final_balance || 0) >= ((results as any).initial_balance || virtualBalance)
+                      ? 'text-green-600'
+                      : 'text-red-600'
+                    }`}>
+                    ${((results as any).final_balance || 0).toLocaleString()}
+                  </p>
+                </div>
+              </div>
+              {(results as any).ai_confidence_avg && (
+                <div className="mt-4 p-3 bg-blue-500/10 border border-blue-500/20 rounded">
+                  <p className="text-xs text-blue-600">
+                    🎯 Confianza Promedio de IA: {((results as any).ai_confidence_avg * 100).toFixed(1)}%
+                  </p>
+                </div>
+              )}
+            </Card>
 
             {/* Metrics */}
             <Card className="p-6">

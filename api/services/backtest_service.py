@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from api.infrastructure.adapters.ai_adapter import AIAdapter
 from api.services.ml_service import MLService
+from api.models.mongodb import db
 
 logger = logging.getLogger(__name__)
 
@@ -21,12 +22,21 @@ class BacktestService:
         timeframe: str = '1h',
         use_ai: bool = False,
         user_config: Dict[str, Any] = None,
-        strategy: str = "standard"
+        strategy: str = "standard",
+        user_id: str = "default_user",
+        initial_balance: Optional[float] = None
     ) -> Dict[str, Any]:
         """
         Ejecuta backtest. Si strategy='auto', ejecuta torneo de estrategias.
+        Usa balance virtual del usuario si está disponible.
         """
         logger.info(f"Iniciando backtest para {symbol} en los últimos {days} días (AI: {use_ai}, Strategy: {strategy})")
+        
+        # Obtener balance virtual del usuario
+        if initial_balance is None:
+            initial_balance = await self._get_user_virtual_balance(user_id)
+        
+        logger.info(f"Using initial balance: ${initial_balance} for user {user_id}")
         
         try:
             # 1. Obtener datos históricos
@@ -38,30 +48,59 @@ class BacktestService:
             
             # 2. Modo Torneo (Auto)
             if use_ai and strategy == "auto":
-                return await self._run_strategy_tournament(df, symbol, user_config)
+                return await self._run_strategy_tournament(df, symbol, user_config, initial_balance)
             
             # 3. Modo ML Local
             if use_ai and strategy == "local_lstm":
-                return await self._run_ml_backtest(df, symbol, timeframe)
+                return await self._run_ml_backtest(df, symbol, timeframe, initial_balance)
 
             # 4. Modo Selección Manual (AI Externo)
             if use_ai and user_config:
-                return await self._run_ai_backtest(df, symbol, user_config, strategy)
+                return await self._run_ai_backtest(df, symbol, user_config, strategy, initial_balance)
             else:
-                return await self._run_sma_backtest(df, symbol)
+                return await self._run_sma_backtest(df, symbol, initial_balance)
                 
         except Exception as e:
             logger.error(f"Error en backtest: {e}")
             return {"error": str(e)}
+    
+    async def _get_user_virtual_balance(self, user_id: str, market_type: str = "CEX", asset: str = "USDT") -> float:
+        """
+        Obtiene el balance virtual del usuario desde MongoDB.
+        Retorna balance por defecto si no existe.
+        """
+        try:
+            user = await db.users.find_one({"openId": user_id})
+            if not user:
+                logger.warning(f"User {user_id} not found, using default balance")
+                return 10000.0
+            
+            balance_doc = await db.virtual_balances.find_one({
+                "userId": user["_id"],
+                "marketType": market_type,
+                "asset": asset
+            })
+            
+            if balance_doc and "amount" in balance_doc:
+                balance = float(balance_doc["amount"])
+                logger.info(f"Using virtual balance for {user_id}: ${balance}")
+                return balance
+            else:
+                logger.warning(f"No virtual balance found for {user_id}, using default")
+                return 10000.0
+                
+        except Exception as e:
+            logger.error(f"Error retrieving virtual balance: {e}")
+            return 10000.0
 
-    async def _run_ml_backtest(self, df: pd.DataFrame, symbol: str, timeframe: str) -> Dict[str, Any]:
+    async def _run_ml_backtest(self, df: pd.DataFrame, symbol: str, timeframe: str, initial_balance: float = 10000.0) -> Dict[str, Any]:
         """
         Backtest usando modelo local LSTM.
         """
-        logger.info(f"Running Local Neutral Network backtest for {symbol}")
+        logger.info(f"Running Local Neutral Network backtest for {symbol} with balance ${initial_balance}")
         candles = df.to_dict('records')
         trades = []
-        balance = 10000.0
+        balance = initial_balance
         position = 0
         entry_price = 0
         
@@ -115,12 +154,12 @@ class BacktestService:
             balance = position * final_price
             trades.append({'type': 'SELL', 'price': final_price, 'time': candles[-1]['timestamp'], 'pnl': 0, 'reason': 'End'})
 
-        profit_pct = ((balance - 10000) / 10000) * 100
+        profit_pct = ((balance - initial_balance) / initial_balance) * 100
         
         return {
             "symbol": symbol,
             "strategy_used": "local_lstm",
-            "initial_balance": 10000,
+            "initial_balance": initial_balance,
             "final_balance": balance,
             "profit_percentage": profit_pct,
             "total_trades": len(trades),
@@ -128,11 +167,11 @@ class BacktestService:
         }
 
 
-    async def _run_strategy_tournament(self, df: pd.DataFrame, symbol: str, user_config: Dict[str, Any]) -> Dict[str, Any]:
+    async def _run_strategy_tournament(self, df: pd.DataFrame, symbol: str, user_config: Dict[str, Any], initial_balance: float = 10000.0) -> Dict[str, Any]:
         """
         Ejecuta todas las estrategias y retorna la mejor.
         """
-        logger.info(f"🏆 Iniciando Torneo de Estrategias para {symbol}...")
+        logger.info(f"🏆 Iniciando Torneo de Estrategias para {symbol} con balance ${initial_balance}...")
         
         # 1. Definir competidores
         strategies = ["sma", "standard", "sniper"]
@@ -140,7 +179,7 @@ class BacktestService:
         
         # 2. Ejecutar SMA (Baseline)
         try:
-            sma_res = await self._run_sma_backtest(df, symbol)
+            sma_res = await self._run_sma_backtest(df, symbol, initial_balance)
             sma_res["strategy_name"] = "SMA (Cruce Medias)"
             sma_res["strategy_id"] = "sma"
             results.append(sma_res)
@@ -151,7 +190,7 @@ class BacktestService:
         # Nota: Esto puede ser lento. En producción se haría en paralelo con asyncio.gather
         for strat in ["standard", "sniper"]:
             try:
-                ai_res = await self._run_ai_backtest(df, symbol, user_config, strat)
+                ai_res = await self._run_ai_backtest(df, symbol, user_config, strat, initial_balance)
                 ai_res["strategy_name"] = f"AI {strat.capitalize()}"
                 ai_res["strategy_id"] = strat
                 results.append(ai_res)
@@ -198,11 +237,11 @@ class BacktestService:
         logger.info(f"🏆 Ganador del torneo: {winner['strategy_name']} (Profit: {winner['profit_percentage']}%)")
         return winner
 
-    async def _run_ai_backtest(self, df: pd.DataFrame, symbol: str, user_config: Dict[str, Any], strategy: str = "standard") -> Dict[str, Any]:
+    async def _run_ai_backtest(self, df: pd.DataFrame, symbol: str, user_config: Dict[str, Any], strategy: str = "standard", initial_balance: float = 10000.0) -> Dict[str, Any]:
         """
         Ejecuta backtest usando IA para generar señales.
         """
-        logger.info(f"Running AI-powered backtest for {symbol} with strategy {strategy}")
+        logger.info(f"Running AI-powered backtest for {symbol} with strategy {strategy} and balance ${initial_balance}")
         
         # Convertir DataFrame a lista de diccionarios para el AI adapter
         candles = df.to_dict('records')
@@ -221,7 +260,6 @@ class BacktestService:
         )
         
         # Inicializar balance y métricas
-        initial_balance = 10000.0
         balance = initial_balance
         position = 0
         position_entry_price = 0
@@ -324,13 +362,12 @@ class BacktestService:
             "trades": trades[-20:]  # Últimos 20 trades para el reporte
         }
 
-    async def _run_sma_backtest(self, df: pd.DataFrame, symbol: str) -> Dict[str, Any]:
+    async def _run_sma_backtest(self, df: pd.DataFrame, symbol: str, initial_balance: float = 10000.0) -> Dict[str, Any]:
         """
         Ejecuta backtest usando estrategia simple de cruce de medias móviles (legacy).
         """
-        logger.info(f"Running SMA backtest for {symbol}")
+        logger.info(f"Running SMA backtest for {symbol} with balance ${initial_balance}")
         
-        initial_balance = 10000.0
         balance = initial_balance
         trades = []
         
