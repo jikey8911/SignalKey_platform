@@ -297,10 +297,14 @@ class MLService:
                 # Save individual CSV (optional but good for debugging)
                 safe_symbol = symbol.replace('/', '_')
                 csv_path = f"{self.datasets_dir}/{safe_symbol}_{timeframe}_labeled.csv"
+                logger.info(f"Saving labeled dataset to {csv_path} ({len(labeled_df)} rows)...")
                 labeled_df.to_csv(csv_path, index=False)
+                logger.info(f"CSV saved successfully for {symbol}")
                 
                 # 3. Create Sequences
+                logger.info(f"Creating sequences from labeled data for {symbol}...")
                 X, y = self._create_sequences_from_csv(labeled_df)
+                logger.info(f"Generated {len(X)} sequences for {symbol}")
                 if len(X) > 0:
                     all_X.append(X)
                     all_y.append(y)
@@ -318,25 +322,31 @@ class MLService:
             raise Exception("No data available for global training")
             
         # 4. Concatenate All Data
-        logger.info("Concatenating data from all symbols...")
+        logger.info(f"Concatenating data from {processed_count} symbols...")
         X_global = np.concatenate(all_X, axis=0)
         y_global = np.concatenate(all_y, axis=0)
         
-        logger.info(f"Global Dataset Size: {len(X_global)} samples")
+        logger.info(f"Global Dataset Size: {len(X_global)} samples from {processed_count} symbols")
         
         # 5. Train Global Model
+        logger.info("Splitting dataset into train/test (80/20)...")
         train_size = int(len(X_global) * 0.8)
         X_train, X_test = X_global[:train_size], X_global[train_size:]
         y_train, y_test = y_global[:train_size], y_global[train_size:]
+        logger.info(f"Train set: {len(X_train)} samples, Test set: {len(X_test)} samples")
         
+        logger.info("Converting data to PyTorch tensors...")
         X_train_tensor = torch.from_numpy(X_train).float()
         y_train_tensor = torch.from_numpy(y_train).long()
         X_test_tensor = torch.from_numpy(X_test).float()
         y_test_tensor = torch.from_numpy(y_test).long()
+        logger.info(f"Tensor shapes - X_train: {X_train_tensor.shape}, y_train: {y_train_tensor.shape}")
         
+        logger.info(f"Initializing LSTM model (input_dim={self.input_dim}, hidden_dim={self.hidden_dim}, layers={self.num_layers})...")
         model = LSTMModel(self.input_dim, self.hidden_dim, self.num_layers, output_dim=4)
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(model.parameters(), lr=0.001)
+        logger.info(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters")
         
         model.train()
         history = {'loss': []}
@@ -451,27 +461,36 @@ class MLService:
             # Save CSV
             safe_symbol = symbol.replace('/', '_')
             csv_path = f"{self.datasets_dir}/{safe_symbol}_{timeframe}_labeled.csv"
+            logger.info(f"Saving labeled dataset to {csv_path} ({len(labeled_df)} rows)...")
             labeled_df.to_csv(csv_path, index=False)
-            logger.info(f"Saved labeled dataset to {csv_path}")
+            logger.info(f"CSV saved successfully: {csv_path}")
             
             # 2. Train from CSV Data
+            logger.info(f"Creating sequences from labeled dataset...")
             X, y = self._create_sequences_from_csv(labeled_df)
+            logger.info(f"Generated {len(X)} training sequences")
             
             if len(X) == 0: raise Exception("No sequences generated")
             
+            logger.info("Splitting dataset (80% train, 20% test)...")
             train_size = int(len(X) * 0.8)
             X_train, X_test = X[:train_size], X[train_size:]
             y_train, y_test = y[:train_size], y[train_size:]
+            logger.info(f"Train: {len(X_train)} samples, Test: {len(X_test)} samples")
             
+            logger.info("Converting to PyTorch tensors...")
             X_train_tensor = torch.from_numpy(X_train).float()
             y_train_tensor = torch.from_numpy(y_train).long()
             X_test_tensor = torch.from_numpy(X_test).float()
             y_test_tensor = torch.from_numpy(y_test).long()
+            logger.info(f"Tensor shapes - X: {X_train_tensor.shape}, y: {y_train_tensor.shape}")
             
             # 3. Model
+            logger.info(f"Initializing LSTM model for {symbol}...")
             model = LSTMModel(self.input_dim, self.hidden_dim, self.num_layers, output_dim=4)
             criterion = nn.CrossEntropyLoss()
             optimizer = optim.Adam(model.parameters(), lr=0.001)
+            logger.info(f"Model has {sum(p.numel() for p in model.parameters())} trainable parameters")
             
             model.train()
             history = {'loss': []}
@@ -493,19 +512,24 @@ class MLService:
             meta_path = f"{self.models_dir}/{safe_symbol}_{timeframe}_meta.json"
             
             # 4. Save Model & Scaler
+            logger.info(f"Saving model to {model_path}...")
             torch.save(model.state_dict(), model_path)
+            logger.info(f"Saving scaler to {scaler_path}...")
             with open(scaler_path, 'wb') as f:
                 pickle.dump(self.scaler, f)
                 
             # 5. Eval (Calculate Accuracy)
+            logger.info("Evaluating model on test set...")
             model.eval()
             with torch.no_grad():
                 test_pred = model(X_test_tensor)
                 pred_classes = torch.argmax(test_pred, dim=1)
                 accuracy_val = (pred_classes == y_test_tensor).float().mean()
+            logger.info(f"Test Accuracy: {accuracy_val.item():.2%}")
             
             # 6. Save Metadata
             import json
+            logger.info(f"Saving metadata to {meta_path}...")
             metadata = {
                 "symbol": symbol,
                 "timeframe": timeframe,
@@ -517,6 +541,8 @@ class MLService:
             }
             with open(meta_path, 'w') as f:
                 json.dump(metadata, f)
+            
+            logger.info(f"✓ Training completed for {symbol}! Final loss: {history['loss'][-1]:.4f}, Accuracy: {accuracy_val.item():.2%}")
 
             return {
                 "status": "success",
