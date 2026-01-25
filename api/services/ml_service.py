@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import pandas as pd
 import numpy as np
+from torch.utils.data import TensorDataset, DataLoader
 import os
 import logging
 import pickle
@@ -352,20 +353,36 @@ class MLService:
         optimizer = optim.Adam(model.parameters(), lr=0.001)
         logger.info(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters")
         
+        # Use DataLoader for mini-batch training to avoid memory issues and blocking
+        batch_size = 64
+        train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        
         model.train()
         history = {'loss': []}
         
-        logger.info(f"Starting Global Model training for {epochs} epochs...")
+        logger.info(f"Starting Global Model training for {epochs} epochs (Batch Size: {batch_size})...")
         for epoch in range(epochs):
-            optimizer.zero_grad()
-            output = model(X_train_tensor)
-            loss = criterion(output, y_train_tensor)
-            loss.backward()
-            optimizer.step()
-            history['loss'].append(loss.item())
-            await asyncio.sleep(0)
-            if (epoch + 1) % 5 == 0 or epoch == 0:
-                logger.info(f"Global Model - Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
+            epoch_loss = 0.0
+            batch_count = 0
+            
+            for X_batch, y_batch in train_loader:
+                optimizer.zero_grad()
+                output = model(X_batch)
+                loss = criterion(output, y_batch)
+                loss.backward()
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+                batch_count += 1
+                
+                # Yield control to event loop every few batches to prevent WebSocket timeout
+                if batch_count % 10 == 0:
+                    await asyncio.sleep(0)
+            
+            avg_loss = epoch_loss / batch_count if batch_count > 0 else 0
+            history['loss'].append(avg_loss)
+            logger.info(f"Global Model - Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}")
             
         # 6. Save Global Model
         # Use "GLOBAL" as symbol name
