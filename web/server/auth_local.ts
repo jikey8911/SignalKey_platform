@@ -4,6 +4,7 @@ import { User } from "./mongodb";
 import { sdk } from "./_core/sdk";
 import { COOKIE_NAME, ONE_YEAR_MS } from "../shared/const";
 
+
 export const authRouter = Router();
 
 // Register Endpoint
