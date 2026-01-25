@@ -4,11 +4,10 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from bson import ObjectId
 
-MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-DB_NAME = os.getenv("MONGODB_DB_NAME", "signalkey_platform")
+from api.config import Config
 
-client = AsyncIOMotorClient(MONGODB_URI)
-db = client[DB_NAME]
+client = AsyncIOMotorClient(Config.MONGODB_URI)
+db = client[os.getenv("MONGODB_DB_NAME", "signalkey_platform")]
 
 class MongoModel:
     @classmethod
