@@ -9,6 +9,7 @@ import pickle
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Tuple
 import traceback
+import asyncio
 
 # No external ML libs to avoid dependency hell on Python 3.14
 # from sklearn.preprocessing import MinMaxScaler 
@@ -249,6 +250,7 @@ class MLService:
         if not target_exchange_id:
             raise ValueError("No exchange_id provided and no active exchange found/configured for user.")
              
+        loop = asyncio.get_running_loop()
         
         all_X = []
         all_y = []
@@ -289,6 +291,7 @@ class MLService:
                     use_virtual_balance=self.use_virtual_balance
                 )
                 labeled_df = trainer.generate_labeled_dataset(window_size=60, forecast_horizon=12)
+                labeled_df = await loop.run_in_executor(None, lambda: trainer.generate_labeled_dataset(window_size=60, forecast_horizon=12))
                 
                 if labeled_df.empty: 
                     logger.warning(f"Labeled dataset empty for {symbol}")
@@ -304,6 +307,7 @@ class MLService:
                 # 3. Create Sequences
                 logger.info(f"Creating sequences from labeled data for {symbol}...")
                 X, y = self._create_sequences_from_csv(labeled_df)
+                X, y = await loop.run_in_executor(None, lambda: self._create_sequences_from_csv(labeled_df))
                 logger.info(f"Generated {len(X)} sequences for {symbol}")
                 if len(X) > 0:
                     all_X.append(X)
@@ -359,6 +363,7 @@ class MLService:
             loss.backward()
             optimizer.step()
             history['loss'].append(loss.item())
+            await asyncio.sleep(0)
             if (epoch + 1) % 5 == 0 or epoch == 0:
                 logger.info(f"Global Model - Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
             
@@ -414,6 +419,7 @@ class MLService:
         """
         logger.info(f"Starting training for {symbol}")
         
+        loop = asyncio.get_running_loop()
         try:
             # Usar instancia PÚBLICA para training (Data histórica no requiere Auth)
             # Usar instancia PÚBLICA para training (Data histórica no requiere Auth)
@@ -455,6 +461,7 @@ class MLService:
                 use_virtual_balance=self.use_virtual_balance
             )
             labeled_df = trainer.generate_labeled_dataset(window_size=60, forecast_horizon=12)
+            labeled_df = await loop.run_in_executor(None, lambda: trainer.generate_labeled_dataset(window_size=60, forecast_horizon=12))
             
             if labeled_df.empty: raise Exception("StrategyTrainer generated 0 samples")
             
@@ -468,6 +475,7 @@ class MLService:
             # 2. Train from CSV Data
             logger.info(f"Creating sequences from labeled dataset...")
             X, y = self._create_sequences_from_csv(labeled_df)
+            X, y = await loop.run_in_executor(None, lambda: self._create_sequences_from_csv(labeled_df))
             logger.info(f"Generated {len(X)} training sequences")
             
             if len(X) == 0: raise Exception("No sequences generated")
@@ -503,6 +511,7 @@ class MLService:
                 loss.backward()
                 optimizer.step()
                 history['loss'].append(loss.item())
+                await asyncio.sleep(0)
                 if (epoch + 1) % 5 == 0 or epoch == 0:
                     logger.info(f"Model {symbol} - Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}")
             

@@ -1,0 +1,1 @@
+{"symbol": "GLOBAL_MODEL", "timeframe": "1h", "final_loss": NaN, "accuracy": 0.8885331749916077, "last_trained": "2026-01-25T15:28:24.632409", "samples": 17176, "model_type": "Meta-LSTM-Global", "included_symbols": ["BTC/USDT", "ETH/BTC"]}
