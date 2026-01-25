@@ -267,17 +267,7 @@ Página de Señales
 
 ## Configuración Requerida
 
-### En AppConfig (MongoDB)
-```javascript
-{
-  userId: ObjectId,
-  telegramChannels: {
-    allow: ["123456789", "987654321"],  // Chat IDs permitidos
-    deny: []
-  },
-  // ... otros campos
-}
-```
+
 
 ### Variables de Entorno
 ```bash
