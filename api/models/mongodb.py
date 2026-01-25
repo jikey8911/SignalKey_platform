@@ -1,10 +1,14 @@
 import os
+import logging
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from bson import ObjectId
 
 from api.config import Config
+
+logger = logging.getLogger(__name__)
+logger.info(f"MongoDB: Connecting to {Config.MONGODB_URI[:50]}...")  # Solo primeros 50 chars por seguridad
 
 client = AsyncIOMotorClient(Config.MONGODB_URI)
 db = client[os.getenv("MONGODB_DB_NAME", "signalkey_platform")]
