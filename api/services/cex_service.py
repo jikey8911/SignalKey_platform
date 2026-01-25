@@ -4,6 +4,7 @@ from api.models.mongodb import get_app_config, save_trade, update_virtual_balanc
 from api.services.ccxt_service import ccxt_service
 import ccxt.async_support as ccxt # Para excepciones
 from datetime import datetime
+from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
