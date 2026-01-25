@@ -257,6 +257,7 @@ class MLService:
         
         for symbol in symbols:
             try:
+                logger.info(f"Processing symbol for Global Model: {symbol}")
                 # 1. Fetch Data
                 # Call new CCXTService method
                 all_ohlcv = await ccxt_service.get_historical_ohlcv(
@@ -267,8 +268,10 @@ class MLService:
                 )
 
                 if len(all_ohlcv) < 500:
-                    logger.warning(f"Skipping {symbol}: Not enough data")
+                    logger.warning(f"Skipping {symbol}: Not enough data ({len(all_ohlcv)} candles)")
                     continue
+                
+                logger.info(f"Fetched {len(all_ohlcv)} candles for {symbol}")
                     
                 df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df.drop_duplicates(subset=['timestamp'], inplace=True)
@@ -278,6 +281,7 @@ class MLService:
                 # 2. Generate Labeled Dataset with Virtual Balance
                 # Get virtual balance for this user
                 virtual_balance = await self._get_virtual_balance(user_id)
+                logger.info(f"Generating labeled dataset for {symbol} (Balance: {virtual_balance})...")
                 
                 trainer = StrategyTrainer(
                     df, 
@@ -287,6 +291,7 @@ class MLService:
                 labeled_df = trainer.generate_labeled_dataset(window_size=60, forecast_horizon=12)
                 
                 if labeled_df.empty: 
+                    logger.warning(f"Labeled dataset empty for {symbol}")
                     continue
                     
                 # Save individual CSV (optional but good for debugging)
@@ -300,7 +305,9 @@ class MLService:
                     all_X.append(X)
                     all_y.append(y)
                     processed_count += 1
-                    logger.info(f"Processed {symbol}: {len(X)} samples")
+                    logger.info(f"Processed {symbol}: {len(X)} samples added to global dataset")
+                else:
+                    logger.warning(f"No sequences generated for {symbol}")
                     
             except Exception as e:
                 logger.error(f"Error processing {symbol} for global model: {e}")
@@ -311,6 +318,7 @@ class MLService:
             raise Exception("No data available for global training")
             
         # 4. Concatenate All Data
+        logger.info("Concatenating data from all symbols...")
         X_global = np.concatenate(all_X, axis=0)
         y_global = np.concatenate(all_y, axis=0)
         
@@ -346,6 +354,7 @@ class MLService:
             
         # 6. Save Global Model
         # Use "GLOBAL" as symbol name
+        logger.info("Saving Global Model artifacts...")
         model_name = f"GLOBAL_{timeframe}"
         model_path = f"{self.models_dir}/{model_name}_lstm.pth"
         scaler_path = f"{self.models_dir}/{model_name}_scaler.pkl"
@@ -356,11 +365,13 @@ class MLService:
             pickle.dump(self.scaler, f)
             
         # Calc Accuracy
+        logger.info("Calculating test accuracy...")
         model.eval()
         with torch.no_grad():
             test_pred = model(X_test_tensor)
             pred_classes = torch.argmax(test_pred, dim=1)
             accuracy_val = (pred_classes == y_test_tensor).float().mean()
+            logger.info(f"Global Model Test Accuracy: {accuracy_val.item():.2%}")
             
         # Save Metadata
         import json
@@ -377,6 +388,8 @@ class MLService:
         with open(meta_path, 'w') as f:
             json.dump(metadata, f)
             
+        logger.info(f"Global Model training completed successfully. Saved to {model_path}")
+
         return {
             "status": "success",
             "model_path": model_path,
