@@ -54,14 +54,17 @@ class TelegramUserBot:
             if not self.client.is_connected():
                  return []
                  
-            async for dialog in self.client.iter_dialogs(limit=100):
+            # Eliminar límite para obtener TODOS los diálogos
+            async for dialog in self.client.iter_dialogs():
                 dialogs.append({
                     "id": str(dialog.id), 
-                    "name": dialog.name,
+                    "name": dialog.name or "Sin Nombre",
                     "is_channel": dialog.is_channel,
                     "is_group": dialog.is_group,
-                    "is_user": dialog.is_user
+                    "is_user": dialog.is_user,
+                    "unread_count": dialog.unread_count
                 })
+            logger.info(f"Fetched {len(dialogs)} dialogs for user {self.user_id}")
         except Exception as e:
             logger.error(f"Error fetching dialogs for user {self.user_id}: {e}")
         return dialogs
