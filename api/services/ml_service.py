@@ -20,6 +20,7 @@ from api.strategies import RSIReversion, TrendEMA, VolatilityBreakout
 from api.utils.indicators import rsi, adx, atr, bollinger_bands, ema
 from api.ml.strategy_trainer import StrategyTrainer
 from api.services.ccxt_service import ccxt_service
+from api.models.mongodb import db
 import logging
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,10 @@ class MLService:
         self.output_dim = 3   # 3 Strategies (Classes)
         
         self.scaler = SimpleScaler()
+        
+        # Virtual Balance Configuration
+        self.use_virtual_balance = True
+        self.default_virtual_balance = 10000.0  # Default if not found in DB
 
     def _prepare_features(self, df: pd.DataFrame, fit: bool = True) -> pd.DataFrame:
         """Calcula indicadores de contexto avanzado para el Meta-Selector."""
@@ -105,6 +110,35 @@ class MLService:
         
         normalized_data = self.scaler.transform(df_features)
         return pd.DataFrame(normalized_data, columns=feature_cols)
+    
+    async def _get_virtual_balance(self, user_id: str, market_type: str = "CEX", asset: str = "USDT") -> float:
+        """
+        Obtiene el balance virtual del usuario desde MongoDB.
+        Si no existe, retorna el balance por defecto.
+        """
+        try:
+            user = await db.users.find_one({"openId": user_id})
+            if not user:
+                logger.warning(f"User {user_id} not found, using default balance")
+                return self.default_virtual_balance
+            
+            balance_doc = await db.virtual_balances.find_one({
+                "userId": user["_id"],
+                "marketType": market_type,
+                "asset": asset
+            })
+            
+            if balance_doc and "amount" in balance_doc:
+                balance = float(balance_doc["amount"])
+                logger.info(f"Using virtual balance for {user_id}: {balance} {asset}")
+                return balance
+            else:
+                logger.warning(f"No virtual balance found for {user_id}, using default")
+                return self.default_virtual_balance
+                
+        except Exception as e:
+            logger.error(f"Error retrieving virtual balance: {e}")
+            return self.default_virtual_balance
 
     def _create_sequences(self, df_features: pd.DataFrame, df_raw: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -240,8 +274,15 @@ class MLService:
                 df.sort_values('timestamp', inplace=True)
                 df.reset_index(drop=True, inplace=True)
                 
-                # 2. Generate Labeled Dataset
-                trainer = StrategyTrainer(df)
+                # 2. Generate Labeled Dataset with Virtual Balance
+                # Get virtual balance for this user
+                virtual_balance = await self._get_virtual_balance(user_id)
+                
+                trainer = StrategyTrainer(
+                    df, 
+                    initial_balance=virtual_balance,
+                    use_virtual_balance=self.use_virtual_balance
+                )
                 labeled_df = trainer.generate_labeled_dataset(window_size=60, forecast_horizon=12)
                 
                 if labeled_df.empty: 
@@ -376,8 +417,15 @@ class MLService:
             df.sort_values('timestamp', inplace=True)
             df.reset_index(drop=True, inplace=True)
             
-            # 1. Generate Labeled Dataset (Using StrategyTrainer)
-            trainer = StrategyTrainer(df)
+            # 1. Generate Labeled Dataset with Virtual Balance
+            # Get virtual balance for this user
+            virtual_balance = await self._get_virtual_balance(user_id)
+            
+            trainer = StrategyTrainer(
+                df,
+                initial_balance=virtual_balance,
+                use_virtual_balance=self.use_virtual_balance
+            )
             labeled_df = trainer.generate_labeled_dataset(window_size=60, forecast_horizon=12)
             
             if labeled_df.empty: raise Exception("StrategyTrainer generated 0 samples")

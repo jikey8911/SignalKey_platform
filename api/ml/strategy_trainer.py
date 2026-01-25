@@ -9,7 +9,7 @@ from api.utils.indicators import rsi, adx, atr, bollinger_bands
 logger = logging.getLogger(__name__)
 
 class StrategyTrainer:
-    def __init__(self, data: pd.DataFrame):
+    def __init__(self, data: pd.DataFrame, initial_balance: float = 10000.0, use_virtual_balance: bool = True):
         self.data = data
         self.strategies = [
             RSIReversion(),
@@ -17,6 +17,13 @@ class StrategyTrainer:
             VolatilityBreakout()
         ]
         # Map IDs: 1=RSI, 2=EMA, 3=Breakout. 0=Hold (default if no profit)
+        
+        # Virtual Balance Management
+        self.use_virtual_balance = use_virtual_balance
+        self.initial_balance = initial_balance
+        self.virtual_balance = initial_balance  # Current cash balance
+        self.position_size = 0  # Current position (in base currency)
+        self.position_entry_price = 0  # Entry price of current position
 
     def _calculate_features(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -47,10 +54,81 @@ class StrategyTrainer:
         
         return df
 
+    def _execute_virtual_trade(self, signal: str, entry_price: float, exit_price: float, fee: float = 0.001) -> float:
+        """
+        Simula ejecución de trade usando balance virtual.
+        Retorna PnL realizado.
+        """
+        if not self.use_virtual_balance:
+            # Fallback to simple PnL calculation
+            if signal == 'buy':
+                raw_pnl = (exit_price - entry_price) / entry_price
+                return raw_pnl - (fee * 2)
+            elif signal == 'sell':
+                raw_pnl = (entry_price - exit_price) / entry_price
+                return raw_pnl - (fee * 2)
+            return 0
+        
+        # Virtual balance tracking
+        pnl = 0
+        
+        if signal == 'buy' and self.position_size == 0:
+            # Open long position
+            # Use 95% of balance to leave margin for fees
+            trade_amount = self.virtual_balance * 0.95
+            fee_cost = trade_amount * fee
+            position_value = trade_amount - fee_cost
+            self.position_size = position_value / entry_price
+            self.position_entry_price = entry_price
+            self.virtual_balance -= trade_amount
+            
+            # Close position at exit
+            exit_value = self.position_size * exit_price
+            exit_fee = exit_value * fee
+            realized_value = exit_value - exit_fee
+            self.virtual_balance += realized_value
+            
+            # Calculate PnL
+            pnl = (realized_value - position_value) / position_value
+            
+            # Reset position
+            self.position_size = 0
+            self.position_entry_price = 0
+            
+        elif signal == 'sell' and self.position_size == 0:
+            # Short selling (simplified: assume we can borrow)
+            trade_amount = self.virtual_balance * 0.95
+            fee_cost = trade_amount * fee
+            position_value = trade_amount - fee_cost
+            self.position_size = position_value / entry_price  # Borrowed amount
+            self.position_entry_price = entry_price
+            self.virtual_balance += position_value  # Receive cash from short
+            
+            # Close short at exit
+            buyback_cost = self.position_size * exit_price
+            buyback_fee = buyback_cost * fee
+            total_cost = buyback_cost + buyback_fee
+            self.virtual_balance -= total_cost
+            
+            # Calculate PnL
+            pnl = (position_value - buyback_cost) / position_value
+            
+            # Reset position
+            self.position_size = 0
+            self.position_entry_price = 0
+        
+        # Check if balance is depleted
+        if self.virtual_balance <= 0:
+            self.virtual_balance = 0
+            return -1.0  # Total loss
+        
+        return pnl
+    
     def generate_labeled_dataset(self, window_size=60, forecast_horizon=12) -> pd.DataFrame:
         """
         Analiza bloques de datos y determina qué estrategia fue más rentable.
         Retorna DataFrame con Features y Label (best_strategy).
+        Usa virtual_balance para simular trading realista.
         """
         # Primero calculamos features vectorizados (más rápido)
         # Pero necesitamos features alignados con la ventana 'i'.
@@ -108,19 +186,20 @@ class StrategyTrainer:
             perf_map = {}
             for strat_id, strat in enumerate(self.strategies): # 0=RSI, 1=EMA... (IDs 1,2,3)
                 try:
+                    # Reset virtual balance for each strategy test
+                    self.virtual_balance = self.initial_balance
+                    self.position_size = 0
+                    self.position_entry_price = 0
+                    
                     res = strat.get_signal(window_slice)
                     signal = res.get('signal')
                     
-                    pnl = 0
-                    if signal == 'buy':
-                        raw_pnl = (exit_price - entry_price) / entry_price
-                        pnl = raw_pnl - (fee * 2) 
-                    elif signal == 'sell':
-                        raw_pnl = (entry_price - exit_price) / entry_price
-                        pnl = raw_pnl - (fee * 2)
-                        
+                    # Execute virtual trade
+                    pnl = self._execute_virtual_trade(signal, entry_price, exit_price, fee)
+                    
                     perf_map[strat_id + 1] = pnl
-                except:
+                except Exception as e:
+                    logger.debug(f"Strategy {strat_id} failed: {e}")
                     perf_map[strat_id + 1] = -1.0
 
             # Determine winner
