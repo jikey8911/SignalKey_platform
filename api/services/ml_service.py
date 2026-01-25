@@ -635,27 +635,56 @@ class MLService:
             raise e
 
     async def get_models_status(self) -> List[Dict[str, Any]]:
-        models = []
-        if not os.path.exists(self.models_dir):
+        loop = asyncio.get_running_loop()
+        
+        def _read_models_sync():
+            models = []
+            try:
+                if not os.path.exists(self.models_dir):
+                    return []
+                
+                import json
+                files = os.listdir(self.models_dir)
+                
+                for f in files:
+                    if f.endswith("_meta.json"):
+                        try:
+                            file_path = os.path.join(self.models_dir, f)
+                            with open(file_path, 'r') as meta_file:
+                                data = json.load(meta_file)
+                                if not isinstance(data, dict):
+                                    continue
+                                    
+                                def safe_val(val):
+                                    if val is None: return 0.0
+                                    try:
+                                        f = float(val)
+                                        if np.isnan(f) or np.isinf(f): return 0.0
+                                        return f
+                                    except:
+                                        return 0.0
+
+                                models.append({
+                                    "id": f.replace("_meta.json", ""),
+                                    "symbol": data.get("symbol", "Unknown"),
+                                    "timeframe": data.get("timeframe", "1h"),
+                                    "status": "Ready",
+                                    "last_trained": data.get("last_trained"),
+                                    "accuracy": safe_val(data.get("accuracy", 0)),
+                                    "final_loss": safe_val(data.get("final_loss", 0)),
+                                    "model_type": data.get("model_type", "LSTM")
+                                })
+                        except Exception as e:
+                            logger.error(f"Error reading meta {f}: {e}")
+                            continue
+                return models
+            except Exception as e:
+                logger.error(f"Error in _read_models_sync: {e}")
+                return []
+
+        try:
+            return await loop.run_in_executor(None, _read_models_sync)
+        except Exception as e:
+            logger.error(f"Error getting models status: {e}")
+            logger.error(traceback.format_exc())
             return []
-            
-        import json
-        for f in os.listdir(self.models_dir):
-            if f.endswith("_meta.json"):
-                try:
-                    with open(os.path.join(self.models_dir, f), 'r') as meta_file:
-                        data = json.load(meta_file)
-                        models.append({
-                            "id": f.replace("_meta.json", ""),
-                            "symbol": data.get("symbol", "Unknown"),
-                            "timeframe": data.get("timeframe", "1h"),
-                            "status": "Ready",
-                            "last_trained": data.get("last_trained"),
-                            "accuracy": data.get("accuracy", 0),
-                            "final_loss": data.get("final_loss", 0),
-                            "model_type": data.get("model_type", "LSTM")
-                        })
-                except Exception as e:
-                    logger.error(f"Error reading meta {f}: {e}")
-                    
-        return models
