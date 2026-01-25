@@ -161,8 +161,16 @@ export const appRouter = router({
   backtest: router({
     getExchanges: protectedProcedure.query(async ({ ctx }) => {
       try {
-        const res = await fetch(`${INTERNAL_API_URL}/backtest/exchanges/${ctx.user.openId}`);
-        return await res.json();
+        // Use the public endpoint to get all supported exchanges
+        const res = await fetch(`${INTERNAL_API_URL}/market/exchanges`);
+        const exchangeIds = await res.json() as string[];
+        
+        // Map to the object structure expected by the frontend
+        return exchangeIds.map(id => ({
+          exchangeId: id,
+          isActive: true 
+        }));
+
       } catch (e) {
         console.error("Error proxying getExchanges:", e);
         return [];
@@ -172,7 +180,7 @@ export const appRouter = router({
       .input(z.object({ exchangeId: z.string() }))
       .query(async ({ ctx, input }) => {
         try {
-          const res = await fetch(`${INTERNAL_API_URL}/backtest/markets/${ctx.user.openId}/${input.exchangeId}`);
+          const res = await fetch(`${INTERNAL_API_URL}/backtest/markets/${input.exchangeId}`);
           return await res.json();
         } catch (e) {
           console.error("Error proxying getMarkets:", e);
@@ -184,7 +192,7 @@ export const appRouter = router({
       .query(async ({ ctx, input }) => {
         try {
           console.log(`[TRPC] getSymbols for ${input.exchangeId} ${input.marketType}`);
-          const url = `${INTERNAL_API_URL}/backtest/symbols/${ctx.user.openId}/${input.exchangeId}?market_type=${input.marketType}`;
+          const url = `${INTERNAL_API_URL}/backtest/symbols/${input.exchangeId}?market_type=${input.marketType}`;
           const res = await fetch(url);
           console.log(`[TRPC] getSymbols status: ${res.status}`);
 

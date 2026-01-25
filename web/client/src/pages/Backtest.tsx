@@ -64,20 +64,13 @@ export default function Backtest() {
   const [symbol, setSymbol] = useState('BTC/USDT');
   const [timeframe, setTimeframe] = useState('1h');
   const [days, setDays] = useState(30);
-  const [strategy, setStrategy] = useState('auto'); // 'sma', 'standard', 'sniper', 'auto', 'local_lstm'
   const [selectedModel, setSelectedModel] = useState<string>(''); // Selected ML model
-  const [useAI, setUseAI] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
   const [results, setResults] = useState<BacktestResults | null>(null);
-
-  // ML Models and Virtual Balance
   const [mlModels, setMlModels] = useState<any[]>([]);
   const [virtualBalance, setVirtualBalance] = useState<number>(10000);
   const [loadingModels, setLoadingModels] = useState(false);
   const [loadingBalance, setLoadingBalance] = useState(false);
-
-  // Computed property for API
-  const apiUseAI = strategy !== 'sma';
 
   // TRPC Queries
   const { data: exchanges = [], isLoading: loadingExchanges } = trpc.backtest.getExchanges.useQuery(undefined, {
@@ -169,26 +162,6 @@ export default function Backtest() {
     }
   }, [user]);
 
-  const handleTrainModel = async () => {
-    if (!selectedSymbol) return;
-    const toastId = toast.loading(`Entrenando modelo LSTM para ${selectedSymbol}... (Esto puede tardar)`);
-    try {
-      const res = await fetch(`${CONFIG.API_BASE_URL}/ml/train`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          symbol: selectedSymbol,
-          days: 365,
-          epochs: 20
-        })
-      });
-      if (res.ok) toast.success("Entrenamiento iniciado en segundo plano", { id: toastId });
-      else throw new Error("Error iniciando entrenamiento");
-    } catch (e: any) {
-      toast.error(e.message, { id: toastId });
-    }
-  };
-
   const handleRunBacktest = async () => {
     if (!user?.openId) {
       toast.error('Usuario no autenticado');
@@ -199,14 +172,14 @@ export default function Backtest() {
       toast.error('Por favor selecciona un símbolo');
       return;
     }
-
-    // Check if model needs training for local strategy
-    if (strategy === 'local_lstm') {
-      toast.info("Nota: Asegúrese de haber entrenado el modelo para este par previamente.");
+    if (!selectedModel) {
+      toast.error('Por favor selecciona un modelo');
+      return;
     }
 
+
     setIsRunning(true);
-    const toastId = toast.loading(`Ejecutando backtesting (${strategy})...`);
+    const toastId = toast.loading(`Ejecutando backtesting con modelo...`);
 
     try {
       // Llamar al endpoint real de backtesting
@@ -217,8 +190,7 @@ export default function Backtest() {
           exchange_id: selectedExchange || 'binance',
           days: days.toString(),
           timeframe: timeframe,
-          use_ai: apiUseAI.toString(),
-          strategy: strategy
+          model_id: selectedModel
         }),
         {
           method: 'POST',
@@ -284,7 +256,7 @@ export default function Backtest() {
 
       setResults(backtestResults);
       toast.success(
-        `Backtesting completado (${(data as any).strategy_name || strategy})`,
+        `Backtesting completado (${(data as any).strategy_name})`,
         { id: toastId }
       );
     } catch (error: any) {
@@ -616,118 +588,44 @@ export default function Backtest() {
             </div>
           </div>
 
-          {/* ML Models Selector (only for local_lstm strategy) */}
-          {strategy === 'local_lstm' && (
-            <div className="mb-6">
-              <label className="block text-sm font-semibold text-foreground mb-2">
-                Modelo ML Entrenado
-              </label>
-              {loadingModels ? (
-                <div className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg bg-background">
-                  <Loader2 className="animate-spin" size={16} />
-                  <span className="text-muted-foreground">Cargando modelos...</span>
-                </div>
-              ) : mlModels.length === 0 ? (
-                <div className="p-4 border border-yellow-500/20 rounded-lg bg-yellow-500/10 text-yellow-600 text-sm">
-                  ⚠️ No hay modelos entrenados. Entrena un modelo primero.
-                </div>
-              ) : (
-                <select
-                  value={selectedModel}
-                  onChange={(e) => setSelectedModel(e.target.value)}
-                  className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
-                >
-                  <option value="">Seleccionar modelo...</option>
-                  {mlModels.map((model) => (
-                    <option key={model.id} value={model.id}>
-                      {model.symbol} - {model.timeframe} (Accuracy: {(model.accuracy * 100).toFixed(1)}%)
-                    </option>
-                  ))}
-                </select>
-              )}
-              {selectedModel && (
-                <div className="mt-2 p-2 bg-blue-500/10 border border-blue-500/20 rounded text-xs text-blue-600">
-                  ℹ️ Modelo seleccionado: {mlModels.find(m => m.id === selectedModel)?.symbol}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Strategy Selection */}
+          {/* ML Models Selector */}
           <div className="mb-6">
             <label className="block text-sm font-semibold text-foreground mb-2">
-              Estrategia
+              Modelo
             </label>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div
-                onClick={() => setStrategy('auto')}
-                className={`cursor-pointer p-4 rounded-lg border-2 transition-all ${strategy === 'auto' ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'
-                  }`}
-              >
-                <div className="font-bold flex items-center gap-2">🏆 Torneo (Auto)</div>
-                <div className="text-xs text-muted-foreground mt-1">Prueba todas y selecciona la mejor</div>
+            {loadingModels ? (
+              <div className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg bg-background">
+                <Loader2 className="animate-spin" size={16} />
+                <span className="text-muted-foreground">Cargando modelos...</span>
               </div>
-
-              <div
-                onClick={() => setStrategy('local_lstm')}
-                className={`cursor-pointer p-4 rounded-lg border-2 transition-all ${strategy === 'local_lstm' ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'
-                  }`}
-              >
-                <div className="font-bold flex items-center gap-2">🧠 Neural Net (Local)</div>
-                <div className="text-xs text-muted-foreground mt-1">PyTorch LSTM (Entrenable)</div>
-                {strategy === 'local_lstm' && selectedSymbol && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mt-2 w-full text-xs h-7"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleTrainModel();
-                    }}
-                  >
-                    Entrenar Ahora
-                  </Button>
-                )}
+            ) : mlModels.length === 0 ? (
+              <div className="p-4 border border-yellow-500/20 rounded-lg bg-yellow-500/10 text-yellow-600 text-sm">
+                ⚠️ No hay modelos disponibles.
               </div>
-
-              <div
-                onClick={() => setStrategy('sniper')}
-                className={`cursor-pointer p-4 rounded-lg border-2 transition-all ${strategy === 'sniper' ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'
-                  }`}
+            ) : (
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
               >
-                <div className="font-bold flex items-center gap-2">🎯 AI Sniper</div>
-                <div className="text-xs text-muted-foreground mt-1">Alta precisión (&gt;60% WR)</div>
-              </div>
-
-              <div
-                onClick={() => setStrategy('standard')}
-                className={`cursor-pointer p-4 rounded-lg border-2 transition-all ${strategy === 'standard' ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'
-                  }`}
-              >
-                <div className="font-bold flex items-center gap-2">🤖 AI Standard</div>
-                <div className="text-xs text-muted-foreground mt-1">Balanceado</div>
-              </div>
-
-              <div
-                onClick={() => setStrategy('sma')}
-                className={`cursor-pointer p-4 rounded-lg border-2 transition-all ${strategy === 'sma' ? 'border-primary bg-primary/10' : 'border-border hover:border-primary/50'
-                  }`}
-              >
-                <div className="font-bold flex items-center gap-2">📈 SMA Clásico</div>
-                <div className="text-xs text-muted-foreground mt-1">Cruce de medias</div>
-              </div>
-            </div>
-
-            {(strategy === 'standard' || strategy === 'sniper' || strategy === 'auto') && (
-              <div className="mt-3 p-2 bg-blue-500/10 border border-blue-500/20 rounded text-xs text-blue-600 dark:text-blue-400">
-                ℹ️ Requiere API Key de IA configurada
+                <option value="">Seleccionar modelo...</option>
+                {mlModels.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.symbol} - {model.timeframe} (Accuracy: {(model.accuracy * 100).toFixed(1)}%)
+                  </option>
+                ))}
+              </select>
+            )}
+            {selectedModel && (
+              <div className="mt-2 p-2 bg-blue-500/10 border border-blue-500/20 rounded text-xs text-blue-600">
+                ℹ️ Modelo seleccionado: {mlModels.find(m => m.id === selectedModel)?.symbol}
               </div>
             )}
           </div>
 
           <Button
             onClick={handleRunBacktest}
-            disabled={isRunning || !selectedSymbol}
+            disabled={isRunning || !selectedSymbol || !selectedModel}
             className="flex items-center gap-2 w-full md:w-auto"
           >
             <Play size={18} />
@@ -744,7 +642,7 @@ export default function Backtest() {
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-xl font-bold text-green-600 dark:text-green-400 flex items-center gap-2">
-                      🏆 Estrategia Ganadora: {(results as any).strategy_name || strategy}
+                      🏆 Estrategia Ganadora: {(results as any).strategy_name}
                     </h3>
                     <p className="text-muted-foreground mt-1">
                       Esta estrategia obtuvo los mejores resultados en el torneo.
@@ -769,7 +667,7 @@ export default function Backtest() {
                         const res = await fetch(`${CONFIG.API_BASE_URL}/backtest/deploy_bot?` + new URLSearchParams({
                           user_id: user?.openId || '',
                           symbol: results.symbol,
-                          strategy: (results as any).strategy_id || strategy,
+                          strategy_id: (results as any).strategy_id,
                           initial_balance: virtualBalance.toString()
                         }), { method: 'POST' });
                         const data = await res.json();
@@ -794,7 +692,7 @@ export default function Backtest() {
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Estrategia Usada</p>
                   <p className="text-sm font-semibold text-foreground">
-                    {(results as any).strategy_name || (results as any).strategy_used || strategy}
+                    {(results as any).strategy_name || (results as any).strategy_used}
                   </p>
                 </div>
                 <div>

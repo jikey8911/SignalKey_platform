@@ -57,24 +57,18 @@ async def get_user_exchanges(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/markets/{user_id}/{exchange_id}")
-async def get_exchange_markets(user_id: str, exchange_id: str):
+@router.get("/markets/{exchange_id}")
+async def get_exchange_markets(exchange_id: str):
     """
     Obtiene los tipos de mercado disponibles para un exchange
     
     Args:
-        user_id: ID del usuario
         exchange_id: ID del exchange (ej: 'okx', 'binance')
     
     Returns:
         Lista de tipos de mercado disponibles
     """
     try:
-        # Verificar que el usuario existe
-        user = await db.users.find_one({"openId": user_id})
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        
         # Obtener mercados del exchange
         markets = await ccxt_service.get_markets(exchange_id)
         
@@ -88,9 +82,8 @@ async def get_exchange_markets(user_id: str, exchange_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/symbols/{user_id}/{exchange_id}")
+@router.get("/symbols/{exchange_id}")
 async def get_exchange_symbols(
-    user_id: str, 
     exchange_id: str, 
     market_type: Optional[str] = "spot"
 ):
@@ -98,7 +91,6 @@ async def get_exchange_symbols(
     Obtiene los símbolos con datos de precio para un exchange y tipo de mercado
     
     Args:
-        user_id: ID del usuario
         exchange_id: ID del exchange
         market_type: Tipo de mercado (spot, future, swap, etc.)
     
@@ -106,11 +98,6 @@ async def get_exchange_symbols(
         Lista de símbolos con precio actual y cambio porcentual
     """
     try:
-        # Verificar que el usuario existe
-        user = await db.users.find_one({"openId": user_id})
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        
         # Obtener símbolos con tickers
         symbols = await ccxt_service.get_symbols_with_tickers(exchange_id, market_type)
         
