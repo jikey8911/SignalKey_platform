@@ -4,7 +4,7 @@ from .base import BaseStrategy
 
 class TrendEMA(BaseStrategy):
     def __init__(self, fast=20, slow=50):
-        super().__init__("Trend_EMA", "Seguimiento de tendencia por cruce de EMAs")
+        super().__init__("TrendEMA", "Seguimiento de tendencia por cruce de EMAs")
         self.fast = fast
         self.slow = slow
 

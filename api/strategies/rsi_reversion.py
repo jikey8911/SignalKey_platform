@@ -4,7 +4,7 @@ from .base import BaseStrategy
 
 class RSIReversion(BaseStrategy):
     def __init__(self, period=14, overbought=70, oversold=30):
-        super().__init__("RSI_Reversion", "Compra en sobreventa y vende en sobrecompra")
+        super().__init__("RSIReversion", "Compra en sobreventa y vende en sobrecompra")
         self.period = period
         self.overbought = overbought
         self.oversold = oversold

@@ -1,5 +1,6 @@
 # import ccxt.async_support as ccxt # Removed to use adapter
 import pandas as pd
+import os
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
@@ -217,6 +218,24 @@ class BacktestService:
                 "symbol": symbol,
                 "timeframe": timeframe,
                 "model_id": f"{symbol.replace('/', '_')}_{timeframe}",
+            }
+            
+            # Verify if specific model exists, else fallback to GLOBAL for config
+            safe_symbol = symbol.replace('/', '_')
+            specific_model = f"{safe_symbol}_{timeframe}"
+            specific_path = f"{self.ml_service.models_dir}/{specific_model}_lstm.pth"
+            
+            final_model_id = specific_model
+            if not os.path.exists(specific_path):
+                global_model = f"GLOBAL_{timeframe}"
+                global_path = f"{self.ml_service.models_dir}/{global_model}_lstm.pth"
+                if os.path.exists(global_path):
+                    final_model_id = global_model
+            
+            bot_config["model_id"] = final_model_id
+            
+            # Continue with rest of config...
+            bot_config.update({
                 "parameters": {
                     "use_neural_selection": True,
                     "min_confidence": 0.65, # Configurable

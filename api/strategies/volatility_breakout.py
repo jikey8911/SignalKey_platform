@@ -4,7 +4,7 @@ from .base import BaseStrategy
 
 class VolatilityBreakout(BaseStrategy):
     def __init__(self, period=20):
-        super().__init__("Volatility_Breakout", "Ruptura de canales de precio con alta volatilidad")
+        super().__init__("VolatilityBreakout", "Ruptura de canales de precio con alta volatilidad")
         self.period = period
 
     def get_signal(self, data: pd.DataFrame) -> dict:
