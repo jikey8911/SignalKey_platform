@@ -243,7 +243,7 @@ class BacktestService:
                     "initial_balance": initial_balance
                 },
                 "recommended_strategies": list(set([t['strategy'] for t in trades if 'strategy' in t]))
-            }
+            })
             
             logger.info(f"🏁 Backtest completed. Trades: {len(trades)}, Profit: {profit_pct:.2f}%")
             return {
