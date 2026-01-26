@@ -17,14 +17,14 @@ from functools import lru_cache
 # from sklearn.preprocessing import MinMaxScaler 
 # import joblib 
 
-from api.ml.models.lstm_model import LSTMModel
-from api.src.application.services.cex_service import CEXService
-from api.config import Config
+from ml.models.lstm_model import LSTMModel
+from src.application.services.cex_service import CEXService
+from config import Config
 from api.strategies import load_strategies
 from api.utils.indicators import rsi, adx, atr, bollinger_bands, ema
-from api.ml.strategy_trainer import StrategyTrainer
-from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
-from api.src.adapters.driven.persistence.mongodb import db
+from ml.strategy_trainer import StrategyTrainer
+from src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+from src.adapters.driven.persistence.mongodb import db
 import logging
 
 logger = logging.getLogger(__name__)
@@ -661,23 +661,33 @@ class MLService:
             logger.error(f"Error predicting: {e}")
             raise e
 
-    def predict_batch(self, symbol: str, timeframe: str, candles: List[Dict]) -> List[Dict[str, Any]]:
+    def predict_batch(self, symbol: str, timeframe: str, candles: List[Dict], model_name: str = None) -> List[Dict[str, Any]]:
         """
         Realiza predicciones en lote para una serie histórica de velas.
         Optimizado para Backtesting.
         """
         try:
             # 1. Load Model (Cached)
-            safe_symbol = symbol.replace('/', '_')
-            model_name = f"{safe_symbol}_{timeframe}"
+            # Logic: If model_name provided, try it. Else construct from symbol.
+            # If fail, fallback to GLOBAL.
+            
+            target_model = model_name
+            if not target_model:
+                safe_symbol = symbol.replace('/', '_')
+                target_model = f"{safe_symbol}_{timeframe}"
             
             # Intentar cargar
             try:
-                model, scaler, meta = self._load_model_artifacts(model_name)
+                model, scaler, meta = self._load_model_artifacts(target_model)
             except FileNotFoundError:
                  # Fallback to GLOBAL
-                 model_name = f"GLOBAL_{timeframe}"
-                 model, scaler, meta = self._load_model_artifacts(model_name)
+                 # Per user request: "usar global... si no coincide"
+                 target_model = f"GLOBAL_{timeframe}"
+                 try:
+                    model, scaler, meta = self._load_model_artifacts(target_model)
+                 except FileNotFoundError:
+                    logger.warning(f"Neither specified model nor Global model found for {symbol} {timeframe}")
+                    return []
 
             self.scaler = scaler # Set current scaler
 

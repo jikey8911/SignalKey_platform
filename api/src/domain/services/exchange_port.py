@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional, Dict
-from api.src.domain.entities.trading import Ticker, Balance, Order, TradeResult
-from api.src.domain.entities.signal import SignalAnalysis
+from src.domain.entities.trading import Ticker, Balance, Order, TradeResult
+from src.domain.entities.signal import SignalAnalysis
 
 class IExchangePort(ABC):
     @abstractmethod

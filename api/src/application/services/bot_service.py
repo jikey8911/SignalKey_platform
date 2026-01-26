@@ -2,10 +2,10 @@ import logging
 import asyncio
 from datetime import datetime
 from typing import Dict, Any, List
-from api.src.adapters.driven.persistence.mongodb import db, save_trade, update_virtual_balance
-from api.src.application.services.cex_service import CEXService
-from api.src.application.services.dex_service import DEXService
-from api.src.domain.models.schemas import AnalysisResult, ExecutionResult
+from src.adapters.driven.persistence.mongodb import db, save_trade, update_virtual_balance
+from src.application.services.cex_service import CEXService
+from src.application.services.dex_service import DEXService
+from src.domain.models.schemas import AnalysisResult, ExecutionResult
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +225,7 @@ class SignalBotService:
             )
             
             # Emitir actualización en tiempo real
-            from api.src.adapters.driven.notifications.socket_service import socket_service
+            from src.adapters.driven.notifications.socket_service import socket_service
             user = await db.users.find_one({"_id": bot["userId"]})
             if user:
                 await socket_service.emit_to_user(user["openId"], "bot_update", {

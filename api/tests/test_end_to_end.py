@@ -9,7 +9,7 @@ import sys
 # Asegurar path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from api.src.application.services.ml_service import MLService
+from src.application.services.ml_service import MLService
 from api.services.cex_service import CEXService
 from unittest.mock import MagicMock, AsyncMock
 

@@ -2,10 +2,10 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import List, Dict, Any
-from api.src.adapters.driven.persistence.mongodb import db, update_virtual_balance
-from api.src.application.services.cex_service import CEXService
-from api.src.application.services.dex_service import DEXService
-from api.src.adapters.driven.notifications.socket_service import socket_service
+from src.adapters.driven.persistence.mongodb import db, update_virtual_balance
+from src.application.services.cex_service import CEXService
+from src.application.services.dex_service import DEXService
+from src.adapters.driven.notifications.socket_service import socket_service
 
 logger = logging.getLogger(__name__)
 

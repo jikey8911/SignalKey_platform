@@ -1,10 +1,10 @@
 import logging
 from typing import List, Optional, Dict
-from api.src.domain.services.exchange_port import IExchangePort
-from api.src.domain.entities.trading import Ticker, Balance, Order, TradeResult
-from api.src.domain.entities.signal import SignalAnalysis
-from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
-from api.src.adapters.driven.persistence.mongodb import get_app_config, save_trade, update_virtual_balance, db
+from src.domain.services.exchange_port import IExchangePort
+from src.domain.entities.trading import Ticker, Balance, Order, TradeResult
+from src.domain.entities.signal import SignalAnalysis
+from src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+from src.adapters.driven.persistence.mongodb import get_app_config, save_trade, update_virtual_balance, db
 from datetime import datetime
 
 logger = logging.getLogger(__name__)

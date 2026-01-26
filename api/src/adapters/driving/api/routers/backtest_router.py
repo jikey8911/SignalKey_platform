@@ -5,9 +5,9 @@ from fastapi import APIRouter, HTTPException
 from typing import Optional, List, Dict, Any
 import logging
 from datetime import datetime
-from api.src.adapters.driven.persistence.mongodb import db
-from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
-from api.src.application.services.ml_service import MLService
+from src.adapters.driven.persistence.mongodb import db
+from src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+from src.application.services.ml_service import MLService
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +177,7 @@ async def run_backtest(
             user_config = config
         
         # Importar y ejecutar el servicio de backtest
-        from api.src.application.services.backtest_service import BacktestService
+        from src.application.services.backtest_service import BacktestService
         
         backtest_service = BacktestService()
         results = await backtest_service.run_backtest(
@@ -188,7 +188,8 @@ async def run_backtest(
             user_config=user_config,
             strategy=strategy,
             user_id=user_id,
-            exchange_id=exchange_id
+            exchange_id=exchange_id,
+            model_id=model_id
         )
         
         return results

@@ -7,7 +7,7 @@ import os
 # Asegurar path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from api.src.application.services.ml_service import MLService
+from src.application.services.ml_service import MLService
 from api.utils.indicators import rsi
 
 class TestMLLabeling(unittest.TestCase):

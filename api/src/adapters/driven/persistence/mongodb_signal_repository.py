@@ -1,8 +1,8 @@
 from typing import List, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
-from api.src.domain.models.signal import Signal, SignalStatus, MarketType, Decision
-from api.src.domain.ports.output.signal_repository import ISignalRepository
+from src.domain.models.signal import Signal, SignalStatus, MarketType, Decision
+from src.domain.ports.output.signal_repository import ISignalRepository
 
 class MongoDBSignalRepository(ISignalRepository):
     def __init__(self, db: AsyncIOMotorDatabase):

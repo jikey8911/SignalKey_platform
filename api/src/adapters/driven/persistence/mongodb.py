@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from bson import ObjectId
 
-from api.config import Config
+from config import Config
 
 logger = logging.getLogger(__name__)
 logger.info(f"MongoDB: Connecting to {Config.MONGODB_URI[:50]}...")  # Solo primeros 50 chars por seguridad
@@ -115,7 +115,7 @@ async def update_virtual_balance(user_id: str, market_type: str, asset: str, amo
         )
     
     # Emitir cambio por socket
-    from api.src.adapters.driven.notifications.socket_service import socket_service
+    from src.adapters.driven.notifications.socket_service import socket_service
     await socket_service.emit_to_user(user_id, "balance_update", {
         "marketType": market_type,
         "asset": asset,

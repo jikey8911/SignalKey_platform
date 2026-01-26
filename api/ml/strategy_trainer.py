@@ -1,9 +1,9 @@
 import pandas as pd
 import numpy as np
 import logging
-from api.strategies.rsi_reversion import RSIReversion
-from api.strategies.trend_ema import TrendEMA
-from api.strategies.volatility_breakout import VolatilityBreakout
+from strategies.rsi_reversion import RSIReversion
+from strategies.trend_ema import TrendEMA
+from strategies.volatility_breakout import VolatilityBreakout
 from api.strategies import load_strategies
 from api.utils.indicators import rsi, adx, atr, bollinger_bands
 

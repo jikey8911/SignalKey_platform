@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import List, Optional
-from api.src.domain.entities.signal import Signal
+from src.domain.entities.signal import Signal
 
 class ISignalRepository(ABC):
     @abstractmethod

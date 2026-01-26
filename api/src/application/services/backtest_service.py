@@ -6,12 +6,12 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 import numpy as np
 
-from api.src.application.services.ml_service import MLService
-from api.src.adapters.driven.persistence.mongodb import db
-from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
-from api.strategies.rsi_reversion import RSIReversion
-from api.strategies.trend_ema import TrendEMA
-from api.strategies.volatility_breakout import VolatilityBreakout
+from src.application.services.ml_service import MLService
+from src.adapters.driven.persistence.mongodb import db
+from src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+from strategies.rsi_reversion import RSIReversion
+from strategies.trend_ema import TrendEMA
+from strategies.volatility_breakout import VolatilityBreakout
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,8 @@ class BacktestService:
         user_config: Dict[str, Any] = None,
         strategy: str = "auto", # 'auto' implies neural selection
         initial_balance: Optional[float] = None,
-        exchange_id: str = "binance"
+        exchange_id: str = "binance",
+        model_id: Optional[str] = None # Added model_id
     ) -> Dict[str, Any]:
         """
         Ejecuta backtest usando EXCLUSIVAMENTE el modelo ML entrenado (Meta-Selector).
@@ -74,7 +75,8 @@ class BacktestService:
             # 3. Predicciones en Lote (Meta-Selector)
             candles = df.to_dict('records')
             logger.info(f"🧠 Generating ML predictions for {len(candles)} candles...")
-            model_predictions = self.ml_service.predict_batch(symbol, timeframe, candles)
+            # Pass model_id explicitly (or None)
+            model_predictions = self.ml_service.predict_batch(symbol, timeframe, candles, model_name=model_id)
             logger.info(f"✅ Predictions generated: {len(model_predictions) if model_predictions else 0}")
             
             if not model_predictions:
@@ -130,8 +132,13 @@ class BacktestService:
                         
                         # EXECUTE BUY
                         if algo_signal == 'buy' and position == 0 and virtual_balance > 0:
-                            # Buy logic
-                            amount_to_spend = virtual_balance * 0.98 # Leave dust
+                            # Buy logic with Limits
+                            investment_limits = user_config.get("investmentLimits", {}) if user_config else {}
+                            max_amount_cfg = investment_limits.get("cexMaxAmount", 100.0) # Default sensible
+                            
+                            # Use configured max amount, capped by available balance
+                            amount_to_spend = min(float(max_amount_cfg), virtual_balance * 0.98) 
+                            
                             coin_amount = amount_to_spend / current_price
                             cost = coin_amount * current_price
                             

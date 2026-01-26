@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
-from api.src.application.services.ml_service import MLService
+from src.application.services.ml_service import MLService
 import logging
 
 logger = logging.getLogger(__name__)
