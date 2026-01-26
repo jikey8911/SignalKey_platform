@@ -1,16 +1,16 @@
 from datetime import datetime
 from typing import List, Dict, Any
-from api.src.domain.entities.signal import Signal, SignalStatus, SignalAnalysis, Decision
-from api.src.domain.repositories.signal_repository import ISignalRepository
-from api.src.domain.services.ai_port import IAIPort
-from api.src.domain.services.notification_port import INotificationPort
+from api.src.domain.models.signal import Signal, SignalStatus, SignalAnalysis, Decision
+from api.src.domain.ports.output.signal_repository import ISignalRepository
+from api.src.domain.ports.output.ai_port import AIPort
+from api.src.domain.ports.output.notification_port import INotificationPort
 from api.src.domain.exceptions.infrastructure_exceptions import InfrastructureServiceError
 
 class ProcessSignalUseCase:
     def __init__(
         self, 
         signal_repository: ISignalRepository, 
-        ai_service: IAIPort,
+        ai_service: AIPort,
         notification_service: INotificationPort,
         bot_service: Any # Simplificado para este ejemplo
     ):

@@ -2,7 +2,7 @@ import pytest
 import asyncio
 from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime, timedelta
-from api.services.backtest_service import BacktestService
+from api.src.application.services.backtest_service import BacktestService
 from api.infrastructure.adapters.ai_adapter import AIAdapter
 from api.core.domain.signal import SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
 

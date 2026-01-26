@@ -1,8 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from api.bot.telegram_bot import TelegramUserBot
-from api.services.signal_bot_service import SignalBotService
-from api.models.schemas import AnalysisResult
+from api.src.application.services.bot_service import SignalBotService
+from api.src.domain.models.schemas import AnalysisResult
 from api.core.domain.signal import Decision
 
 @pytest.mark.asyncio
@@ -31,8 +31,8 @@ async def test_signal_bot_service_activation():
     mock_db = MagicMock()
     mock_db.trades.count_documents = AsyncMock(return_value=0)
     
-    with patch('api.services.signal_bot_service.db', mock_db):
-        with patch('api.services.signal_bot_service.save_trade', new_callable=AsyncMock):
+    with patch('api.src.application.services.bot_service.db', mock_db):
+        with patch('api.src.application.services.bot_service.save_trade', new_callable=AsyncMock):
              config = {
                  "demoMode": True, 
                  "_id": "user_id",

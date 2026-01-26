@@ -9,7 +9,7 @@ import sys
 # Asegurar path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from api.services.ml_service import MLService
+from api.src.application.services.ml_service import MLService
 from api.services.cex_service import CEXService
 from unittest.mock import MagicMock, AsyncMock
 
@@ -69,7 +69,7 @@ class TestEndToEnd(unittest.IsolatedAsyncioTestCase):
         # Patch the global ccxt_service used in MLService
         from unittest.mock import patch
         
-        with patch('api.services.ml_service.ccxt_service') as mock_ccxt_svc:
+        with patch('api.src.application.services.ml_service.ccxt_service') as mock_ccxt_svc:
             # Configure mock to return our synthetic data
             mock_ccxt_svc.get_historical_ohlcv = AsyncMock(return_value=self.ohlcv_data)
             

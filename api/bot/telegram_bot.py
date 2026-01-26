@@ -1,8 +1,8 @@
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from api.config import Config
-from api.models.schemas import TradingSignal
-from api.models.mongodb import db
+from api.src.domain.models.schemas import TradingSignal
+from api.src.adapters.driven.persistence.mongodb import db
 from datetime import datetime
 import httpx
 import logging
@@ -113,7 +113,7 @@ class TelegramUserBot:
                     
                     # Guardar y emitir para visualización en tiempo real
                     await db.telegram_logs.insert_one(log_entry)
-                    from api.services.socket_service import socket_service
+                    from api.src.adapters.driven.notifications.socket_service import socket_service
                     await socket_service.emit_to_user(self.user_id, "telegram_log", log_entry)
 
                     # 2. VALIDACIÓN PARA IA: Solo si tiene texto y el procesamiento está habilitado

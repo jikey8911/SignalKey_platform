@@ -6,9 +6,9 @@ from unittest.mock import MagicMock
 # Añadir el directorio raíz al path para importar los módulos de la API
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from api.services.ai_service import AIService
+from api.src.application.services.ai_service import AIService
 from api.core.domain.signal import RawSignal
-from api.infrastructure.adapters.ai_adapter import AIAdapter
+# from api.infrastructure.adapters.ai_adapter import AIAdapter # Verify location first
 
 async def test_multi_token_parsing():
     print("=== Testing Multi-Token Signal Parsing ===")

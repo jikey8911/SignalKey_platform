@@ -4,6 +4,7 @@ import logging
 from api.strategies.rsi_reversion import RSIReversion
 from api.strategies.trend_ema import TrendEMA
 from api.strategies.volatility_breakout import VolatilityBreakout
+from api.strategies import load_strategies
 from api.utils.indicators import rsi, adx, atr, bollinger_bands
 
 logger = logging.getLogger(__name__)
@@ -11,11 +12,8 @@ logger = logging.getLogger(__name__)
 class StrategyTrainer:
     def __init__(self, data: pd.DataFrame, initial_balance: float = 10000.0, use_virtual_balance: bool = True):
         self.data = data
-        self.strategies = [
-            RSIReversion(),
-            TrendEMA(),
-            VolatilityBreakout()
-        ]
+        _, self.strategies = load_strategies()
+        # Map IDs: 1..N based on sorted order. 0=Hold
         # Map IDs: 1=RSI, 2=EMA, 3=Breakout. 0=Hold (default if no profit)
         
         # Virtual Balance Management

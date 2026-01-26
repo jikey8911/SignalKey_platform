@@ -35,6 +35,8 @@ interface BacktestResults {
   sharpeRatio: string;
   candles: Candle[];
   trades: Trade[];
+  botConfiguration?: any; // New field for Bot Configuration
+  metrics?: any; // Raw metrics from backend
 }
 
 interface Exchange {
@@ -72,47 +74,87 @@ export default function Backtest() {
   const [loadingModels, setLoadingModels] = useState(false);
   const [loadingBalance, setLoadingBalance] = useState(false);
 
-  // TRPC Queries
-  const { data: exchanges = [], isLoading: loadingExchanges } = trpc.backtest.getExchanges.useQuery(undefined, {
-    enabled: !!user?.openId
-  });
+  // Fetch Exchanges
+  const [exchanges, setExchanges] = useState<Exchange[]>([]);
+  const [loadingExchanges, setLoadingExchanges] = useState(false);
 
-  const { data: marketData, isLoading: loadingMarkets } = trpc.backtest.getMarkets.useQuery(
-    { exchangeId: selectedExchange },
-    { enabled: !!selectedExchange && !!user?.openId }
-  );
-  const markets = marketData?.markets || [];
-
-  const { data: symbolData, isLoading: loadingSymbols, refetch: refetchSymbols, isFetching: isFetchingSymbols } = trpc.backtest.getSymbols.useQuery(
-    { exchangeId: selectedExchange, marketType: selectedMarket },
-    {
-      enabled: !!selectedExchange && !!selectedMarket && !!user?.openId,
-      refetchOnWindowFocus: false,
-      staleTime: 0,
-      gcTime: 0, // Replaces cacheTime in v5
-      // keepPreviousData is also deprecated, use placeholderData if needed, but let's just remove it if errored or keep if v4
-      // Error log didn't mention keepPreviousData so assuming it refers to v5 types where cacheTime is gone.
-    }
-  );
-  const symbols = symbolData?.symbols || [];
-
-  // Auto-select exchange effect
   useEffect(() => {
-    if (exchanges.length === 1 && !selectedExchange) {
+    setLoadingExchanges(true);
+    fetch(`${CONFIG.API_BASE_URL}/market/exchanges`)
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          // Map string[] to object structure expected by UI
+          setExchanges(data.map(e => ({ exchangeId: e, isActive: true })));
+        }
+      })
+      .catch(err => console.error("Error fetching exchanges:", err))
+      .finally(() => setLoadingExchanges(false));
+  }, []);
+
+  // Fetch Markets
+  const [markets, setMarkets] = useState<string[]>([]);
+  const [loadingMarkets, setLoadingMarkets] = useState(false);
+
+  useEffect(() => {
+    if (!selectedExchange) {
+      setMarkets([]);
+      return;
+    }
+    setLoadingMarkets(true);
+    fetch(`${CONFIG.API_BASE_URL}/market/exchanges/${selectedExchange}/markets`)
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) setMarkets(data);
+      })
+      .catch(err => console.error("Error fetching markets:", err))
+      .finally(() => setLoadingMarkets(false));
+  }, [selectedExchange]);
+
+  // Fetch Symbols
+  const [symbols, setSymbols] = useState<Symbol[]>([]);
+  const [loadingSymbols, setLoadingSymbols] = useState(false);
+
+  useEffect(() => {
+    if (!selectedExchange || !selectedMarket) return;
+    setLoadingSymbols(true);
+    fetch(`${CONFIG.API_BASE_URL}/market/exchanges/${selectedExchange}/markets/${selectedMarket}/symbols`)
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          // Map string[] to Symbol interface
+          // Note: The API returns strings, so we mock price/change data or leave 0
+          const mapped: Symbol[] = data.map(s => ({
+            symbol: s,
+            baseAsset: s.split('/')[0] || '',
+            quoteAsset: s.split('/')[1] || '',
+            price: 0,
+            priceChange: 0,
+            priceChangePercent: 0,
+            volume: 0
+          }));
+          setSymbols(mapped);
+        }
+      })
+      .catch(err => console.error("Error fetching symbols:", err))
+      .finally(() => setLoadingSymbols(false));
+  }, [selectedExchange, selectedMarket]);
+
+  // Auto-select defaults
+  useEffect(() => {
+    if (exchanges.length > 0 && !selectedExchange) {
       setSelectedExchange(exchanges[0].exchangeId);
     }
-  }, [exchanges, selectedExchange]);
+  }, [exchanges]);
 
-  // Auto-select market effect
+  // Reset/Default Market
   useEffect(() => {
-    if (markets.length > 0) {
-      if (markets.includes('spot')) {
-        setSelectedMarket('spot');
-      } else {
-        setSelectedMarket(markets[0]);
-      }
+    if (markets.length > 0 && (!selectedMarket || !markets.includes(selectedMarket))) {
+      // Prefer 'spot' if available
+      if (markets.includes('spot')) setSelectedMarket('spot');
+      else setSelectedMarket(markets[0]);
     }
-  }, [markets]);
+  }, [markets, selectedMarket]);
 
   // Fetch ML Models
   useEffect(() => {
@@ -216,42 +258,36 @@ export default function Backtest() {
         profit: t.pnl
       })) || [];
 
-      // Generar velas simuladas para visualización (el backend no las retorna aún)
-      // TODO: En el futuro, el backend debería retornar las velas históricas
-      const candles: Candle[] = [];
-      let basePrice = transformedTrades[0]?.price || 45000;
-      const now = Date.now();
-
-      for (let i = 0; i < 100; i++) {
-        const variation = (Math.random() - 0.5) * (basePrice * 0.02);
-        const open = basePrice;
-        const close = basePrice + variation;
-        const high = Math.max(open, close) * (1 + Math.random() * 0.01);
-        const low = Math.min(open, close) * (1 - Math.random() * 0.01);
-
-        candles.push({
-          time: now - (100 - i) * 3600000,
-          open,
-          high,
-          low,
-          close,
-        });
-
-        basePrice = close;
-      }
+      // Map chart_data from backend to Candle interface
+      const candles: Candle[] = data.chart_data?.map((c: any) => ({
+        time: c.time * 1000, // Backend sends seconds (timestamp), Frontend expects ms maybe? 
+        // Wait, backend sends "int(timestamp)". timestamp() in python is seconds float. 
+        // int(ts) is seconds. JS needs milliseconds usually.
+        // Let's check existing code. line 273: time: now - ... 3600000. ms.
+        // So * 1000 is needed if backend sends seconds.
+        // Verify backend: `timestamp = candle['timestamp'].timestamp()` -> float seconds.
+        // `point["time"] = int(timestamp)`.
+        // So yes, * 1000.
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close
+      })) || [];
 
       const backtestResults: BacktestResults = {
-        symbol: data.symbol,
+        symbol: data.symbol || selectedSymbol,
         timeframe,
         days,
-        totalTrades: data.total_trades || 0,
-        winRate: data.win_rate || 0,
-        profitFactor: data.profit_factor?.toString() || '0',
-        maxDrawdown: data.max_drawdown?.toString() || '0',
-        totalReturn: data.profit_percentage?.toFixed(2) || '0',
-        sharpeRatio: data.sharpe_ratio?.toString() || '0',
+        totalTrades: data.metrics?.total_trades || 0,
+        winRate: data.metrics?.win_rate || 0,
+        profitFactor: '0', // Not calculated in backend currently
+        maxDrawdown: data.metrics?.max_drawdown?.toFixed(2) || '0',
+        totalReturn: data.metrics?.profit_pct?.toFixed(2) || '0',
+        sharpeRatio: data.metrics?.sharpe_ratio?.toString() || '0',
         candles,
         trades: transformedTrades,
+        botConfiguration: data.bot_configuration,
+        metrics: data.metrics
       };
 
       setResults(backtestResults);
@@ -409,10 +445,10 @@ export default function Backtest() {
           <div className="bg-muted/50 p-2 text-xs font-mono mb-4 rounded border border-yellow-500/20 flex justify-between items-center">
             <span>
               DEBUG: Exch={selectedExchange || '?'} | Mkt={selectedMarket || '?'} |
-              Syms={symbols.length} | Load={loadingSymbols || isFetchingSymbols ? 'YES' : 'NO'}
+              Syms={symbols.length} | Load={loadingSymbols ? 'YES' : 'NO'}
             </span>
-            <Button variant="ghost" size="sm" onClick={() => refetchSymbols()} className="h-6 text-xs">
-              Refetch Symbols
+            <Button variant="ghost" size="sm" onClick={() => { }} className="h-6 text-xs">
+              Reload
             </Button>
           </div>
 
@@ -636,51 +672,55 @@ export default function Backtest() {
         {/* Results */}
         {results && (
           <>
-            {/* Deploy Bot Banner (If Recommended) */}
-            {(results as any).recommended && (
-              <Card className="p-6 bg-gradient-to-r from-green-500/10 to-blue-500/10 border-green-500/30 mb-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-xl font-bold text-green-600 dark:text-green-400 flex items-center gap-2">
-                      🏆 Estrategia Ganadora: {(results as any).strategy_name}
+            {/* Bot Configuration & Deploy Card */}
+            {results.botConfiguration && (
+              <Card className="p-6 bg-gradient-to-r from-cyan-500/10 to-blue-500/10 border-cyan-500/30 mb-6">
+                <div className="flex flex-col md:flex-row justify-between gap-6">
+                  <div className="flex-1">
+                    <h3 className="text-xl font-bold text-cyan-600 dark:text-cyan-400 flex items-center gap-2 mb-2">
+                      🤖 Configuración de Bot Generada
                     </h3>
-                    <p className="text-muted-foreground mt-1">
-                      Esta estrategia obtuvo los mejores resultados en el torneo.
-                    </p>
-                    {/* Tournament Results Summary */}
-                    {(results as any).tournament_results && (
-                      <div className="mt-3 flex gap-4 text-sm">
-                        {(results as any).tournament_results.map((r: any) => (
-                          <div key={r.id} className="flex items-center gap-2">
-                            <span className={r.id === (results as any).strategy_id ? 'font-bold text-green-600' : 'text-muted-foreground'}>
-                              {r.name}: {r.profit.toFixed(2)}%
-                            </span>
-                          </div>
+                    <div className="bg-background/50 p-4 rounded-lg border border-border text-sm font-mono space-y-2">
+                      <p><span className="text-muted-foreground">Estrategia:</span> <span className="font-bold">{results.botConfiguration.strategy_type}</span></p>
+                      <p><span className="text-muted-foreground">Modelo ID:</span> {results.botConfiguration.model_id}</p>
+                      <p><span className="text-muted-foreground">Parámetros:</span></p>
+                      <ul className="list-disc pl-5 text-xs text-muted-foreground">
+                        {Object.entries(results.botConfiguration.parameters || {}).map(([k, v]) => (
+                          <li key={k}>{k}: {String(v)}</li>
                         ))}
-                      </div>
-                    )}
+                      </ul>
+                    </div>
                   </div>
-                  <Button
-                    onClick={async () => {
-                      try {
-                        toast.loading("Creando bot...");
-                        const res = await fetch(`${CONFIG.API_BASE_URL}/backtest/deploy_bot?` + new URLSearchParams({
-                          user_id: user?.openId || '',
-                          symbol: results.symbol,
-                          strategy_id: (results as any).strategy_id,
-                          initial_balance: virtualBalance.toString()
-                        }), { method: 'POST' });
-                        const data = await res.json();
-                        if (res.ok) toast.success("Bot creado exitosamente! Ver en Dashboard.");
-                        else throw new Error(data.detail);
-                      } catch (e: any) {
-                        toast.error(e.message);
-                      }
-                    }}
-                    className="bg-green-600 hover:bg-green-700 text-white"
-                  >
-                    🚀 Crear Bot con esta Estrategia
-                  </Button>
+
+                  <div className="flex flex-col justify-center items-end gap-3">
+                    <div className="text-right">
+                      <p className="text-sm text-muted-foreground">Rendimiento Estimado</p>
+                      <p className="text-2xl font-bold text-green-500">+{results.totalReturn}%</p>
+                    </div>
+                    <Button
+                      onClick={async () => {
+                        try {
+                          toast.loading("Desplegando bot...");
+                          // Using backend endpoint
+                          const res = await fetch(`${CONFIG.API_BASE_URL}/backtest/deploy_bot?` + new URLSearchParams({
+                            user_id: user?.openId || '',
+                            symbol: results.symbol,
+                            strategy: results.botConfiguration.strategy_type,
+                            initial_balance: virtualBalance.toString()
+                          }), { method: 'POST' });
+
+                          if (!res.ok) throw new Error("Error al desplegar");
+
+                          toast.success("Bot desplegado exitosamente! Ver en Dashboard.");
+                        } catch (e: any) {
+                          toast.error(e.message);
+                        }
+                      }}
+                      className="bg-cyan-600 hover:bg-cyan-700 text-white w-full md:w-auto"
+                    >
+                      🚀 Desplegar Bot Ahora
+                    </Button>
+                  </div>
                 </div>
               </Card>
             )}
@@ -704,8 +744,8 @@ export default function Backtest() {
                 <div>
                   <p className="text-xs text-muted-foreground mb-1">Balance Final</p>
                   <p className={`text-sm font-semibold ${((results as any).final_balance || 0) >= ((results as any).initial_balance || virtualBalance)
-                      ? 'text-green-600'
-                      : 'text-red-600'
+                    ? 'text-green-600'
+                    : 'text-red-600'
                     }`}>
                     ${((results as any).final_balance || 0).toLocaleString()}
                   </p>
