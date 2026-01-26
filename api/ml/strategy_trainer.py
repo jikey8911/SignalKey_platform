@@ -225,7 +225,8 @@ class StrategyTrainer:
             # Extract features for this row
             row_feats = df_feat.loc[current_time_idx, feat_cols].to_dict()
             row_feats['label'] = best_strat_id
-            row_feats['timestamp'] = current_time_idx
+            # Use actual timestamp from original data
+            row_feats['timestamp'] = self.data.loc[current_time_idx, 'timestamp']
             
             results.append(row_feats)
             

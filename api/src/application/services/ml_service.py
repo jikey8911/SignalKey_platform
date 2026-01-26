@@ -268,7 +268,8 @@ class MLService:
                     symbol=symbol, 
                     exchange_id=target_exchange_id, 
                     timeframe=timeframe, 
-                    days_back=days
+                    days_back=days,
+                    use_random_date=True  # Use random historical period for training variation
                 )
 
                 if len(all_ohlcv) < 500:
@@ -460,7 +461,8 @@ class MLService:
                 symbol=symbol,
                 exchange_id=target_exchange_id,
                 timeframe=timeframe,
-                days_back=days
+                days_back=days,
+                use_random_date=True  # Use random historical period for training variation
             )
                 
             if len(all_ohlcv) < 500:

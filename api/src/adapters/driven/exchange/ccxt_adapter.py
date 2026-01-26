@@ -288,8 +288,9 @@ class CCXTService:
             logger.error(f"Error fetching symbols for {exchange_id}: {e}")
             return []
 
-    async def get_historical_ohlcv(self, symbol: str, exchange_id: str, timeframe: str = '1h', days_back: int = 365) -> list:
+    async def get_historical_ohlcv(self, symbol: str, exchange_id: str, timeframe: str = '1h', days_back: int = 365, use_random_date: bool = False) -> list:
         from datetime import datetime, timedelta
+        import random
         """
         Obtiene datos históricos OHLCV para un símbolo.
         
@@ -308,7 +309,17 @@ class CCXTService:
                 return []
             
             # Calcular fecha de inicio
-            since_dt = datetime.utcnow() - timedelta(days=days_back)
+            if use_random_date:
+                # Use random historical period (between 2 years and 1 year ago)
+                max_days_back = 730  # 2 years
+                min_days_back = 365  # 1 year
+                random_offset = random.randint(min_days_back, max_days_back)
+                random_end_date = datetime.utcnow() - timedelta(days=random_offset)
+                since_dt = random_end_date - timedelta(days=days_back)
+                logger.info(f"🎲 Random training period: {since_dt.strftime('%Y-%m-%d')} to {random_end_date.strftime('%Y-%m-%d')} ({days_back} days)")
+            else:
+                since_dt = datetime.utcnow() - timedelta(days=days_back)
+            
             since = int(since_dt.timestamp() * 1000)
             
             all_ohlcv = []
@@ -334,9 +345,14 @@ class CCXTService:
                     else:
                         fetch_since = last_timestamp + 1
                         
-                    # Break si llegamos al presente
-                    if last_timestamp >= (datetime.utcnow().timestamp() * 1000) - (60000): # Menos 1 min margen
-                        break
+                    # Break si llegamos al límite (presente o fecha aleatoria)
+                    if use_random_date:
+                        end_timestamp = int((datetime.utcnow() - timedelta(days=random_offset)).timestamp() * 1000)
+                        if last_timestamp >= end_timestamp:
+                            break
+                    else:
+                        if last_timestamp >= (datetime.utcnow().timestamp() * 1000) - (60000):  # Menos 1 min margen
+                            break
                         
                     # Safety break para evitar loops infinitos
                     if len(all_ohlcv) > days_back * 24 * 60: # Rough limit
