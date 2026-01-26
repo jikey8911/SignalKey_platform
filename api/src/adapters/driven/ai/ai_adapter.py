@@ -7,14 +7,14 @@ import httpx
 import re
 from typing import List
 from perplexity import AsyncPerplexity
-from api.src.domain.ports.output.ai_port import AIPort
+from api.src.domain.ports.output.ai_port import IAIPort
 from api.src.domain.models.signal import RawSignal, SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
 from api.config import Config
 from api.src.domain.strategies.sniper import SniperStrategy
 
 logger = logging.getLogger(__name__)
 
-class AIAdapter(AIPort):
+class AIAdapter(IAIPort):
     def __init__(self):
         self.default_model = "gemini"
         self._httpx_client = httpx.AsyncClient(timeout=60.0)

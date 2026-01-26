@@ -58,6 +58,7 @@ class InvestmentLimits(BaseModel):
 class AppConfigSchema(BaseModel):
     userId: Any # ObjectId
     isAutoEnabled: bool = True # Control maestro de procesos
+    botTelegramActivate: bool = False # Control maestro de Telegram
     demoMode: bool = True
     geminiApiKey: Optional[str] = None
     openaiApiKey: Optional[str] = None

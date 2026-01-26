@@ -292,7 +292,7 @@ class MLService:
                     initial_balance=virtual_balance,
                     use_virtual_balance=self.use_virtual_balance
                 )
-                labeled_df = trainer.generate_labeled_dataset(window_size=60, forecast_horizon=12)
+
                 labeled_df = await loop.run_in_executor(None, lambda: trainer.generate_labeled_dataset(window_size=60, forecast_horizon=12))
                 
                 if labeled_df.empty: 
@@ -348,8 +348,10 @@ class MLService:
         y_test_tensor = torch.from_numpy(y_test).long()
         logger.info(f"Tensor shapes - X_train: {X_train_tensor.shape}, y_train: {y_train_tensor.shape}")
         
-        logger.info(f"Initializing LSTM model (input_dim={self.input_dim}, hidden_dim={self.hidden_dim}, layers={self.num_layers})...")
-        model = LSTMModel(self.input_dim, self.hidden_dim, self.num_layers, output_dim=4)
+        num_strategies = len(load_strategies()[1])
+        output_dim = num_strategies + 1 # +1 for HOLD
+        logger.info(f"Initializing LSTM model (input_dim={self.input_dim}, hidden_dim={self.hidden_dim}, layers={self.num_layers}, output_dim={output_dim})...")
+        model = LSTMModel(self.input_dim, self.hidden_dim, self.num_layers, output_dim=output_dim)
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(model.parameters(), lr=0.001)
         logger.info(f"Model initialized with {sum(p.numel() for p in model.parameters())} parameters")
@@ -478,7 +480,6 @@ class MLService:
                 initial_balance=virtual_balance,
                 use_virtual_balance=self.use_virtual_balance
             )
-            labeled_df = trainer.generate_labeled_dataset(window_size=60, forecast_horizon=12)
             labeled_df = await loop.run_in_executor(None, lambda: trainer.generate_labeled_dataset(window_size=60, forecast_horizon=12))
             
             if labeled_df.empty: raise Exception("StrategyTrainer generated 0 samples")
@@ -492,7 +493,6 @@ class MLService:
             
             # 2. Train from CSV Data
             logger.info(f"Creating sequences from labeled dataset...")
-            X, y = self._create_sequences_from_csv(labeled_df)
             X, y = await loop.run_in_executor(None, lambda: self._create_sequences_from_csv(labeled_df))
             logger.info(f"Generated {len(X)} training sequences")
             
@@ -513,7 +513,9 @@ class MLService:
             
             # 3. Model
             logger.info(f"Initializing LSTM model for {symbol}...")
-            model = LSTMModel(self.input_dim, self.hidden_dim, self.num_layers, output_dim=4)
+            num_strategies = len(load_strategies()[1])
+            output_dim = num_strategies + 1
+            model = LSTMModel(self.input_dim, self.hidden_dim, self.num_layers, output_dim=output_dim)
             criterion = nn.CrossEntropyLoss()
             optimizer = optim.Adam(model.parameters(), lr=0.001)
             logger.info(f"Model has {sum(p.numel() for p in model.parameters())} trainable parameters")

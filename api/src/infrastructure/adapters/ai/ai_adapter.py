@@ -1,7 +1,7 @@
 from typing import List, Dict, Any
 from api.src.domain.entities.signal import SignalAnalysis, MarketType, Decision, TradingParameters, TakeProfit
-from api.src.domain.services.ai_port import IAIPort
-from api.services.ai_service import AIService # Reutilizamos el servicio existente envolviéndolo
+from api.src.domain.ports.output.ai_port import IAIPort
+from api.src.application.services.ai_service import AIService # Reutilizamos el servicio existente envolviéndolo
 
 class AIAdapter(IAIPort):
     def __init__(self, ai_service: AIService):

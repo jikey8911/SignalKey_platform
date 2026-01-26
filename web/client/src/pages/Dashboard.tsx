@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { SignalsKeiLayout } from '@/components/SignalsKeiLayout';
 import { Card } from '@/components/ui/card';
+import { Switch } from '@/components/ui/switch';
 import { trpc } from '@/lib/trpc';
 import { useTrading } from '@/contexts/TradingContext';
 import { useAuth } from '@/_core/hooks/useAuth';
@@ -85,8 +86,8 @@ const MetaSelectorWidget = ({ user }: { user: any }) => {
 
           <div className="grid grid-cols-2 gap-4">
             <div className={`p-3 rounded-lg border text-center ${result.decision === 'BUY' ? 'bg-green-500/10 border-green-500/30 text-green-600' :
-                result.decision === 'SELL' ? 'bg-red-500/10 border-red-500/30 text-red-600' :
-                  'bg-gray-500/10 border-gray-500/30 text-gray-400'
+              result.decision === 'SELL' ? 'bg-red-500/10 border-red-500/30 text-red-600' :
+                'bg-gray-500/10 border-gray-500/30 text-gray-400'
               }`}>
               <div className="text-xs font-semibold uppercase mb-1">Señal Final</div>
               <div className="font-black text-lg">{result.decision}</div>
@@ -138,6 +139,29 @@ export default function Dashboard() {
     };
     fetchStatus();
   }, [user?.openId]);
+
+  const handleToggleTelegram = async (checked: boolean) => {
+    if (!user?.openId) return;
+
+    // Update local state immediately for responsiveness
+    setConnectionStatus((prev: any) => ({ ...prev, botTelegramActivate: checked }));
+
+    try {
+      const res = await fetch(`${CONFIG.API_BASE_URL}/config/telegram_activate?user_id=${user.openId}&active=${checked}`, {
+        method: 'POST'
+      });
+      if (!res.ok) throw new Error('Failed to update config');
+
+      // Refresh full status just in case
+      const statusRes = await fetch(`${CONFIG.API_BASE_URL}/status/${user.openId}`);
+      const data = await statusRes.json();
+      setConnectionStatus(data);
+    } catch (e) {
+      console.error("Error updating telegram status:", e);
+      // Revert on error
+      setConnectionStatus((prev: any) => ({ ...prev, botTelegramActivate: !checked }));
+    }
+  };
 
   // Listen for socket updates
   useEffect(() => {
@@ -231,7 +255,7 @@ export default function Dashboard() {
         {connectionStatus && (
           <Card className="p-4 bg-muted/30">
             <h3 className="text-sm font-semibold mb-3 text-foreground">Estado de Conexiones</h3>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
               <div className="flex items-center gap-2">
                 <div className={`w-2 h-2 rounded-full ${connectionStatus.gemini ? 'bg-green-500' : 'bg-red-500'}`} />
                 <span className="text-xs text-muted-foreground">Gemini AI</span>
@@ -248,6 +272,14 @@ export default function Dashboard() {
                 <div className={`w-2 h-2 rounded-full ${connectionStatus.gmgn ? 'bg-green-500' : 'bg-red-500'}`} />
                 <span className="text-xs text-muted-foreground">GMGN</span>
               </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-2 border-t border-border">
+              <Switch
+                checked={connectionStatus.botTelegramActivate || false}
+                onCheckedChange={handleToggleTelegram}
+              />
+              <span className="text-xs font-semibold">Procesar Señales de Telegram</span>
             </div>
           </Card>
         )}

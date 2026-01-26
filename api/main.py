@@ -96,6 +96,27 @@ app.include_router(websocket_router)
 app.include_router(ml_router)
 app.include_router(market_data_router)
 
+# --- Endpoints --- #
+
+@app.post("/config/telegram_activate")
+async def update_telegram_activate(user_id: str, active: bool):
+    """
+    Activa o desactiva el procesamiento de mensajes de Telegram.
+    """
+    try:
+        user = await db.users.find_one({"openId": user_id})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+            
+        await db.app_configs.update_one(
+            {"userId": user["_id"]},
+            {"$set": {"botTelegramActivate": active}}
+        )
+        return {"status": "success", "active": active}
+    except Exception as e:
+        logger.error(f"Error updating telegram config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/status/{user_id}")
 async def get_user_status(user_id: str):
     """
@@ -130,7 +151,10 @@ async def get_user_status(user_id: str):
             "demo_mode": config.get("demoMode", True) if config else True,
             "active_bots": active_bots,
             "recent_signals_24h": recent_signals,
+            "active_bots": active_bots,
+            "recent_signals_24h": recent_signals,
             "telegram_connected": bool(config.get("telegramBotToken")) if config else False,
+            "botTelegramActivate": config.get("botTelegramActivate", False) if config else False,
             "ai_provider": config.get("aiProvider", "gemini") if config else "gemini",
             "status": "online"
         }
@@ -154,6 +178,11 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
     if not config:
         logger.warning(f"No config found for user {user_id}, using environment defaults")
         config = {}
+        
+    # Check Master Switch for Telegram
+    if not config.get("botTelegramActivate", False):
+        logger.info(f"Telegram processing disabled for user {user_id}. Signal ignored.")
+        return
 
     # Ejecutar el caso de uso
     use_case = container.get_process_signal_use_case()
