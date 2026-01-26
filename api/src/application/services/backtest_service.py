@@ -29,34 +29,28 @@ class BacktestService:
         symbol: str, 
         days: int = 7, 
         timeframe: str = '1h',
-        use_ai: bool = True, # Ignored, always uses Model now as per plan
+        use_ai: bool = True,
         user_config: Dict[str, Any] = None,
-        strategy: str = "auto", # 'auto' implies neural selection
+        strategy: str = "auto",
         initial_balance: Optional[float] = None,
         exchange_id: str = "binance",
-        model_id: Optional[str] = None # Added model_id
+        model_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Ejecuta backtest usando EXCLUSIVAMENTE el modelo ML entrenado (Meta-Selector).
+        Ejecuta backtest con estrategia única seleccionada por ML.
+        Soporta posiciones LONG y SHORT con compras/ventas acumulativas.
         """
         logger.info(f"🚀 Iniciando Backtest ML para {symbol} ({days}d {timeframe})")
         
-        # 1. Configuración Inicial
-        if initial_balance is None:
-            initial_balance = await self._get_user_virtual_balance(user_id)
-            
-        balance = initial_balance
-        virtual_balance = initial_balance # USAR este para trading
-        
-        # 2. Obtener Datos Históricos
-        # Note: In production use ccxt_service for consistency, but for this refactor we keep direct ccxt call or use service passed in?
-        # The file imported ccxt directly before. I'll stick to ccxt but async to be cleaner if possible, or sync. 
-        # Previous code used sync ccxt.binance(). 
-        # Making it async compatible inside the method for safety.
-        
         try:
+            # 1. Configuración Inicial
+            if initial_balance is None:
+                initial_balance = await self._get_user_virtual_balance(user_id)
+            
+            virtual_balance = initial_balance
+            
+            # 2. Obtener Datos Históricos
             logger.info(f"⏳ Fetching historical data for {symbol}...")
-            # Utilizar el adaptador CCXT que maneja la sesión con ThreadedResolver (Fix DNS Windows)
             ohlcv = await ccxt_service.get_historical_ohlcv(
                 symbol=symbol,
                 exchange_id=exchange_id,
@@ -65,211 +59,337 @@ class BacktestService:
             )
             
             if not ohlcv:
-                logger.error(f"No se pudieron obtener datos históricos para {symbol} en {exchange_id}")
-                return {"error": f"Failed to fetch historical data for {symbol} on {exchange_id}"}
+                logger.error(f"No se pudieron obtener datos históricos para {symbol}")
+                return {"error": f"Failed to fetch historical data for {symbol}"}
             
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            logger.info(f"✅ Data loaded: {len(df)} candles. Range: {df['timestamp'].iloc[0]} - {df['timestamp'].iloc[-1]}")
-            
-            # 3. Predicciones en Lote (Meta-Selector)
             candles = df.to_dict('records')
-            logger.info(f"🧠 Generating ML predictions for {len(candles)} candles...")
-            # Pass model_id explicitly (or None)
-            model_predictions = self.ml_service.predict_batch(symbol, timeframe, candles, model_name=model_id)
-            logger.info(f"✅ Predictions generated: {len(model_predictions) if model_predictions else 0}")
+            logger.info(f"✅ Data loaded: {len(df)} candles")
             
-            if not model_predictions:
-                 logger.warning("No predictions returned from MLService")
-                 return {"error": "Model failed to generate predictions"}
-
-            # 4. Simulación de Trading
+            # 3. Seleccionar Estrategia Óptima con ML
+            logger.info(f"🧠 Selecting optimal strategy using ML...")
+            strategy_selection = self.ml_service.select_best_strategy(
+                symbol, 
+                timeframe, 
+                candles, 
+                model_name=model_id
+            )
+            
+            selected_strategy_name = strategy_selection['strategy_name']
+            model_used = strategy_selection['model_used']
+            ml_confidence = strategy_selection['confidence']
+            
+            if selected_strategy_name == "HOLD" or selected_strategy_name not in self.strategies:
+                logger.warning(f"No profitable strategy found. Selected: {selected_strategy_name}")
+                return {"error": "No profitable strategy found by ML model"}
+            
+            selected_strategy = self.strategies[selected_strategy_name]
+            logger.info(f"✅ Selected strategy: {selected_strategy_name} (confidence: {ml_confidence:.2f})")
+            logger.info(f"📊 Model used: {model_used}")
+            
+            # 4. Optimizar Parámetros TP/SL
+            logger.info(f"🔧 Optimizing trade parameters...")
+            optimal_params = self.optimize_trade_parameters(
+                selected_strategy,
+                candles,
+                df,
+                initial_balance,
+                user_config
+            )
+            
+            take_profit_pct = optimal_params['take_profit_pct']
+            stop_loss_pct = optimal_params['stop_loss_pct']
+            logger.info(f"✅ Optimal TP: {take_profit_pct}%, SL: {stop_loss_pct}%")
+            
+            # 5. Ejecutar Backtest con Estrategia Única
+            logger.info(f"📈 Running backtest with {selected_strategy_name}...")
+            
+            # Variables de estado para posiciones LONG y SHORT
+            long_positions = []
+            total_long = 0
+            avg_long_price = 0
+            
+            short_positions = []
+            total_short = 0
+            avg_short_price = 0
+            
             trades = []
-            chart_data = [] # { time, open, close, signal, equity }
-            
-            position = 0 # 0 or amount of asset
-            entry_price = 0
+            chart_data = []
             fee = 0.001
             
-            # Map predictions to index
-            # Results are aligned with candles.
+            investment_limits = user_config.get("investmentLimits", {}) if user_config else {}
+            max_amount_cfg = investment_limits.get("cexMaxAmount", 100.0)
             
+            # Loop principal de trading
             for i in range(len(candles)):
                 candle = candles[i]
                 current_price = candle['close']
-                timestamp = candle['timestamp'].timestamp() # Unix int for frontend charts usually
+                timestamp = candle['timestamp'].timestamp()
                 
-                # Default chart point
-                point = {
+                # Calcular PnL no realizado
+                unrealized_pnl_pct = 0
+                if total_long > 0:
+                    unrealized_pnl_pct = ((current_price - avg_long_price) / avg_long_price) * 100
+                elif total_short > 0:
+                    unrealized_pnl_pct = ((avg_short_price - current_price) / avg_short_price) * 100
+                
+                # Crear contexto de posición para la estrategia
+                position_context = {
+                    'has_position': total_long > 0 or total_short > 0,
+                    'position_type': 'LONG' if total_long > 0 else ('SHORT' if total_short > 0 else None),
+                    'avg_entry_price': avg_long_price if total_long > 0 else (avg_short_price if total_short > 0 else 0),
+                    'current_price': current_price,
+                    'unrealized_pnl_pct': unrealized_pnl_pct,
+                    'position_count': len(long_positions) if total_long > 0 else len(short_positions)
+                }
+                
+                # Obtener señal de la estrategia CON CONTEXTO
+                window_slice = df.iloc[max(0, i - 100) : i + 1]
+                try:
+                    signal_result = selected_strategy.get_signal(window_slice, position_context)
+                    algo_signal = signal_result.get('signal', 'hold')
+                except Exception as e:
+                    logger.debug(f"Error getting signal: {e}")
+                    algo_signal = 'hold'
+                
+                # Verificar TP/SL para posición LONG
+                if total_long > 0:
+                    tp_price = avg_long_price * (1 + take_profit_pct / 100)
+                    sl_price = avg_long_price * (1 - stop_loss_pct / 100)
+                    
+                    if current_price >= tp_price:
+                        algo_signal = 'sell'
+                    elif current_price <= sl_price:
+                        algo_signal = 'sell'
+                
+                # Verificar TP/SL para posición SHORT
+                if total_short > 0:
+                    tp_price = avg_short_price * (1 - take_profit_pct / 100)  # TP es MENOR
+                    sl_price = avg_short_price * (1 + stop_loss_pct / 100)  # SL es MAYOR
+                    
+                    if current_price <= tp_price:
+                        algo_signal = 'buy'
+                    elif current_price >= sl_price:
+                        algo_signal = 'buy'
+                
+                # SEÑAL BUY
+                if algo_signal == 'buy':
+                    if total_short > 0:
+                        # CERRAR POSICIÓN SHORT
+                        cost = total_short * current_price
+                        fee_cost = cost * fee
+                        pnl = (avg_short_price - current_price) * total_short
+                        virtual_balance -= (cost + fee_cost - pnl)
+                        
+                        trades.append({
+                            "type": "BUY_TO_CLOSE",
+                            "position_type": "SHORT",
+                            "price": current_price,
+                            "amount": total_short,
+                            "time": candle['timestamp'].isoformat(),
+                            "avg_entry": avg_short_price,
+                            "pnl": pnl,
+                            "pnl_pct": (pnl / (avg_short_price * total_short)) * 100,
+                            "balance_after": virtual_balance
+                        })
+                        
+                        short_positions = []
+                        total_short = 0
+                        avg_short_price = 0
+                        
+                    elif virtual_balance > 0:
+                        # ABRIR O ACUMULAR POSICIÓN LONG
+                        amount_to_spend = min(float(max_amount_cfg), virtual_balance * 0.98)
+                        coin_amount = amount_to_spend / current_price
+                        fee_cost = amount_to_spend * fee
+                        
+                        virtual_balance -= (amount_to_spend + fee_cost)
+                        
+                        long_positions.append({
+                            'price': current_price,
+                            'amount': coin_amount,
+                            'cost': amount_to_spend
+                        })
+                        
+                        total_long += coin_amount
+                        total_cost = sum(p['cost'] for p in long_positions)
+                        avg_long_price = total_cost / total_long
+                        
+                        trades.append({
+                            "type": "BUY",
+                            "position_type": "LONG",
+                            "price": current_price,
+                            "amount": coin_amount,
+                            "time": candle['timestamp'].isoformat(),
+                            "position_number": len(long_positions),
+                            "avg_entry": avg_long_price,
+                            "total_position": total_long,
+                            "balance_after": virtual_balance
+                        })
+                
+                # SEÑAL SELL
+                elif algo_signal == 'sell':
+                    if total_long > 0:
+                        # CERRAR POSICIÓN LONG
+                        revenue = total_long * current_price
+                        fee_cost = revenue * fee
+                        total_return = revenue - fee_cost
+                        pnl = revenue - sum(p['cost'] for p in long_positions)
+                        
+                        virtual_balance += total_return
+                        
+                        trades.append({
+                            "type": "SELL_TO_CLOSE",
+                            "position_type": "LONG",
+                            "price": current_price,
+                            "amount": total_long,
+                            "time": candle['timestamp'].isoformat(),
+                            "avg_entry": avg_long_price,
+                            "pnl": pnl,
+                            "pnl_pct": (pnl / sum(p['cost'] for p in long_positions)) * 100,
+                            "balance_after": virtual_balance
+                        })
+                        
+                        long_positions = []
+                        total_long = 0
+                        avg_long_price = 0
+                        
+                    elif virtual_balance > 0:
+                        # ABRIR O ACUMULAR POSICIÓN SHORT
+                        amount_to_short = min(float(max_amount_cfg), virtual_balance * 0.98)
+                        coin_amount = amount_to_short / current_price
+                        fee_cost = amount_to_short * fee
+                        
+                        # En short, recibimos el dinero (pero lo reservamos)
+                        virtual_balance += (amount_to_short - fee_cost)
+                        
+                        short_positions.append({
+                            'price': current_price,
+                            'amount': coin_amount,
+                            'value': amount_to_short
+                        })
+                        
+                        total_short += coin_amount
+                        total_value = sum(p['value'] for p in short_positions)
+                        avg_short_price = total_value / total_short
+                        
+                        trades.append({
+                            "type": "SELL_SHORT",
+                            "position_type": "SHORT",
+                            "price": current_price,
+                            "amount": coin_amount,
+                            "time": candle['timestamp'].isoformat(),
+                            "position_number": len(short_positions),
+                            "avg_entry": avg_short_price,
+                            "total_position": total_short,
+                            "balance_after": virtual_balance
+                        })
+                
+                # Chart data point
+                current_equity = virtual_balance
+                if total_long > 0:
+                    current_equity += total_long * current_price
+                if total_short > 0:
+                    current_equity -= total_short * current_price
+                
+                chart_data.append({
                     "time": int(timestamp),
                     "open": candle['open'],
                     "high": candle['high'],
                     "low": candle['low'],
                     "close": candle['close'],
                     "volume": candle['volume'],
-                    "signal": None,
-                    "equity": virtual_balance + (position * current_price if position > 0 else 0)
-                }
-                
-                # Logic Execution
-                # Need context for algos (approx 100 candles max)
-                start_idx = max(0, i - 100)
-                window_slice = df.iloc[start_idx : i + 1] # Include current
-                
-                prediction = model_predictions[i]
-                pred_strategy = prediction['strategy']
-                action = prediction['action']
-                confidence = prediction['confidence']
-                
-                executed_signal = None
-                
-                if action == "CHECK_SIGNAL" and pred_strategy in self.strategies:
-                    # Execute Algos based on Model Suggestion
-                    algo = self.strategies[pred_strategy]
-                    try:
-                        res = algo.get_signal(window_slice)
-                        algo_signal = res.get('signal') # 'buy', 'sell', 'hold'
-                        
-                        # EXECUTE BUY
-                        if algo_signal == 'buy' and position == 0 and virtual_balance > 0:
-                            # Buy logic with Limits
-                            investment_limits = user_config.get("investmentLimits", {}) if user_config else {}
-                            max_amount_cfg = investment_limits.get("cexMaxAmount", 100.0) # Default sensible
-                            
-                            # Use configured max amount, capped by available balance
-                            amount_to_spend = min(float(max_amount_cfg), virtual_balance * 0.98) 
-                            
-                            coin_amount = amount_to_spend / current_price
-                            cost = coin_amount * current_price
-                            
-                            virtual_balance -= (cost + (cost * fee))
-                            position = coin_amount
-                            entry_price = current_price
-                            
-                            executed_signal = "BUY"
-                            trades.append({
-                                "type": "BUY",
-                                "price": current_price,
-                                "time": candle['timestamp'].isoformat(),
-                                "strategy": pred_strategy,
-                                "confidence": confidence,
-                                "balance_after": virtual_balance
-                            })
-                            point["signal"] = "BUY"
-                            
-                        # EXECUTE SELL
-                        elif algo_signal == 'sell' and position > 0:
-                            # Sell logic
-                            revenue = position * current_price
-                            fee_cost = revenue * fee
-                            total_return = revenue - fee_cost
-                            
-                            pnl_pct = ((current_price - entry_price) / entry_price) * 100
-                            virtual_balance += total_return
-                            position = 0
-                            
-                            executed_signal = "SELL"
-                            trades.append({
-                                "type": "SELL",
-                                "price": current_price,
-                                "time": candle['timestamp'].isoformat(),
-                                "strategy": pred_strategy,
-                                "pnl": pnl_pct,
-                                "confidence": confidence,
-                                "balance_after": virtual_balance
-                            })
-                            point["signal"] = "SELL"
-                            
-                    except Exception as e:
-                        logger.debug(f"Error executing algo {pred_strategy}: {e}")
-                
-                # Update Point Equity (Mark to Market)
-                current_equity = virtual_balance + (position * current_price if position > 0 else 0)
-                point["equity"] = current_equity
-                
-                chart_data.append(point)
-            
-            # Close final position
-            if position > 0:
-                final_price = candles[-1]['close']
-                revenue = position * final_price
-                virtual_balance += revenue
-                position = 0
-                trades.append({
-                    "type": "SELL",
-                    "price": final_price,
-                    "time": candles[-1]['timestamp'].isoformat(),
-                    "reason": "End of backtest",
-                    "pnl": 0.0
+                    "signal": algo_signal if algo_signal != 'hold' else None,
+                    "equity": current_equity
                 })
-
-            # 5. Métricas Finales
+            
+            # Cerrar posiciones finales
+            final_price = candles[-1]['close']
+            
+            if total_long > 0:
+                revenue = total_long * final_price
+                virtual_balance += (revenue - revenue * fee)
+                trades.append({
+                    "type": "SELL_TO_CLOSE",
+                    "position_type": "LONG",
+                    "price": final_price,
+                    "amount": total_long,
+                    "time": candles[-1]['timestamp'].isoformat(),
+                    "reason": "End of backtest"
+                })
+            
+            if total_short > 0:
+                cost = total_short * final_price
+                virtual_balance -= (cost + cost * fee)
+                trades.append({
+                    "type": "BUY_TO_CLOSE",
+                    "position_type": "SHORT",
+                    "price": final_price,
+                    "amount": total_short,
+                    "time": candles[-1]['timestamp'].isoformat(),
+                    "reason": "End of backtest"
+                })
+            
+            # 6. Calcular Métricas
             final_balance = virtual_balance
-            total_profit = final_balance - initial_balance
-            profit_pct = (total_profit / initial_balance) * 100
+            profit_pct = ((final_balance - initial_balance) / initial_balance) * 100
             
-            winning_trades = [t for t in trades if t.get('pnl', 0) > 0]
-            losing_trades = [t for t in trades if t.get('pnl', 0) <= 0 and t['type'] == 'SELL']
-            buy_trades = [t for t in trades if t['type'] == 'BUY']
+            close_trades = [t for t in trades if 'CLOSE' in t['type']]
+            long_trades = [t for t in trades if t.get('position_type') == 'LONG' and 'CLOSE' in t['type']]
+            short_trades = [t for t in trades if t.get('position_type') == 'SHORT' and 'CLOSE' in t['type']]
             
-            win_rate = (len(winning_trades) / len(buy_trades) * 100) if buy_trades else 0
+            winning_trades = [t for t in close_trades if t.get('pnl', 0) > 0]
+            win_rate = (len(winning_trades) / len(close_trades) * 100) if close_trades else 0
             
-            # Calculate Max Drawdown
-            peaks = pd.Series([p['equity'] for p in chart_data]).cummax()
-            drawdowns = (pd.Series([p['equity'] for p in chart_data]) - peaks) / peaks * 100
-            max_drawdown = drawdowns.min() # Negative value
+            # Max drawdown
+            equity_series = pd.Series([p['equity'] for p in chart_data])
+            peaks = equity_series.cummax()
+            drawdowns = (equity_series - peaks) / peaks * 100
+            max_drawdown = drawdowns.min()
             
-            # 6. Bot Configuration
+            # 7. Bot Configuration
             bot_config = {
-                "strategy_type": "meta-lstm-v1",
+                "strategy_type": selected_strategy_name,
                 "symbol": symbol,
                 "timeframe": timeframe,
-                "model_id": f"{symbol.replace('/', '_')}_{timeframe}",
-            }
-            
-            # Verify if specific model exists, else fallback to GLOBAL for config
-            safe_symbol = symbol.replace('/', '_')
-            specific_model = f"{safe_symbol}_{timeframe}"
-            specific_path = f"{self.ml_service.models_dir}/{specific_model}_lstm.pth"
-            
-            final_model_id = specific_model
-            if not os.path.exists(specific_path):
-                global_model = f"GLOBAL_{timeframe}"
-                global_path = f"{self.ml_service.models_dir}/{global_model}_lstm.pth"
-                if os.path.exists(global_path):
-                    final_model_id = global_model
-            
-            bot_config["model_id"] = final_model_id
-            
-            # Continue with rest of config...
-            bot_config.update({
+                "model_id": model_used,
                 "parameters": {
-                    "use_neural_selection": True,
-                    "min_confidence": 0.65,
+                    "ml_confidence": ml_confidence,
+                    "take_profit_pct": take_profit_pct,
+                    "stop_loss_pct": stop_loss_pct,
                     "leverage": 1,
                     "initial_balance": initial_balance
-                },
-                "recommended_strategies": list(set([t['strategy'] for t in trades if 'strategy' in t]))
-            })
+                }
+            }
             
-            logger.info(f"🏁 Backtest completed. Trades: {len(trades)}, Profit: {profit_pct:.2f}%")
+            logger.info(f"🏁 Backtest completed. Trades: {len(close_trades)}, Profit: {profit_pct:.2f}%")
+            
             return {
                 "status": "success",
-                "strategy_name": "Meta-LSTM Neural Selector",
+                "strategy_name": selected_strategy_name,
+                "model_used": model_used,
+                "ml_confidence": ml_confidence,
+                "optimized_parameters": {
+                    "take_profit_pct": take_profit_pct,
+                    "stop_loss_pct": stop_loss_pct,
+                    "expected_win_rate": optimal_params.get('win_rate', 0)
+                },
                 "metrics": {
                     "initial_balance": initial_balance,
                     "final_balance": final_balance,
                     "profit_pct": profit_pct,
-                    "total_trades": len(buy_trades),
+                    "total_trades": len(close_trades),
+                    "long_trades": len(long_trades),
+                    "short_trades": len(short_trades),
                     "win_rate": win_rate,
-                    "max_drawdown": abs(max_drawdown),
-                    "sharpe_ratio": 0.0 # TODO: implement
+                    "max_drawdown": abs(max_drawdown)
                 },
                 "trades": trades,
-                "chart_data": chart_data, # Data for frontend graph
+                "chart_data": chart_data,
                 "bot_configuration": bot_config
             }
-
+            
         except Exception as e:
             logger.error(f"Error in backtest run: {e}")
             import traceback
@@ -285,3 +405,184 @@ class BacktestService:
             return 10000.0
 
 
+# Nuevo código para BacktestService - Métodos a agregar
+
+def optimize_trade_parameters(self, strategy, candles, df, initial_balance, user_config):
+    """
+    Optimiza take-profit y stop-loss mediante grid search.
+    
+    Returns:
+        {
+            "take_profit_pct": 2.0,
+            "stop_loss_pct": 1.5,
+            "expected_profit": 15.3,
+            "win_rate": 68.5
+        }
+    """
+    logger.info("🔧 Optimizing trade parameters...")
+    
+    # Opciones a probar
+    tp_options = [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
+    sl_options = [0.5, 1.0, 1.5, 2.0, 3.0]
+    
+    best_params = None
+    best_score = -float('inf')
+    
+    for tp in tp_options:
+        for sl in sl_options:
+            # Ejecutar mini-backtest
+            result = self._run_mini_backtest(
+                strategy=strategy,
+                candles=candles,
+                df=df,
+                initial_balance=initial_balance,
+                take_profit_pct=tp,
+                stop_loss_pct=sl,
+                user_config=user_config
+            )
+            
+            # Métrica: Profit ajustado por riesgo
+            profit = result['final_balance'] - initial_balance
+            max_dd = abs(result.get('max_drawdown', 0))
+            
+            # Penalizar si hay muy pocas operaciones
+            num_trades = result.get('total_trades', 0)
+            if num_trades < 2:
+                continue
+            
+            # Score: profit / (1 + drawdown)
+            risk_adjusted_profit = profit / (1 + max_dd) if max_dd > 0 else profit
+            
+            if risk_adjusted_profit > best_score:
+                best_score = risk_adjusted_profit
+                best_params = {
+                    "take_profit_pct": tp,
+                    "stop_loss_pct": sl,
+                    "expected_profit": round(profit, 2),
+                    "win_rate": round(result.get('win_rate', 0), 2),
+                    "total_trades": num_trades
+                }
+    
+    if not best_params:
+        # Fallback a valores conservadores
+        best_params = {
+            "take_profit_pct": 2.0,
+            "stop_loss_pct": 1.5,
+            "expected_profit": 0,
+            "win_rate": 0,
+            "total_trades": 0
+        }
+    
+    logger.info(f"✅ Optimal TP: {best_params['take_profit_pct']}%, SL: {best_params['stop_loss_pct']}%")
+    return best_params
+
+
+def _run_mini_backtest(self, strategy, candles, df, initial_balance, take_profit_pct, stop_loss_pct, user_config):
+    """
+    Ejecuta un backtest rápido con parámetros específicos de TP/SL.
+    """
+    virtual_balance = initial_balance
+    positions = []
+    total_position = 0
+    avg_entry_price = 0
+    fee = 0.001
+    
+    trades = []
+    equity_curve = []
+    
+    investment_limits = user_config.get("investmentLimits", {}) if user_config else {}
+    max_amount_cfg = investment_limits.get("cexMaxAmount", 100.0)
+    
+    for i in range(len(candles)):
+        candle = candles[i]
+        current_price = candle['close']
+        
+        # Obtener señal de la estrategia
+        window_slice = df.iloc[max(0, i - 100) : i + 1]
+        try:
+            signal_result = strategy.get_signal(window_slice)
+            algo_signal = signal_result.get('signal', 'hold')
+        except:
+            algo_signal = 'hold'
+        
+        # Verificar TP/SL si hay posición
+        if total_position > 0:
+            take_profit_price = avg_entry_price * (1 + take_profit_pct / 100)
+            stop_loss_price = avg_entry_price * (1 - stop_loss_pct / 100)
+            
+            if current_price >= take_profit_price:
+                algo_signal = 'sell'
+            elif current_price <= stop_loss_price:
+                algo_signal = 'sell'
+        
+        # COMPRA (acumulativa)
+        if algo_signal == 'buy' and virtual_balance > 0:
+            amount_to_spend = min(float(max_amount_cfg), virtual_balance * 0.98)
+            coin_amount = amount_to_spend / current_price
+            cost = coin_amount * current_price
+            fee_cost = cost * fee
+            
+            virtual_balance -= (cost + fee_cost)
+            
+            positions.append({
+                'price': current_price,
+                'amount': coin_amount,
+                'cost': cost
+            })
+            
+            total_position += coin_amount
+            total_cost = sum(p['cost'] for p in positions)
+            avg_entry_price = total_cost / total_position
+            
+            trades.append({'type': 'BUY', 'price': current_price})
+        
+        # VENTA (total)
+        elif algo_signal == 'sell' and total_position > 0:
+            revenue = total_position * current_price
+            fee_cost = revenue * fee
+            total_return = revenue - fee_cost
+            
+            pnl_pct = ((current_price - avg_entry_price) / avg_entry_price) * 100
+            virtual_balance += total_return
+            
+            trades.append({'type': 'SELL', 'price': current_price, 'pnl_pct': pnl_pct})
+            
+            positions = []
+            total_position = 0
+            avg_entry_price = 0
+        
+        # Track equity
+        current_equity = virtual_balance + (total_position * current_price if total_position > 0 else 0)
+        equity_curve.append(current_equity)
+    
+    # Cerrar posición final si existe
+    if total_position > 0:
+        final_price = candles[-1]['close']
+        revenue = total_position * final_price
+        virtual_balance += (revenue - revenue * fee)
+    
+    # Calcular métricas
+    final_balance = virtual_balance
+    sell_trades = [t for t in trades if t['type'] == 'SELL']
+    winning_trades = [t for t in sell_trades if t.get('pnl_pct', 0) > 0]
+    win_rate = (len(winning_trades) / len(sell_trades) * 100) if sell_trades else 0
+    
+    # Max drawdown
+    if equity_curve:
+        peak = equity_curve[0]
+        max_dd = 0
+        for equity in equity_curve:
+            if equity > peak:
+                peak = equity
+            dd = ((equity - peak) / peak) * 100
+            if dd < max_dd:
+                max_dd = dd
+    else:
+        max_dd = 0
+    
+    return {
+        'final_balance': final_balance,
+        'win_rate': win_rate,
+        'total_trades': len(sell_trades),
+        'max_drawdown': max_dd
+    }

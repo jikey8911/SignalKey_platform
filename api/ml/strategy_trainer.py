@@ -189,7 +189,18 @@ class StrategyTrainer:
                     self.position_size = 0
                     self.position_entry_price = 0
                     
-                    res = strat.get_signal(window_slice)
+                    # Create position context (empty for training simplicity)
+                    position_context = {
+                        'has_position': False,
+                        'position_type': None,
+                        'avg_entry_price': 0,
+                        'current_price': entry_price,
+                        'unrealized_pnl_pct': 0,
+                        'position_count': 0
+                    }
+                    
+                    # Get signal with position context
+                    res = strat.get_signal(window_slice, position_context)
                     signal = res.get('signal')
                     
                     # Execute virtual trade

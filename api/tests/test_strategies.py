@@ -33,21 +33,46 @@ class TestStrategies(unittest.TestCase):
         self.df.iloc[-15:, self.df.columns.get_loc('close')] = np.linspace(50, 10, 15) # Bajada fuerte
         
         strategy = RSIReversion(period=14, oversold=30)
-        signal = strategy.get_signal(self.df)
+        
+        # Test sin posición
+        position_context = {
+            'has_position': False,
+            'position_type': None,
+            'avg_entry_price': 0,
+            'current_price': 10,
+            'unrealized_pnl_pct': 0,
+            'position_count': 0
+        }
+        signal = strategy.get_signal(self.df, position_context)
         
         # Debería dar BUY porque el RSI estará bajo
-        # Nota: Depende de la implementación exacta de pandas_ta, pero con bajada lineal a 10 debería ser bajo.
         self.assertTrue(signal['signal'] in ['buy', 'hold', 'sell']) # Basic check
         print(f"RSI Signal: {signal}")
 
     def test_trend_ema(self):
         strategy = TrendEMA(fast=10, slow=20)
-        signal = strategy.get_signal(self.df)
+        position_context = {
+            'has_position': False,
+            'position_type': None,
+            'avg_entry_price': 0,
+            'current_price': self.df['close'].iloc[-1],
+            'unrealized_pnl_pct': 0,
+            'position_count': 0
+        }
+        signal = strategy.get_signal(self.df, position_context)
         self.assertIn(signal['signal'], ['buy', 'sell', 'hold'])
 
     def test_volatility_breakout(self):
         strategy = VolatilityBreakout(period=20)
-        signal = strategy.get_signal(self.df)
+        position_context = {
+            'has_position': False,
+            'position_type': None,
+            'avg_entry_price': 0,
+            'current_price': self.df['close'].iloc[-1],
+            'unrealized_pnl_pct': 0,
+            'position_count': 0
+        }
+        signal = strategy.get_signal(self.df, position_context)
         self.assertIn(signal['signal'], ['buy', 'sell', 'hold'])
 
 if __name__ == '__main__':

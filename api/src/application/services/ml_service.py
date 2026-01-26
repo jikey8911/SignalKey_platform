@@ -851,3 +851,110 @@ class MLService:
             logger.error(f"Error getting models status: {e}")
             logger.error(traceback.format_exc())
             return []
+    def select_best_strategy(self, symbol: str, timeframe: str, candles: List[Dict], model_name: str = None) -> Dict[str, Any]:
+        """
+        Analiza datos históricos y selecciona la estrategia más prometedora.
+        
+        Args:
+            symbol: Par de trading (ej: BTC/USDT)
+            timeframe: Timeframe (ej: 1h, 4h)
+            candles: Lista de velas históricas
+            model_name: Nombre del modelo (opcional, usa fallback a GLOBAL)
+        
+        Returns:
+            {
+                "strategy_name": "RSIReversion",
+                "confidence": 0.87,
+                "model_used": "BTC_USDT_1h",
+                "distribution": {"HOLD": 0.10, "RSIReversion": 0.45, ...}
+            }
+        """
+        try:
+            logger.info(f"🧠 Selecting best strategy for {symbol} using ML model...")
+            
+            # 1. Generar predicciones para todas las velas
+            predictions = self.predict_batch(symbol, timeframe, candles, model_name=model_name)
+            
+            if not predictions:
+                logger.warning("No predictions generated, cannot select strategy")
+                return {
+                    "strategy_name": "HOLD",
+                    "confidence": 0.0,
+                    "model_used": "NONE",
+                    "distribution": {}
+                }
+            
+            # 2. Determinar qué modelo se usó realmente
+            target_model = model_name
+            if not target_model:
+                safe_symbol = symbol.replace('/', '_')
+                target_model = f"{safe_symbol}_{timeframe}"
+            
+            # Verificar si existe el modelo específico
+            model_path = f"{self.models_dir}/{target_model}_lstm.pth"
+            if not os.path.exists(model_path):
+                target_model = f"GLOBAL_{timeframe}"
+            
+            model_used = target_model
+            
+            # 3. Contar frecuencia de cada estrategia
+            strategy_counts = {}
+            strategy_confidences = {}
+            
+            for pred in predictions:
+                strat = pred['strategy']
+                conf = pred['confidence']
+                
+                if strat not in strategy_counts:
+                    strategy_counts[strat] = 0
+                    strategy_confidences[strat] = []
+                
+                strategy_counts[strat] += 1
+                strategy_confidences[strat].append(conf)
+            
+            # 4. Calcular distribución porcentual
+            total_predictions = len(predictions)
+            distribution = {
+                strat: (count / total_predictions) * 100
+                for strat, count in strategy_counts.items()
+            }
+            
+            # 5. Seleccionar la estrategia más frecuente (excluyendo HOLD)
+            candidates = {k: v for k, v in strategy_counts.items() if k != "HOLD"}
+            
+            if not candidates:
+                logger.warning("Only HOLD signals found, no actionable strategy")
+                return {
+                    "strategy_name": "HOLD",
+                    "confidence": 0.0,
+                    "model_used": model_used,
+                    "distribution": distribution
+                }
+            
+            # Seleccionar la más frecuente
+            best_strategy = max(candidates, key=candidates.get)
+            
+            # Calcular confianza promedio para esa estrategia
+            avg_confidence = sum(strategy_confidences[best_strategy]) / len(strategy_confidences[best_strategy])
+            
+            logger.info(f"✅ Selected strategy: {best_strategy} (confidence: {avg_confidence:.2f}, frequency: {distribution[best_strategy]:.1f}%)")
+            logger.info(f"📊 Model used: {model_used}")
+            logger.info(f"📈 Distribution: {distribution}")
+            
+            return {
+                "strategy_name": best_strategy,
+                "confidence": round(avg_confidence, 4),
+                "model_used": model_used,
+                "distribution": {k: round(v, 2) for k, v in distribution.items()}
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in select_best_strategy: {e}")
+            import traceback
+            traceback.print_exc()
+            return {
+                "strategy_name": "HOLD",
+                "confidence": 0.0,
+                "model_used": "ERROR",
+                "distribution": {}
+            }

@@ -3,20 +3,30 @@ from api.utils.indicators import rsi
 from .base import BaseStrategy
 
 class RSIReversion(BaseStrategy):
-    def __init__(self, period=14, overbought=70, oversold=30):
-        super().__init__("RSIReversion", "Compra en sobreventa y vende en sobrecompra")
+    def __init__(self, period=14, overbought=70, oversold=30, min_profit=0.5):
+        super().__init__("RSIReversion", "Reversión en extremos con profit aware")
         self.period = period
         self.overbought = overbought
         self.oversold = oversold
+        self.min_profit = min_profit
 
-    def get_signal(self, data: pd.DataFrame) -> dict:
-        rsi_val = rsi(data['close'], period=self.period)
-        last_rsi = rsi_val.iloc[-1]
+    def get_signal(self, data: pd.DataFrame, position_context: dict = None) -> dict:
+        last_rsi = rsi(data['close'], period=self.period).iloc[-1]
+        pos = position_context or {'has_position': False}
+        pnl = pos.get('unrealized_pnl_pct', 0)
         
         signal = 'hold'
-        if last_rsi < self.oversold:
+        # Entradas
+        if last_rsi < self.oversold and not pos['has_position']:
             signal = 'buy'
-        elif last_rsi > self.overbought:
+        elif last_rsi > self.overbought and not pos['has_position']:
             signal = 'sell'
+        
+        # Salidas controladas
+        if pos.get('has_position') and pnl >= self.min_profit:
+            if pos.get('position_type') == 'LONG' and last_rsi > 50:
+                signal = 'sell'
+            if pos.get('position_type') == 'SHORT' and last_rsi < 50:
+                signal = 'buy'
             
-        return {'signal': signal, 'confidence': 0.8, 'indicator_value': last_rsi}
+        return {'signal': signal, 'confidence': 0.8, 'meta': {'rsi': last_rsi, 'pnl': pnl}}
