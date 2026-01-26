@@ -767,8 +767,15 @@ class MLService:
             raise FileNotFoundError(f"Model {model_prefix} not found")
             
         # Load Model
-        model = LSTMModel(self.input_dim, self.hidden_dim, self.num_layers, output_dim=4)
-        model.load_state_dict(torch.load(model_path))
+        # Load Model with current dynamic output dimension
+        model = LSTMModel(self.input_dim, self.hidden_dim, self.num_layers, output_dim=self.output_dim)
+        try:
+            model.load_state_dict(torch.load(model_path))
+        except RuntimeError as e:
+            if "size mismatch" in str(e):
+                logger.error(f"Model dimension mismatch. The model was trained with fewer/different strategies. PLEASE RETRAIN.")
+                raise ValueError(f"Model architecture mismatch (Strategies changed?). Please retrain the model for {model_prefix}.")
+            raise e
         model.eval()
         
         # Load Scaler
