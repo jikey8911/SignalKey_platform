@@ -1,1 +1,1 @@
-from src.application.services.ml_service import *
+from api.src.application.services.ml_service import *

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from typing import List
 import logging
-from src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
 import ccxt.async_support as ccxt # Keep for ccxt.exchanges list (static)
 
 logger = logging.getLogger(__name__)

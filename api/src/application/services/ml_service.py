@@ -17,14 +17,14 @@ from functools import lru_cache
 # from sklearn.preprocessing import MinMaxScaler 
 # import joblib 
 
-from ml.models.lstm_model import LSTMModel
-from src.application.services.cex_service import CEXService
-from config import Config
+from api.ml.models.lstm_model import LSTMModel
+from api.src.application.services.cex_service import CEXService
+from api.config import Config
 from api.strategies import load_strategies
 from api.utils.indicators import rsi, adx, atr, bollinger_bands, ema
-from ml.strategy_trainer import StrategyTrainer
-from src.adapters.driven.exchange.ccxt_adapter import ccxt_service
-from src.adapters.driven.persistence.mongodb import db
+from api.ml.strategy_trainer import StrategyTrainer
+from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+from api.src.adapters.driven.persistence.mongodb import db
 import logging
 
 logger = logging.getLogger(__name__)

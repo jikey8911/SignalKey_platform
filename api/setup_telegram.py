@@ -3,7 +3,7 @@ import os
 import asyncio
 sys.path.append(os.getcwd()) # Ensure api module is found
 from telethon import TelegramClient
-from config import Config
+from api.config import Config
 import logging
 
 logging.basicConfig(level=logging.INFO)

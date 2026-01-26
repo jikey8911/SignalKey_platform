@@ -1,5 +1,5 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from src.adapters.driven.notifications.socket_service import socket_service
+from api.src.adapters.driven.notifications.socket_service import socket_service
 import logging
 
 logger = logging.getLogger(__name__)

@@ -6,12 +6,12 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 import numpy as np
 
-from src.application.services.ml_service import MLService
-from src.adapters.driven.persistence.mongodb import db
-from src.adapters.driven.exchange.ccxt_adapter import ccxt_service
-from strategies.rsi_reversion import RSIReversion
-from strategies.trend_ema import TrendEMA
-from strategies.volatility_breakout import VolatilityBreakout
+from api.src.application.services.ml_service import MLService
+from api.src.adapters.driven.persistence.mongodb import db
+from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+from api.strategies.rsi_reversion import RSIReversion
+from api.strategies.trend_ema import TrendEMA
+from api.strategies.volatility_breakout import VolatilityBreakout
 
 logger = logging.getLogger(__name__)
 
@@ -245,7 +245,7 @@ class BacktestService:
             bot_config.update({
                 "parameters": {
                     "use_neural_selection": True,
-                    "min_confidence": 0.65, # Configurable
+                    "min_confidence": 0.65,
                     "leverage": 1,
                     "initial_balance": initial_balance
                 },

@@ -1,12 +1,12 @@
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
 from datetime import datetime
-from src.domain.models.schemas import TradingSignal, AnalysisResult
-from src.application.services.ai_service import AIService
-from src.application.services.cex_service import CEXService
-from src.application.services.dex_service import DEXService
-from src.application.services.backtest_service import BacktestService
-from src.application.services.bot_service import SignalBotService
-from src.adapters.driven.persistence.mongodb import db, get_app_config
+from api.src.domain.models.schemas import TradingSignal, AnalysisResult
+from api.src.application.services.ai_service import AIService
+from api.src.application.services.cex_service import CEXService
+from api.src.application.services.dex_service import DEXService
+from api.src.application.services.backtest_service import BacktestService
+from api.src.application.services.bot_service import SignalBotService
+from api.src.adapters.driven.persistence.mongodb import db, get_app_config
 import logging
 import asyncio
 from typing import Optional
@@ -17,11 +17,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 from contextlib import asynccontextmanager
-from bot.telegram_bot import start_userbot, bot_instance
-from bot.telegram_bot_manager import bot_manager
-from src.application.services.monitor_service import MonitorService
+from api.bot.telegram_bot import start_userbot, bot_instance
+from api.bot.telegram_bot_manager import bot_manager
+from api.src.application.services.monitor_service import MonitorService
 from fastapi.middleware.cors import CORSMiddleware
-from config import Config
+from api.config import Config
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -36,12 +36,12 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Error starting Telegram Bot Manager: {e}")
 
-    from src.application.services.tracker_service import TrackerService
+    from api.src.application.services.tracker_service import TrackerService
     global tracker_service, monitor_service
     tracker_service = TrackerService(cex_service=cex_service, dex_service=dex_service)
     await tracker_service.start_monitoring()
     
-    from src.application.services.monitor_service import MonitorService
+    from api.src.application.services.monitor_service import MonitorService
     monitor_service = MonitorService(cex_service=cex_service, dex_service=dex_service)
     monitor_task = asyncio.create_task(monitor_service.start_monitoring())
 
@@ -84,11 +84,11 @@ tracker_service = None
 monitor_service = None
 
 # Importar y agregar routers
-from src.adapters.driving.api.routers.telegram_router import router as telegram_router
-from src.adapters.driving.api.routers.backtest_router import router as backtest_router
-from src.adapters.driving.api.routers.websocket_router import router as websocket_router
-from src.adapters.driving.api.routers.ml_router import router as ml_router
-from src.adapters.driving.api.routers.market_data_router import router as market_data_router
+from api.src.adapters.driving.api.routers.telegram_router import router as telegram_router
+from api.src.adapters.driving.api.routers.backtest_router import router as backtest_router
+from api.src.adapters.driving.api.routers.websocket_router import router as websocket_router
+from api.src.adapters.driving.api.routers.ml_router import router as ml_router
+from api.src.adapters.driving.api.routers.market_data_router import router as market_data_router
 
 app.include_router(telegram_router)
 app.include_router(backtest_router)
@@ -171,7 +171,7 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
     """
     logger.info(f"Procesando señal de {signal.source} para usuario {user_id} (Hexagonal)")
     
-    from src.infrastructure.di.container import container
+    from api.src.infrastructure.di.container import container
     
     # Obtener config del usuario
     config = await get_app_config(user_id)

@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
-from src.domain.entities.signal import SignalAnalysis
+from api.src.domain.entities.signal import SignalAnalysis
 
 class IAIPort(ABC):
     @abstractmethod

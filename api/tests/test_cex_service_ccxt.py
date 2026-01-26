@@ -2,7 +2,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from api.services.cex_service import CEXService
-from src.domain.models.schemas import AnalysisResult
+from api.src.domain.models.schemas import AnalysisResult
 import ccxt.async_support as ccxt
 
 @pytest.mark.asyncio

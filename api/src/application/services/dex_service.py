@@ -2,9 +2,9 @@ import httpx
 import logging
 from datetime import datetime
 from typing import Optional, Dict, Any, List
-from src.domain.models.schemas import AnalysisResult, ExecutionResult
-from src.adapters.driven.persistence.mongodb import db, get_app_config, save_trade, update_virtual_balance
-from config import Config
+from api.src.domain.models.schemas import AnalysisResult, ExecutionResult
+from api.src.adapters.driven.persistence.mongodb import db, get_app_config, save_trade, update_virtual_balance
+from api.config import Config
 
 logger = logging.getLogger(__name__)
 

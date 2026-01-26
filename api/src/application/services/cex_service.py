@@ -1,7 +1,7 @@
 import logging
-from src.domain.models.schemas import AnalysisResult, ExecutionResult
-from src.adapters.driven.persistence.mongodb import get_app_config, save_trade, update_virtual_balance, db
-from src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+from api.src.domain.models.schemas import AnalysisResult, ExecutionResult
+from api.src.adapters.driven.persistence.mongodb import get_app_config, save_trade, update_virtual_balance, db
+from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
 import ccxt.async_support as ccxt # Para excepciones
 from datetime import datetime
 from typing import Optional, Dict, Any, List

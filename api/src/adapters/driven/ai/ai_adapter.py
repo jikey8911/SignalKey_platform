@@ -7,10 +7,10 @@ import httpx
 import re
 from typing import List
 from perplexity import AsyncPerplexity
-from src.domain.ports.output.ai_port import IAIPort
-from src.domain.models.signal import RawSignal, SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
-from config import Config
-from src.domain.strategies.sniper import SniperStrategy
+from api.src.domain.ports.output.ai_port import IAIPort
+from api.src.domain.models.signal import RawSignal, SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
+from api.config import Config
+from api.src.domain.strategies.sniper import SniperStrategy
 
 logger = logging.getLogger(__name__)
 

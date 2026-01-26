@@ -7,9 +7,9 @@ import os
 # Asegurar que podemos importar api
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from strategies.rsi_reversion import RSIReversion
-from strategies.trend_ema import TrendEMA
-from strategies.volatility_breakout import VolatilityBreakout
+from api.strategies.rsi_reversion import RSIReversion
+from api.strategies.trend_ema import TrendEMA
+from api.strategies.volatility_breakout import VolatilityBreakout
 
 class TestStrategies(unittest.TestCase):
     def setUp(self):

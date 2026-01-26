@@ -2,7 +2,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import ccxt.async_support as ccxt
-from src.adapters.driven.exchange.ccxt_adapter import CCXTService
+from api.src.adapters.driven.exchange.ccxt_adapter import CCXTService
 
 @pytest.mark.asyncio
 async def test_ccxt_service_create_public_instance():

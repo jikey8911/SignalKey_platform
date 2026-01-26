@@ -1,10 +1,10 @@
 from datetime import datetime
 from typing import List, Dict, Any
-from src.domain.models.signal import Signal, SignalStatus, SignalAnalysis, Decision
-from src.domain.ports.output.signal_repository import ISignalRepository
-from src.domain.ports.output.ai_port import AIPort
-from src.domain.ports.output.notification_port import INotificationPort
-from src.domain.exceptions.infrastructure_exceptions import InfrastructureServiceError
+from api.src.domain.models.signal import Signal, SignalStatus, SignalAnalysis, Decision
+from api.src.domain.ports.output.signal_repository import ISignalRepository
+from api.src.domain.ports.output.ai_port import AIPort
+from api.src.domain.ports.output.notification_port import INotificationPort
+from api.src.domain.exceptions.infrastructure_exceptions import InfrastructureServiceError
 
 class ProcessSignalUseCase:
     def __init__(

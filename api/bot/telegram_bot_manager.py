@@ -3,8 +3,8 @@ Telegram Bot Manager - Gestiona múltiples instancias de bots de Telegram por us
 """
 from typing import Dict, Optional
 import logging
-from bot.telegram_bot import TelegramUserBot
-from src.adapters.driven.persistence.mongodb import db
+from api.bot.telegram_bot import TelegramUserBot
+from api.src.adapters.driven.persistence.mongodb import db
 
 logger = logging.getLogger(__name__)
 

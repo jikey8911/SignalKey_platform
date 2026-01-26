@@ -2,9 +2,9 @@ import asyncio
 import logging
 import ccxt.async_support as ccxt
 from datetime import datetime
-from src.adapters.driven.persistence.mongodb import db, update_virtual_balance
-from src.application.services.cex_service import CEXService
-from src.application.services.dex_service import DEXService
+from api.src.adapters.driven.persistence.mongodb import db, update_virtual_balance
+from api.src.application.services.cex_service import CEXService
+from api.src.application.services.dex_service import DEXService
 from bson import ObjectId
 from typing import Optional
 
@@ -152,9 +152,9 @@ class MonitorService:
 
     async def push_connection_status(self):
         """Envía el estado de conexión a todos los usuarios conectados vía WebSocket"""
-        from src.adapters.driven.notifications.socket_service import socket_service
-        from bot.telegram_bot_manager import bot_manager
-        from src.adapters.driven.persistence.mongodb import get_app_config
+        from api.src.adapters.driven.notifications.socket_service import socket_service
+        from api.bot.telegram_bot_manager import bot_manager
+        from api.src.adapters.driven.persistence.mongodb import get_app_config
 
         active_users = socket_service.active_connections.keys()
         if not active_users:

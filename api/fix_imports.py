@@ -13,24 +13,24 @@ def fix_imports_in_file(filepath):
         original_content = content
         
         # Replace api.src with src
-        content = re.sub(r'from api\.src\.', 'from src.', content)
-        content = re.sub(r'import api\.src\.', 'import src.', content)
+        content = re.sub(r'from api\.src\.', 'from api.src.', content)
+        content = re.sub(r'import api\.src\.', 'import api.src.', content)
         
         # Replace api.bot with bot
-        content = re.sub(r'from api\.bot\.', 'from bot.', content)
-        content = re.sub(r'import api\.bot\.', 'import bot.', content)
+        content = re.sub(r'from api\.bot\.', 'from api.bot.', content)
+        content = re.sub(r'import api\.bot\.', 'import api.bot.', content)
         
         # Replace api.config with config
-        content = re.sub(r'from api\.config', 'from config', content)
-        content = re.sub(r'import api\.config', 'import config', content)
+        content = re.sub(r'from api\.config', 'from api.config', content)
+        content = re.sub(r'import api\.config', 'import api.config', content)
         
         # Replace api.ml with ml
-        content = re.sub(r'from api\.ml\.', 'from ml.', content)
-        content = re.sub(r'import api\.ml\.', 'import ml.', content)
+        content = re.sub(r'from api\.ml\.', 'from api.ml.', content)
+        content = re.sub(r'import api\.ml\.', 'import api.ml.', content)
         
         # Replace api.strategies with strategies
-        content = re.sub(r'from api\.strategies\.', 'from strategies.', content)
-        content = re.sub(r'import api\.strategies\.', 'import strategies.', content)
+        content = re.sub(r'from api\.strategies\.', 'from api.strategies.', content)
+        content = re.sub(r'import api\.strategies\.', 'import api.strategies.', content)
         
         if content != original_content:
             with open(filepath, 'w', encoding='utf-8') as f:
