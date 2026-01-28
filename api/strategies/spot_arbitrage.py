@@ -3,7 +3,7 @@ import numpy as np
 from typing import Dict, Any
 from .base import BaseStrategy
 
-class SpotIntraExchangeArbitrage(BaseStrategy):
+class SpotArbitrage(BaseStrategy):
     def __init__(self, period: int = 20, z_threshold: float = 2.0):
         """
         Arbitraje de spot en un solo exchange basado en reversión a la media (Z-Score).
@@ -13,13 +13,13 @@ class SpotIntraExchangeArbitrage(BaseStrategy):
             z_threshold (float): Desviación estándar para disparar la operación.
         """
         super().__init__(
-            "Spot_Intra_Arbitrage", 
-            "Arbitraje por desviación estadística del precio esperado"
+            "Spot_Arbitrage_Basic", 
+            "Arbitraje por desviación estadística del precio esperado (Básico)"
         )
         self.period = period
         self.z_threshold = z_threshold
 
-    def get_signal(self, data: pd.DataFrame) -> Dict[str, Any]:
+    def get_signal(self, data: pd.DataFrame, position_context: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Calcula si el precio actual está lo suficientemente lejos del precio 
         esperado para considerarse una oportunidad de arbitraje.

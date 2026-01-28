@@ -7,6 +7,8 @@ from api.strategies.volatility_breakout import VolatilityBreakout
 from api.strategies import load_strategies
 from api.utils.indicators import rsi, adx, atr, bollinger_bands
 
+import traceback
+
 logger = logging.getLogger(__name__)
 
 class StrategyTrainer:
@@ -54,86 +56,138 @@ class StrategyTrainer:
 
     def _execute_virtual_trade(self, signal: str, entry_price: float, exit_price: float, fee: float = 0.001) -> float:
         """
-        Simula ejecución de trade usando balance virtual.
-        Retorna PnL realizado.
+        Simula ejecución de trade con lógica avanzada de gestión de posiciones.
+        Soporta:
+        - Acumulación: Compra adicional si ya es LONG.
+        - Cierre Inverso: Venta inmediata si es LONG.
+        - Shorting: Venta si es FLAT.
+        Retorna PnL proyectado (Horizonte) o Realizado (Cierre inmediato).
         """
         if not self.use_virtual_balance:
-            # Fallback to simple PnL calculation
-            if signal == 'buy':
-                raw_pnl = (exit_price - entry_price) / entry_price
-                return raw_pnl - (fee * 2)
-            elif signal == 'sell':
-                raw_pnl = (entry_price - exit_price) / entry_price
-                return raw_pnl - (fee * 2)
+            # Fallback simple
+            if signal == 'buy': return ((exit_price - entry_price) / entry_price) - (fee * 2)
+            elif signal == 'sell': return ((entry_price - exit_price) / entry_price) - (fee * 2)
             return 0
         
-        # Virtual balance tracking
-        pnl = 0
+        # PnL Calculation
+        pnl = 0.0
+        
+        # Estado Inicial
+        is_long = self.position_size > 0
+        is_short = self.position_size < 0 # Not fully supported by current simple size, assuming size > 0 is LONG quantity
+        # Para soporte completo de SHORT necesitaríamos flags adicionales, pero por ahora asumimos LONG-ONLY/Trading Clásico
+        # El código original usaba self.position_size solo como cantidad positiva.
+        # Ajustemos para soportar acumulación lógica.
         
         if signal == 'buy':
-            # Open long position or accumulate
-            # Use 95% of balance to leave margin for fees
-            if self.virtual_balance <= 0: return -1.0
+            # --- SCENARIO 1: BUY ---
             
-            trade_amount = self.virtual_balance * 0.95
-            fee_cost = trade_amount * fee
-            net_trade_amount = trade_amount - fee_cost
-            new_coins = net_trade_amount / entry_price
-            
-            # --- Avg Price Calculation (Accumulation) ---
-            if self.position_size > 0:
-                total_coins = self.position_size + new_coins
-                # Current Value based on COST BASIS (Original Entry * Size) + New Cost
-                total_cost_basis = (self.position_size * self.position_entry_price) + net_trade_amount
-                self.position_entry_price = total_cost_basis / total_coins
-                self.position_size = total_coins
+            # A) Si estamos LONG -> ACUMULAR
+            if is_long:
+                # Calcular nuevo precio promedio (Avg Entry)
+                # Invertir el 95% del balance restante
+                if self.virtual_balance > 0:
+                    trade_amount = self.virtual_balance * 0.95
+                    fee_cost = trade_amount * fee
+                    net_trade_amount = trade_amount - fee_cost
+                    new_coins = net_trade_amount / entry_price
+                    
+                    total_coins = self.position_size + new_coins
+                    # Cost Basis Actual + Nuevo Costo
+                    current_cost_basis = self.position_size * self.position_entry_price
+                    total_cost_basis = current_cost_basis + net_trade_amount
+                    
+                    self.position_entry_price = total_cost_basis / total_coins
+                    self.position_size = total_coins
+                    self.virtual_balance -= trade_amount
+                    
+                # El PnL se basa en mantener esta NUEVA posición acumulada hasta el horizonte (exit_price)
+                exit_value = self.position_size * exit_price
+                exit_fee = exit_value * fee
+                realized_value = exit_value - exit_fee
+                
+                total_invested = self.position_size * self.position_entry_price
+                pnl = (realized_value - total_invested) / total_invested if total_invested > 0 else 0
+                
+            # B) Si estamos FLAT -> ABRIR LONG
             else:
+                if self.virtual_balance <= 0: return -1.0
+                
+                trade_amount = self.virtual_balance * 0.95
+                fee_cost = trade_amount * fee
+                net_trade_amount = trade_amount - fee_cost
+                new_coins = net_trade_amount / entry_price
+                
                 self.position_size = new_coins
                 self.position_entry_price = entry_price
+                self.virtual_balance -= trade_amount
                 
-            self.virtual_balance -= trade_amount
-            
-            # Close position at exit
-            exit_value = self.position_size * exit_price
-            exit_fee = exit_value * fee
-            realized_value = exit_value - exit_fee
-            self.virtual_balance += realized_value
-            
-            # Calculate PnL relative to TOTAL COST BASIS
-            # Cost Basis = Size * AvgEntry
-            total_invested = self.position_size * self.position_entry_price
-            pnl = (realized_value - total_invested) / total_invested if total_invested > 0 else 0
-            
-            # Reset position
+                # PnL al horizonte
+                exit_value = self.position_size * exit_price
+                exit_fee = exit_value * fee
+                realized_value = exit_value - exit_fee
+                
+                total_invested = net_trade_amount
+                pnl = (realized_value - total_invested) / total_invested if total_invested > 0 else 0
+                
+            # Reset simulation state (clean up)
             self.position_size = 0
             self.position_entry_price = 0
             
         elif signal == 'sell':
-            # Short selling (simplified: assume we can borrow)
-            trade_amount = self.virtual_balance * 0.95
-            fee_cost = trade_amount * fee
-            position_value = trade_amount - fee_cost
-            self.position_size = position_value / entry_price  # Borrowed amount
-            self.position_entry_price = entry_price
-            self.virtual_balance += position_value  # Receive cash from short
+            # --- SCENARIO 2: SELL ---
             
-            # Close short at exit
-            buyback_cost = self.position_size * exit_price
-            buyback_fee = buyback_cost * fee
-            total_cost = buyback_cost + buyback_fee
-            self.virtual_balance -= total_cost
-            
-            # Calculate PnL
-            pnl = (position_value - buyback_cost) / position_value
-            
-            # Reset position
+            # A) Si estamos LONG -> CERRAR POSICIÓN (CLOSE)
+            if is_long:
+                # Vendemos AHORA al precio actual (entry_price), NO al futuro (exit_price)
+                # Porque la señal es "Salirse ya".
+                exit_value = self.position_size * entry_price # Vende a precio ACTUAL
+                exit_fee = exit_value * fee
+                realized_value = exit_value - exit_fee
+                self.virtual_balance += realized_value
+                
+                total_invested = self.position_size * self.position_entry_price
+                
+                # PnL Realizado AHORA
+                pnl = (realized_value - total_invested) / total_invested if total_invested > 0 else 0
+                
+            # B) Si estamos FLAT -> ABRIR SHORT (Opcional, si la estrategia lo soporta)
+            else:
+                # Shorting Logic
+                trade_amount = self.virtual_balance * 0.95
+                fee_cost = trade_amount * fee
+                position_value = trade_amount - fee_cost
+                
+                # Short: Ganamos si precio baja. 
+                # Entry: entry_price. Exit: exit_price.
+                # PnL Short simplificado: (Entry - Exit) / Entry
+                
+                # Borrowed Amount
+                short_size = position_value / entry_price
+                
+                # Cover at exit_price
+                cover_cost = short_size * exit_price
+                cover_fee = cover_cost * fee
+                
+                pnl = (position_value - (cover_cost + cover_fee)) / position_value
+        
+            # Reset
             self.position_size = 0
             self.position_entry_price = 0
+            
+        elif signal == 'hold':
+             # Si hacemos HOLD, mantenemos la posición hasta exit_price
+             if is_long:
+                 exit_value = self.position_size * exit_price
+                 exit_fee = exit_value * fee
+                 realized_value = exit_value - exit_fee
+                 total_invested = self.position_size * self.position_entry_price
+                 pnl = (realized_value - total_invested) / total_invested if total_invested > 0 else 0
+             else:
+                 pnl = 0 # Cash is flat
         
-        # Check if balance is depleted
-        if self.virtual_balance <= 0:
-            self.virtual_balance = 0
-            return -1.0  # Total loss
+        # Safety limit
+        if pnl < -1.0: pnl = -1.0
         
         return pnl
     
@@ -221,13 +275,23 @@ class StrategyTrainer:
                     # unrealized_pnl is crucial for strategies like RSIReversion to decide on averaging down
                     curr_pnl_pct = ((entry_price - sim_avg_entry) / sim_avg_entry * 100) if simulate_position else 0
                     
+                    # Calculate Break-Even Price (Exit Price to cover Entry+Exit fees)
+                    # PnL = (Exit * (1-fee) - Entry * (1+fee)) / (Entry * (1+fee)) = 0
+                    # Exit * (1-fee) = Entry * (1+fee) -> Exit = Entry * (1+fee)/(1-fee)
+                    # Use avg_entry if position exists, else current_price (for hypothetical next trade? context usually refers to EXISTING position)
+                    
+                    be_price = 0
+                    if simulate_position and sim_avg_entry > 0:
+                        be_price = sim_avg_entry * (1 + fee) / (1 - fee)
+                    
                     position_context = {
                         'has_position': simulate_position,
                         'position_type': 'LONG' if simulate_position else None,
                         'avg_entry_price': sim_avg_entry,
                         'current_price': entry_price,
                         'unrealized_pnl_pct': curr_pnl_pct,
-                        'position_count': 1 if simulate_position else 0
+                        'position_count': 1 if simulate_position else 0,
+                        'break_even_price': be_price
                     }
                     
                     # Get signal with position context
@@ -240,7 +304,8 @@ class StrategyTrainer:
                     
                     perf_map[strat_id + 1] = pnl
                 except Exception as e:
-                    logger.debug(f"Strategy {strat_id} failed: {e}")
+                    logger.error(f"Strategy {strat_id} ({getattr(strat, 'name', 'Unknown')}) failed: {e}")
+                    logger.debug(traceback.format_exc())
                     perf_map[strat_id + 1] = -1.0
 
             # Determine winner

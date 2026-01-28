@@ -126,14 +126,21 @@ class BacktestService:
                 elif total_short > 0:
                     unrealized_pnl_pct = ((avg_short_price - current_price) / avg_short_price) * 100
                 
+                # Calcular Break-Even Price (Entry * (1+fee)/(1-fee))
+                avg_entry = avg_long_price if total_long > 0 else (avg_short_price if total_short > 0 else 0)
+                be_price = 0
+                if avg_entry > 0:
+                    be_price = avg_entry * (1 + fee) / (1 - fee)
+
                 # Crear contexto de posición para la estrategia
                 position_context = {
                     'has_position': total_long > 0 or total_short > 0,
                     'position_type': 'LONG' if total_long > 0 else ('SHORT' if total_short > 0 else None),
-                    'avg_entry_price': avg_long_price if total_long > 0 else (avg_short_price if total_short > 0 else 0),
+                    'avg_entry_price': avg_entry,
                     'current_price': current_price,
                     'unrealized_pnl_pct': unrealized_pnl_pct,
-                    'position_count': len(long_positions) if total_long > 0 else len(short_positions)
+                    'position_count': len(long_positions) if total_long > 0 else len(short_positions),
+                    'break_even_price': be_price
                 }
                 
                 # Obtener señal de la estrategia CON CONTEXTO
@@ -340,6 +347,43 @@ class BacktestService:
             drawdowns = (equity_series - peaks) / peaks * 100
             max_drawdown = drawdowns.min()
             
+            # Sharpe Ratio
+            returns_series = equity_series.pct_change().dropna()
+            if len(returns_series) > 0 and returns_series.std() > 0:
+                sharpe_ratio = (returns_series.mean() / returns_series.std()) * (252 ** 0.5) 
+            else:
+                sharpe_ratio = 0.0
+
+            # Signal Distribution (from chart data)
+            signals_list = [d['signal'] for d in chart_data if d['signal'] is not None]
+            signal_distribution = {
+                'buy': signals_list.count('buy'),
+                'sell': signals_list.count('sell'),
+                'hold': len(chart_data) - len(signals_list)
+            }
+            
+            # --- Generate Resumen TXT ---
+            report_data = {
+                "metrics": {
+                    "initial_balance": initial_balance,
+                    "final_balance": final_balance,
+                    "profit_pct": profit_pct,
+                    "profit_factor": profit_factor,
+                    "max_drawdown": max_drawdown,
+                    "sharpe_ratio": sharpe_ratio,
+                    "win_rate": win_rate
+                },
+                "counts": {
+                    "total": len(close_trades),
+                    "buy": len([t for t in trades if t['type'] == 'BUY']),
+                    "sell": len([t for t in trades if t['type'] == 'SELL_SHORT'])
+                },
+                "trades": trades,
+                "candles": chart_data
+            }
+            
+            report_path = self._generate_backtest_report(symbol, selected_strategy_name, report_data)
+
             # 7. Bot Configuration
             bot_config = {
                 "strategy_type": selected_strategy_name,
@@ -371,11 +415,17 @@ class BacktestService:
                     "initial_balance": initial_balance,
                     "final_balance": final_balance,
                     "profit_pct": profit_pct,
+                    "profit_factor": profit_factor,
                     "total_trades": len(close_trades),
                     "long_trades": len(long_trades),
                     "short_trades": len(short_trades),
+                    "buy_count": len([t for t in trades if t['type'] == 'BUY']),
+                    "sell_count": len([t for t in trades if t['type'] == 'SELL_SHORT']),
                     "win_rate": win_rate,
-                    "max_drawdown": abs(max_drawdown)
+                    "max_drawdown": abs(max_drawdown),
+                    "sharpe_ratio": round(sharpe_ratio, 2),
+                    "signal_distribution": signal_distribution,
+                    "report_path": report_path
                 },
                 "trades": trades,
                 "chart_data": chart_data,

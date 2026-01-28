@@ -21,6 +21,7 @@ class BaseStrategy(ABC):
                 - current_price: float
                 - unrealized_pnl_pct: float
                 - position_count: int
+                - break_even_price: float (precio de salida para cubrir fees)
             
         Returns:
             dict: {
