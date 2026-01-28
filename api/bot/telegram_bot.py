@@ -1,5 +1,6 @@
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
+from telethon.errors import PhoneCodeExpiredError
 from api.config import Config
 from api.src.domain.models.schemas import TradingSignal
 from api.src.adapters.driven.persistence.mongodb import db
@@ -198,7 +199,7 @@ class TelegramUserBot:
             return self.session.save()
         return ""
     
-    async def send_code_request(self) -> bool:
+    async def send_code_request(self, force_sms: bool = False) -> bool:
         """
         Solicita el código de verificación de Telegram
         Retorna True si se envió correctamente
@@ -228,10 +229,10 @@ class TelegramUserBot:
                 await self.client.connect()
                 print(">>> [MTPROTO] Conexión establecida con éxito")
             
-            logger.info(f"Sending code request to Telegram via MTProto for {phone_clean}...")
-            print(f">>> [MTPROTO] Solicitando código de verificación a Telegram para {phone_clean}...")
+            logger.info(f"Sending code request to Telegram via MTProto for {phone_clean} (force_sms={force_sms})...")
+            print(f">>> [MTPROTO] Solicitando código de verificación a Telegram para {phone_clean} (SMS: {force_sms})...")
             # Telegram enviará el código a la app o SMS
-            result = await self.client.send_code_request(phone_clean)
+            result = await self.client.send_code_request(phone_clean, force_sms=force_sms)
             
             print(f">>> [MTPROTO] RESPUESTA DE TELEGRAM: {result}")
             logger.info(f"Telegram Response (SentCode): {result}")
@@ -270,6 +271,16 @@ class TelegramUserBot:
                 logger.error(f"Authentication failed for user {self.user_id}")
                 return False, ""
                 
+        except PhoneCodeExpiredError:
+            logger.warning(f"Phone code expired for user {self.user_id}. Requesting new code...")
+            try:
+                # Solicitar nuevo código (Telethon manejará SMS/App según disponibilidad)
+                await self.send_code_request(force_sms=True)
+                logger.info(f"New code requested successfully for {self.user_id}")
+                return False, "CODE_EXPIRED"
+            except Exception as resend_error:
+                logger.error(f"Error resending code for user {self.user_id}: {resend_error}")
+                return False, "RESEND_FAILED"
         except Exception as e:
             logger.error(f"Error signing in user {self.user_id}: {e}")
             return False, ""

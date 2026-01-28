@@ -8,6 +8,9 @@ import { CONFIG } from '@/config';
 
 interface TelegramConfigProps {
     userId: string;
+    telegramApiId?: string;
+    telegramApiHash?: string;
+    telegramPhoneNumber?: string;
 }
 
 interface TelegramStatus {
@@ -16,20 +19,55 @@ interface TelegramStatus {
     last_connected?: string;
 }
 
-export function TelegramConfig({ userId }: TelegramConfigProps) {
-    const [telegramApiId, setTelegramApiId] = useState('');
-    const [telegramApiHash, setTelegramApiHash] = useState('');
-    const [telegramPhone, setTelegramPhone] = useState('');
+export function TelegramConfig({ userId, telegramApiId: initialApiId, telegramApiHash: initialApiHash, telegramPhoneNumber: initialPhone }: TelegramConfigProps) {
+    const [telegramApiId, setTelegramApiId] = useState(initialApiId || '');
+    const [telegramApiHash, setTelegramApiHash] = useState(initialApiHash || '');
+    const [telegramPhone, setTelegramPhone] = useState(initialPhone || '');
     const [showApiHash, setShowApiHash] = useState(false);
     const [status, setStatus] = useState<TelegramStatus | null>(null);
     const [loading, setLoading] = useState(false);
     const [showCodeModal, setShowCodeModal] = useState(false);
     const [verificationCode, setVerificationCode] = useState('');
+    const [timeLeft, setTimeLeft] = useState(0);
+    const [modalMessage, setModalMessage] = useState<{ type: 'info' | 'error', text: string } | null>(null);
 
     // Cargar estado de Telegram
     useEffect(() => {
         fetchTelegramStatus();
     }, [userId]);
+
+    // Actualizar estado si llegan props de configuración (ej. al cargar desde DB)
+    useEffect(() => {
+        if (initialApiId) setTelegramApiId(initialApiId);
+        if (initialApiHash) setTelegramApiHash(initialApiHash);
+        if (initialPhone) setTelegramPhone(initialPhone);
+    }, [initialApiId, initialApiHash, initialPhone]);
+
+    // Cuenta regresiva para el código
+    useEffect(() => {
+        let interval: NodeJS.Timeout;
+        if (showCodeModal && timeLeft > 0) {
+            interval = setInterval(() => {
+                setTimeLeft((prev) => prev - 1);
+            }, 1000);
+        } else if (showCodeModal && timeLeft === 0) {
+            // Mostrar mensaje cuando el tiempo se agota
+            setModalMessage((prev) => {
+                if (prev?.type === 'error' || prev?.text?.includes('finalizado')) return prev;
+                return { 
+                    type: 'info', 
+                    text: 'El tiempo ha finalizado. Puedes solicitar un nuevo código.' 
+                };
+            });
+        }
+        return () => clearInterval(interval);
+    }, [showCodeModal, timeLeft]);
+
+    const formatTime = (seconds: number) => {
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
+    };
 
     const fetchTelegramStatus = async () => {
         try {
@@ -66,6 +104,8 @@ export function TelegramConfig({ userId }: TelegramConfigProps) {
 
             toast.success('Código de verificación enviado a tu Telegram');
             setShowCodeModal(true);
+            setTimeLeft(120); // 2 minutos
+            setModalMessage(null);
         } catch (error: any) {
             toast.error(error.message || 'Error al conectar con Telegram');
         } finally {
@@ -91,6 +131,17 @@ export function TelegramConfig({ userId }: TelegramConfigProps) {
 
             if (!response.ok) {
                 const error = await response.json();
+                // Manejo específico para código expirado
+                if (error.detail === "CODE_EXPIRED" || error.message === "CODE_EXPIRED") {
+                    toast.warning("El código ha expirado. Se ha enviado uno nuevo automáticamente.");
+                    setVerificationCode(''); // Limpiar para que el usuario ingrese el nuevo
+                    setTimeLeft(120); // Reiniciar timer
+                    setModalMessage({ 
+                        type: 'error', 
+                        text: 'El código expiró. Se ha enviado uno nuevo por SMS.' 
+                    });
+                    return;
+                }
                 throw new Error(error.detail || 'Código inválido');
             }
 
@@ -244,6 +295,26 @@ export function TelegramConfig({ userId }: TelegramConfigProps) {
                         <p className="text-sm text-muted-foreground mb-4">
                             Ingresa el código que recibiste en tu aplicación de Telegram
                         </p>
+
+                        <div className="mb-4 space-y-2">
+                            <div className="flex justify-between items-center text-sm">
+                                <span className="text-muted-foreground">Expira en:</span>
+                                <span className={`font-mono font-bold ${timeLeft < 30 ? 'text-red-500' : 'text-foreground'}`}>
+                                    {formatTime(timeLeft)}
+                                </span>
+                            </div>
+                            
+                            {modalMessage && (
+                                <div className={`p-3 rounded-md text-xs font-medium ${
+                                    modalMessage.type === 'error' 
+                                        ? 'bg-red-50 text-red-900 border border-red-200 dark:bg-red-900/20 dark:text-red-300' 
+                                        : 'bg-blue-50 text-blue-900 border border-blue-200'
+                                }`}>
+                                    {modalMessage.text}
+                                </div>
+                            )}
+                        </div>
+
                         <Input
                             type="text"
                             placeholder="12345"
@@ -260,6 +331,11 @@ export function TelegramConfig({ userId }: TelegramConfigProps) {
                             >
                                 {loading ? 'Verificando...' : 'Verificar'}
                             </Button>
+                            {timeLeft === 0 && (
+                                <Button onClick={handleConnect} disabled={loading} variant="secondary">
+                                    Reenviar SMS
+                                </Button>
+                            )}
                             <Button
                                 onClick={() => {
                                     setShowCodeModal(false);
