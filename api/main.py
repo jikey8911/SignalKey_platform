@@ -67,7 +67,13 @@ app = FastAPI(title="Crypto Trading Signal API (Hexagonal Refactored)", lifespan
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    # allow_origins=["*"],  # Wildcard is often problematic with credentials
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://psychic-guide-g4wr4jp4r4x93p45w-3000.app.github.dev" # Specific user origin
+    ],
+    allow_origin_regex=r"https://.*\.app\.github\.dev", # Match any Codespace URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
