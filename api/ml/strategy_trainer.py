@@ -73,11 +73,24 @@ class StrategyTrainer:
         if signal == 'buy':
             # Open long position or accumulate
             # Use 95% of balance to leave margin for fees
+            if self.virtual_balance <= 0: return -1.0
+            
             trade_amount = self.virtual_balance * 0.95
             fee_cost = trade_amount * fee
-            position_value = trade_amount - fee_cost
-            self.position_size = position_value / entry_price
-            self.position_entry_price = entry_price
+            net_trade_amount = trade_amount - fee_cost
+            new_coins = net_trade_amount / entry_price
+            
+            # --- Avg Price Calculation (Accumulation) ---
+            if self.position_size > 0:
+                total_coins = self.position_size + new_coins
+                # Current Value based on COST BASIS (Original Entry * Size) + New Cost
+                total_cost_basis = (self.position_size * self.position_entry_price) + net_trade_amount
+                self.position_entry_price = total_cost_basis / total_coins
+                self.position_size = total_coins
+            else:
+                self.position_size = new_coins
+                self.position_entry_price = entry_price
+                
             self.virtual_balance -= trade_amount
             
             # Close position at exit
@@ -86,8 +99,10 @@ class StrategyTrainer:
             realized_value = exit_value - exit_fee
             self.virtual_balance += realized_value
             
-            # Calculate PnL
-            pnl = (realized_value - position_value) / position_value
+            # Calculate PnL relative to TOTAL COST BASIS
+            # Cost Basis = Size * AvgEntry
+            total_invested = self.position_size * self.position_entry_price
+            pnl = (realized_value - total_invested) / total_invested if total_invested > 0 else 0
             
             # Reset position
             self.position_size = 0
@@ -181,29 +196,46 @@ class StrategyTrainer:
             entry_price = future_slice['close'].iloc[0] # Close actual
             exit_price = future_slice['close'].iloc[-1] # Close en horizon
             
+            # Randomly simulate existing position state to train for accumulation/management
+            # 30% chance of having an existing position (LONG only for simplicity in this version)
+            import random
+            simulate_position = random.random() < 0.3
+            sim_avg_entry = entry_price * random.uniform(0.95, 1.05) if simulate_position else 0
+            sim_amount = (self.initial_balance * 0.5) / sim_avg_entry if simulate_position else 0  # 50% invested
+
             perf_map = {}
             for strat_id, strat in enumerate(self.strategies): # 0=RSI, 1=EMA... (IDs 1,2,3)
                 try:
                     # Reset virtual balance for each strategy test
-                    self.virtual_balance = self.initial_balance
-                    self.position_size = 0
-                    self.position_entry_price = 0
+                    # If we simulate a position, we must adjust balance
+                    if simulate_position:
+                        self.virtual_balance = self.initial_balance * 0.5
+                        self.position_size = sim_amount
+                        self.position_entry_price = sim_avg_entry
+                    else:
+                        self.virtual_balance = self.initial_balance
+                        self.position_size = 0
+                        self.position_entry_price = 0
                     
-                    # Create position context (empty for training simplicity)
+                    # Create position context
+                    # unrealized_pnl is crucial for strategies like RSIReversion to decide on averaging down
+                    curr_pnl_pct = ((entry_price - sim_avg_entry) / sim_avg_entry * 100) if simulate_position else 0
+                    
                     position_context = {
-                        'has_position': False,
-                        'position_type': None,
-                        'avg_entry_price': 0,
+                        'has_position': simulate_position,
+                        'position_type': 'LONG' if simulate_position else None,
+                        'avg_entry_price': sim_avg_entry,
                         'current_price': entry_price,
-                        'unrealized_pnl_pct': 0,
-                        'position_count': 0
+                        'unrealized_pnl_pct': curr_pnl_pct,
+                        'position_count': 1 if simulate_position else 0
                     }
                     
                     # Get signal with position context
                     res = strat.get_signal(window_slice, position_context)
                     signal = res.get('signal')
                     
-                    # Execute virtual trade
+                    # Execute virtual trade (Accumulate or Open)
+                    # We pass the SIMULATED state to the execution logic via 'self'
                     pnl = self._execute_virtual_trade(signal, entry_price, exit_price, fee)
                     
                     perf_map[strat_id + 1] = pnl

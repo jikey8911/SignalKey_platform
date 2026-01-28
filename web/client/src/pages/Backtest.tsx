@@ -280,7 +280,7 @@ export default function Backtest() {
         days,
         totalTrades: data.metrics?.total_trades || 0,
         winRate: data.metrics?.win_rate || 0,
-        profitFactor: '0', // Not calculated in backend currently
+        profitFactor: data.metrics?.profit_factor?.toString() || '0',
         maxDrawdown: data.metrics?.max_drawdown?.toFixed(2) || '0',
         totalReturn: data.metrics?.profit_pct?.toFixed(2) || '0',
         sharpeRatio: data.metrics?.sharpe_ratio?.toString() || '0',
@@ -810,18 +810,39 @@ export default function Backtest() {
             <Card className="p-6">
               <div className="flex items-center gap-2 mb-6">
                 <BarChart3 className="text-primary" size={24} />
-                <h3 className="text-lg font-semibold text-foreground">Resultados</h3>
+                <h3 className="text-lg font-semibold text-foreground">Resultados del Backtest</h3>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-                <StatBox label="Total de Trades" value={results.totalTrades} />
-                <StatBox label="Win Rate" value={results.winRate} unit="%" />
+              {/* Financial Balance */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 p-4 bg-muted/30 rounded-lg border border-border">
+                <div>
+                  <p className="text-sm text-muted-foreground">Balance Inicial</p>
+                  <p className="text-xl font-mono text-foreground">${results.metrics?.initial_balance?.toLocaleString() ?? 0}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Balance Final</p>
+                  <p className={`text-xl font-mono font-bold ${parseFloat(results.metrics?.profit_pct || '0') >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                    ${results.metrics?.final_balance?.toLocaleString() ?? 0}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Retorno Total</p>
+                  <p className={`text-xl font-bold ${parseFloat(results.totalReturn) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                    {parseFloat(results.totalReturn) > 0 ? '+' : ''}{results.totalReturn}%
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                <StatBox label="Total Operaciones" value={results.totalTrades} />
+                <StatBox label="Compras (BUY)" value={results.metrics?.buy_count || 0} />
+                <StatBox label="Ventas (SELL)" value={results.metrics?.sell_count || 0} />
+                <StatBox label="Win Rate" value={`${results.winRate.toFixed(1)}`} unit="%" />
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                 <StatBox label="Profit Factor" value={results.profitFactor} />
                 <StatBox label="Max Drawdown" value={results.maxDrawdown} unit="%" />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <StatBox label="Retorno Total" value={results.totalReturn} unit="%" />
                 <StatBox label="Sharpe Ratio" value={results.sharpeRatio} />
               </div>
             </Card>
