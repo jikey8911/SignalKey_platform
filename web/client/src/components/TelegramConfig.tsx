@@ -79,7 +79,9 @@ export function TelegramConfig({ userId, telegramApiId: initialApiId, telegramAp
         }
     };
 
-    const handleConnect = async () => {
+    const handleConnect = async (forceSMS: boolean | any = false) => {
+        const isForceSMS = typeof forceSMS === 'boolean' ? forceSMS : false;
+
         if (!telegramApiId || !telegramApiHash || !telegramPhone) {
             toast.error('Por favor completa todos los campos');
             return;
@@ -93,7 +95,8 @@ export function TelegramConfig({ userId, telegramApiId: initialApiId, telegramAp
                 body: JSON.stringify({
                     phone_number: telegramPhone,
                     api_id: telegramApiId,
-                    api_hash: telegramApiHash
+                    api_hash: telegramApiHash,
+                    force_sms: isForceSMS
                 })
             });
 
@@ -102,7 +105,7 @@ export function TelegramConfig({ userId, telegramApiId: initialApiId, telegramAp
                 throw new Error(error.detail || 'Error al conectar');
             }
 
-            toast.success('Código de verificación enviado a tu Telegram');
+            toast.success(isForceSMS ? 'Código enviado por SMS' : 'Código de verificación enviado a tu Telegram');
             setShowCodeModal(true);
             setTimeLeft(120); // 2 minutos
             setModalMessage(null);
@@ -251,7 +254,7 @@ export function TelegramConfig({ userId, telegramApiId: initialApiId, telegramAp
                         </div>
 
                         <Button
-                            onClick={handleConnect}
+                            onClick={() => handleConnect(false)}
                             disabled={loading}
                             className="w-full"
                         >
@@ -332,7 +335,7 @@ export function TelegramConfig({ userId, telegramApiId: initialApiId, telegramAp
                                 {loading ? 'Verificando...' : 'Verificar'}
                             </Button>
                             {timeLeft === 0 && (
-                                <Button onClick={handleConnect} disabled={loading} variant="secondary">
+                                <Button onClick={() => handleConnect(true)} disabled={loading} variant="secondary">
                                     Reenviar SMS
                                 </Button>
                             )}

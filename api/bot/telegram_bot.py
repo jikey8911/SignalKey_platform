@@ -217,24 +217,17 @@ class TelegramUserBot:
                 logger.error(f"Invalid API ID (not an integer): {api_id_clean}")
                 return False
 
-            print(f"\n>>> [MTPROTO] Iniciando conexión para el usuario {self.user_id}")
-            print(f">>> [MTPROTO] Usando API ID: {api_id_int} y Teléfono: {phone_clean}")
-            
             if not self.client:
                 # Usar la sesión configurada en el constructor (ya sea memoria o archivo)
                 self.client = TelegramClient(self.session, api_id_int, api_hash_clean)
             
             if not self.client.is_connected():
-                print(">>> [MTPROTO] Conectando a los servidores de Telegram...")
                 await self.client.connect()
-                print(">>> [MTPROTO] Conexión establecida con éxito")
             
             logger.info(f"Sending code request to Telegram via MTProto for {phone_clean} (force_sms={force_sms})...")
-            print(f">>> [MTPROTO] Solicitando código de verificación a Telegram para {phone_clean} (SMS: {force_sms})...")
             # Telegram enviará el código a la app o SMS
             result = await self.client.send_code_request(phone_clean, force_sms=force_sms)
             
-            print(f">>> [MTPROTO] RESPUESTA DE TELEGRAM: {result}")
             logger.info(f"Telegram Response (SentCode): {result}")
             logger.info(f"Code request sent successfully to {self.phone_number} for user {self.user_id}")
             logger.info(f"Phone code hash: {result.phone_code_hash}")
