@@ -18,13 +18,11 @@ class SpotIntraExchangeArbitrage(BaseStrategy):
         pnl = pos.get('unrealized_pnl_pct', 0)
         signal = 'hold'
 
-        # Lógica para abrir/promediar
+        # Lógica para abrir/promediar (Sin restricción de PnL)
         if z_score <= -self.z_threshold:  # Infravalorado
-            if not pos['has_position'] or (pos.get('position_type') == 'LONG' and pnl < -1):
-                signal = 'buy'
+             signal = 'buy'
         elif z_score >= self.z_threshold:  # Sobrevalorado
-            if not pos['has_position'] or (pos.get('position_type') == 'SHORT' and pnl < -1):
-                signal = 'sell'
+             signal = 'sell'
 
         # Lógica para cerrar con profit
         if pos.get('has_position') and pnl >= self.min_profit:

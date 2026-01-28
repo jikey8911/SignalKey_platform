@@ -36,3 +36,14 @@ class TradeResult:
     price: Optional[float] = None
     amount: Optional[float] = None
     fee: Optional[float] = None
+
+@dataclass
+class Position:
+    symbol: str
+    side: str  # LONG, SHORT
+    amount: float
+    entry_price: float
+    unrealized_pnl: float = 0.0
+    leverage: int = 1
+    entries: List[float] = None # List of entry prices for accumulation tracking
+    timestamp: datetime = datetime.now()

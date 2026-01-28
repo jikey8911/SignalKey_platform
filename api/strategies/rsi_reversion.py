@@ -16,10 +16,10 @@ class RSIReversion(BaseStrategy):
         pnl = pos.get('unrealized_pnl_pct', 0)
         
         signal = 'hold'
-        # Entradas
-        if last_rsi < self.oversold and not pos['has_position']:
+        # Entradas (Permitir acumulación si la condición persiste)
+        if last_rsi < self.oversold:
             signal = 'buy'
-        elif last_rsi > self.overbought and not pos['has_position']:
+        elif last_rsi > self.overbought:
             signal = 'sell'
         
         # Salidas controladas
