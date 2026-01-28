@@ -390,8 +390,85 @@ class BacktestService:
 
     async def _get_user_virtual_balance(self, user_id: str, market_type: str = "CEX", asset: str = "USDT") -> float:
         try:
-            # Simple wrapper to avoid circular dependency issues or reuse logic
-            # For now simplified:
+            # 1. Resolver User ID
+            user = await db.users.find_one({"openId": user_id})
+            if not user:
+                logger.warning(f"User {user_id} not found, defaulting to 10000")
+                return 10000.0
+                
+            # 2. Obtener Balance
+            balance_doc = await db.virtual_balances.find_one({
+                "userId": user["_id"], 
+                "marketType": market_type, 
+                "asset": asset
+            })
+            
+            if balance_doc:
+                return float(balance_doc.get("amount", 10000.0))
+            
+            # Default si no existe
             return 10000.0
-        except:
+            
+        except Exception as e:
+            logger.error(f"Error fetching virtual balance: {e}")
             return 10000.0
+
+    def _generate_backtest_report(self, symbol: str, strategy: str, data: dict) -> str:
+        """Generates a detailed TXT report of the backtest."""
+        import os
+        from datetime import datetime
+        
+        reports_dir = "api/data/reports"
+        os.makedirs(reports_dir, exist_ok=True)
+        
+        safe_symbol = symbol.replace('/', '_')
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{reports_dir}/Report_{strategy}_{safe_symbol}_{timestamp}.txt"
+        
+        metrics = data.get('metrics', {})
+        counts = data.get('counts', {})
+        
+        content = [
+            "==================================================",
+            f"          REPORTE DE BACKTEST - {symbol}",
+            "==================================================",
+            f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Estrategia: {strategy}",
+            "==================================================",
+            "METRICAS FINANCIERAS:",
+            f"Balance Inicial:   ${metrics.get('initial_balance', 0):,.2f}",
+            f"Balance Final:     ${metrics.get('final_balance', 0):,.2f}",
+            f"Retorno Total:     {metrics.get('profit_pct', 0):.2f}%",
+            f"Profit Factor:     {metrics.get('profit_factor', 0)}",
+            f"Max Drawdown:      {metrics.get('max_drawdown', 0):.2f}%",
+            f"Sharpe Ratio:      {metrics.get('sharpe_ratio', 0):.2f}",
+            "",
+            "ESTADISTICAS OPERATIVAS:",
+            f"Total Operaciones: {counts.get('total', 0)}",
+            f"Compras (BUY):     {counts.get('buy', 0)}",
+            f"Ventas (SELL):     {counts.get('sell', 0)}",
+            f"Win Rate:          {metrics.get('win_rate', 0):.1f}%",
+            "==================================================",
+            "DETALLE DE VELAS Y SEÑALES (Últimas 500):",
+            "Fecha                 | Apertura | Cierre   | Señal    | Equity",
+            "------------------------------------------------------------------"
+        ]
+        
+        # Add Candle Data (Limit to avoid massive files if needed, or full)
+        candles = data.get('candles', [])
+        for c in candles: # List all
+            date_str = pd.to_datetime(c['time'], unit='ms').strftime('%Y-%m-%d %H:%M')
+            signal = c.get('signal', '-') or '-'
+            line = f"{date_str:<21} | {c['open']:<8.2f} | {c['close']:<8.2f} | {signal:<8} | {c['equity']:.2f}"
+            content.append(line)
+            
+        content.append("==================================================")
+        content.append("REGISTRO DE OPERACIONES (TRADES):")
+        for t in data.get('trades', []):
+            content.append(str(t))
+            
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write('\\n'.join(content))
+            
+        logger.info(f"Report generated at: {filename}")
+        return filename

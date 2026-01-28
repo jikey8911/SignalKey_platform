@@ -16,6 +16,15 @@ class MongoDBSignalRepository(ISignalRepository):
             "rawText": signal.rawText,
             "status": signal.status.value,
             "createdAt": signal.createdAt,
+            # Campos analizados
+            "symbol": signal.symbol,
+            "marketType": signal.marketType.value if signal.marketType else None,
+            "decision": signal.decision.value if signal.decision else None,
+            "confidence": signal.confidence,
+            "reasoning": signal.reasoning,
+            "riskScore": signal.riskScore,
+            "tradeId": signal.tradeId,
+            "executionMessage": signal.executionMessage
         }
         result = await self.collection.insert_one(signal_dict)
         signal.id = str(result.inserted_id)
