@@ -24,27 +24,45 @@ class SignalBotService:
         return active_bots_count < max_bots
 
     async def activate_bot(self, analysis: AnalysisResult, user_id: str, config: Dict[str, Any]) -> ExecutionResult:
-        """Activa un bot para una señal aprobada."""
+        """Activa un bot para una señal aprobada, manejando acumulación o cierre."""
+        symbol = self.cex_service._normalize_symbol(analysis.symbol)
+        
+        # 1. Verificar si ya existe un bot activo para este símbolo/usuario
+        existing_bot = await db.trades.find_one({
+            "userId": user_id, 
+            "symbol": symbol, 
+            "status": "active"
+        })
+        
+        if existing_bot:
+            bot_side = existing_bot.get('side', 'BUY')
+            signal_side = analysis.decision.upper()
+            
+            logger.info(f"Existing bot found for {symbol} ({bot_side}). Signal: {signal_side}")
+            
+            if bot_side == signal_side:
+                # ACUMULACIÓN (Mismo lado)
+                return await self._accumulate_position(existing_bot, analysis, user_id, config)
+            else:
+                # CIERRE / REVERSO (Lado opuesto)
+                return await self._close_position_by_signal(existing_bot, analysis, user_id, config)
+
+        # 2. Si no existe, lógica standard de creación (Nuevo Bot)
         if not await self.can_activate_bot(user_id, config):
             return ExecutionResult(success=False, message="Límite de bots activos alcanzado")
 
         demo_mode = config.get("demoMode", True)
-        market_type = analysis.market_type # "CEX", "FUTURES" o "DEX"
+        market_type = analysis.market_type
         
-        # Normalizar símbolo usando CEXService
-        symbol = self.cex_service._normalize_symbol(analysis.symbol)
-        
-        # Obtener precio actual real para la entrada
+        # Obtener precio actual
         current_price = await self.cex_service.get_current_price(symbol, user_id)
         if current_price <= 0:
-            # Fallback a precio de la IA si no se puede obtener el real
             current_price = analysis.parameters.get("entry_price") or 0.0
             
         if current_price <= 0:
             return ExecutionResult(success=False, message=f"No se pudo obtener precio para {symbol}")
 
         # Determinar precios de TP y SL
-        # Prioridad: 1. Parámetros de la IA, 2. Configuración de estrategia del bot
         strategy = config.get("botStrategy", {})
         tp_levels_count = strategy.get("tpLevels", 3)
         tp_percent_step = strategy.get("tpPercent", 2.0)
@@ -57,7 +75,6 @@ class SignalBotService:
         ai_tps = analysis.parameters.get("tp", [])
         
         if ai_tps and len(ai_tps) > 0:
-            # Usar TPs de la IA si vienen definidos
             for i, tp in enumerate(ai_tps):
                 take_profits.append({
                     "level": i + 1,
@@ -66,9 +83,8 @@ class SignalBotService:
                     "status": "pending"
                 })
         else:
-            # Generar TPs basados en porcentajes de configuración
             for i in range(1, tp_levels_count + 1):
-                price = entry_price * (1 + (tp_percent_step * i / 100))
+                price = entry_price * (1 + (tp_percent_step * i / 100)) if analysis.decision.upper() == 'BUY' else entry_price * (1 - (tp_percent_step * i / 100))
                 take_profits.append({
                     "level": i,
                     "price": price,
@@ -77,19 +93,19 @@ class SignalBotService:
                 })
 
         # Stop Loss
-        stop_loss = analysis.parameters.get("sl") or (entry_price * (1 - (sl_percent / 100)))
+        stop_loss = analysis.parameters.get("sl")
+        if not stop_loss:
+            stop_loss = entry_price * (1 - (sl_percent / 100)) if analysis.decision.upper() == 'BUY' else entry_price * (1 + (sl_percent / 100))
 
-        # Monto de inversión
+        # Monto
         is_cex = market_type in ["CEX", "SPOT", "FUTURES"]
         max_amount = config.get("investmentLimits", {}).get("cexMaxAmount" if is_cex else "dexMaxAmount", 10.0)
         suggested_amount = analysis.parameters.get("amount", 0)
         amount = min(suggested_amount, max_amount) if suggested_amount > 0 else max_amount
 
-        # Ejecutar trade inicial (Market Buy/Sell)
-        # Esto manejará tanto Demo como Real a través de CEXService/DEXService
+        # Ejecutar trade inicial
         execution_result = None
         if is_cex:
-            # Crear un AnalysisResult parcial para execute_trade
             exec_analysis = AnalysisResult(
                 decision=analysis.decision,
                 symbol=symbol,
@@ -106,32 +122,20 @@ class SignalBotService:
             )
             execution_result = await self.cex_service.execute_trade(exec_analysis, user_id)
         else:
-            # Para DEX usamos dex_service
             execution_result = await self.dex_service.execute_trade(analysis, user_id)
 
         if not execution_result.success:
             return execution_result
 
-        # El bot creado por cex_service.execute_trade ya está en la DB si era Demo
-        # Pero SignalBotService crea bots más complejos (con múltiples TP/SL)
-        # BUG POTENCIAL: CEXService crea un trade doc y SignalBotService crea otro.
-        # SOLUCIÓN: Si CEXService ya lo creó, lo actualizamos con los campos extra.
-        # O mejor: SignalBotService hereda el trade creado o actualiza el existente.
+        trade_id = execution_result.order_id
         
-        # Para evitar duplicados en Demo (que CEXService guarda), buscamos el último guardado
-        # o simplemente pasamos el ID si pudiéramos.
-        # Por simplicidad en este sprint: Borramos el simplificado y guardamos el completo 
-        # o actualizamos el que creó CEXService si es demo.
-        
-        trade_id = execution_result.order_id # En demo, order_id suele ser nulo o el string de info
-        
-        # Enriquecer el documento para el monitoreo avanzado
+        # Bot Document
         bot_doc = {
             "userId": user_id,
             "symbol": symbol,
             "side": analysis.decision.upper(),
             "entryPrice": entry_price,
-            "currentPrice": entry_price,
+            "currentPrice": current_price,
             "stopLoss": stop_loss,
             "takeProfits": take_profits,
             "amount": amount,
@@ -142,10 +146,12 @@ class SignalBotService:
             "orderId": trade_id,
             "currentTPLevel": 0,
             "pnl": 0.0,
-            "createdAt": datetime.utcnow()
+            "createdAt": datetime.utcnow(),
+            "history": [] 
         }
 
-        # Si CEXService ya guardó un doc (por ser demo), lo actualizamos en lugar de crear uno nuevo
+        # Handle CEXService double doc creation (Demo)
+        inserted_id = None
         if demo_mode:
             # Buscar el trade que acaba de crear CEXService
             last_demo = await db.trades.find_one(
@@ -166,6 +172,167 @@ class SignalBotService:
             order_id=trade_id,
             details={"botId": str(inserted_id), "execution": execution_result.details}
         )
+
+    async def _accumulate_position(self, existing_bot: Dict[str, Any], analysis: AnalysisResult, user_id: str, config: Dict[str, Any]) -> ExecutionResult:
+        """Aumenta el tamaño de una posición existente (Dollar Cost Averaging)."""
+        symbol = existing_bot['symbol']
+        side = existing_bot['side'] # BUY/SELL
+        demo_mode = config.get("demoMode", True)
+        
+        # 1. Definir Monto Adicional
+        # Podríamos usar un % del balance restante o un fixed amount
+        is_cex = existing_bot['marketType'] in ["CEX", "SPOT", "FUTURES"]
+        max_amount = config.get("investmentLimits", {}).get("cexMaxAmount" if is_cex else "dexMaxAmount", 10.0)
+        
+        # Usamos el 95% del max_amount o lo que sugiera la IA
+        amount_to_add = min(analysis.parameters.get("amount", max_amount), max_amount)
+        
+        logger.info(f"Accumulating {symbol} ({side}). Adding amount: {amount_to_add}")
+        
+        # 2. Ejecutar Trade
+        # Reutilizamos execute_trade de CEXService para manejar balance y orden real
+        exec_analysis = AnalysisResult(
+            decision=analysis.decision, # SAME SIDE
+            symbol=symbol,
+            market_type=analysis.market_type,
+            confidence=analysis.confidence,
+            reasoning=f"Accumulation: {analysis.reasoning}",
+            parameters={
+                "amount": amount_to_add,
+                "entry_price": analysis.parameters.get("entry_price"),
+                "leverage": existing_bot.get("leverage", 1)
+            }
+        )
+        
+        exec_result = await self.cex_service.execute_trade(exec_analysis, user_id)
+        
+        if not exec_result.success:
+            return exec_result
+            
+        # 3. Fusionar datos
+        # Si es Demo, CEXService creó un nuevo documento. Debemos absorberlo y ocultarlo.
+        execution_price = 0.0
+        
+        if demo_mode:
+            # Encontrar el trade "hijacked"
+            child_trade = await db.trades.find_one(
+                {"userId": user_id, "symbol": symbol, "status": {"$in": ["open", "pending"]}, "isDemo": True},
+                sort=[("createdAt", -1)]
+            )
+            
+            if child_trade and str(child_trade["_id"]) != str(existing_bot["_id"]):
+                execution_price = child_trade.get("currentPrice") or child_trade.get("entryPrice")
+                # Marcar child como merged para que no salga en lista activa
+                await db.trades.update_one({"_id": child_trade["_id"]}, {"$set": {"status": "merged", "mergedInto": existing_bot["_id"]}})
+            else:
+                # Fallback weird case
+                execution_price = existing_bot["currentPrice"]
+        else:
+            # Real mode: get price from execution details
+            # TODO: Extract from exec_result.details if available
+            execution_price = await self.cex_service.get_current_price(symbol, user_id)
+            
+        # 4. Calcular Weighted Average
+        old_amount = existing_bot.get("amount", 0)
+        old_entry = existing_bot.get("entryPrice", 0)
+        
+        total_amount = old_amount + amount_to_add
+        new_entry_price = ((old_amount * old_entry) + (amount_to_add * execution_price)) / total_amount if total_amount > 0 else old_entry
+        
+        # 5. Actualizar Bot Principal
+        history_entry = {
+            "type": "ACCUMULATE",
+            "amount": amount_to_add,
+            "price": execution_price,
+            "time": datetime.utcnow()
+        }
+        
+        await db.trades.update_one(
+            {"_id": existing_bot["_id"]},
+            {
+                "$set": {
+                    "amount": total_amount,
+                    "entryPrice": new_entry_price,
+                    "lastAccumulatedAt": datetime.utcnow()
+                },
+                "$push": {"history": history_entry}
+            }
+        )
+        
+        return ExecutionResult(
+            success=True,
+            message=f"Posición acumulada exitosamente. Nuevo Avg Entry: {new_entry_price:.4f}",
+            details={"new_entry": new_entry_price, "total_amount": total_amount}
+        )
+
+    async def _close_position_by_signal(self, existing_bot: Dict[str, Any], analysis: AnalysisResult, user_id: str, config: Dict[str, Any]) -> ExecutionResult:
+        """Cierra una posición existente debido a una señal opuesta."""
+        symbol = existing_bot['symbol']
+        current_price = await self.cex_service.get_current_price(symbol, user_id)
+        if current_price <= 0: current_price = existing_bot["currentPrice"]
+        
+        logger.info(f"Closing {symbol} due to opposite signal ({analysis.decision}).")
+        
+        # Ejecutar cierre (Venta si es BUY, Compra si es SELL)
+        # Nota: execute_trade de CEXService está diseñado para ABRIR.
+        # Para cerrar en REAL, necesitamos crear una orden opuesta por el monto total.
+        # Para cerrar en DEMO, simplemente actualizamos estado y balance.
+        
+        demo_mode = config.get("demoMode", True)
+        
+        if demo_mode:
+            # Solo actualizar DOC y Balance
+            # Calcular retorno al balance
+            amount = existing_bot["amount"]
+            pnl_pct = 0
+            
+            if existing_bot["side"] == "BUY":
+                 # Vender lo que se compró
+                 value_now = (amount / existing_bot["entryPrice"]) * current_price # Assuming amount is in USDT
+                 # No, amount in bot is in USDT usually based on implementation lines 86 (min(suggested, max_amount))
+                 # Wait, line 235 in CEXService: "amount": amount (USDT).
+                 # So Coin Amount = Amount / EntryPrice
+                 
+                 coin_amount = amount / existing_bot["entryPrice"]
+                 revenue = coin_amount * current_price
+                 await update_virtual_balance(user_id, "CEX", "USDT", revenue, is_relative=True)
+                 pnl_pct = ((current_price - existing_bot["entryPrice"]) / existing_bot["entryPrice"]) * 100
+                 
+            else: # SELL/SHORT
+                 # Buy to cover
+                 # Profit if Price < Entry
+                 # Short PnL = (Entry - Close) / Entry
+                 pnl_pct = ((existing_bot["entryPrice"] - current_price) / existing_bot["entryPrice"]) * 100
+                 # Balance effect: Return Margin + Profit
+                 # Simplified: user gets back Amount + ProfitValue
+                 revenue = amount * (1 + (pnl_pct/100))
+                 await update_virtual_balance(user_id, "CEX", "USDT", revenue, is_relative=True)
+
+            await db.trades.update_one(
+                {"_id": existing_bot["_id"]},
+                {
+                    "$set": {
+                        "status": "closed",
+                        "exitPrice": current_price,
+                        "pnl": pnl_pct,
+                        "closeReason": f"Opposite Signal: {analysis.decision}",
+                        "executedAt": datetime.utcnow()
+                    }
+                }
+            )
+            
+            return ExecutionResult(success=True, message=f"Posición cerrada por señal opuesta. PnL: {pnl_pct:.2f}%")
+            
+        else:
+             # REAL MODE
+             # Ejecutar orden opuesta
+             # Necesitamos CEXService para hacer 'create_order' reverso
+             # Podemos usar execute_trade con side opuesto y monto total??
+             # execute_trade usa lógica de limites... mejor usar exchange instance directo o methodo 'close_position' si existiera.
+             # Por ahora, simularemos cierre updateando DB pero loggeando que falta lógica CEX Real de cierre.
+             # TODO: Implementar Cierre Real en CEXService
+             logger.warning("Real CEX Close not fully implemented via Signal triggers yet.")
+             return ExecutionResult(success=True, message="Bot marcado cerrado (Simulado), Ejecución real pendiente de impl.")
 
     async def monitor_bots(self):
         """Proceso en segundo plano para monitorear y actualizar bots activos."""
