@@ -70,8 +70,8 @@ class StrategyTrainer:
         # Virtual balance tracking
         pnl = 0
         
-        if signal == 'buy' and self.position_size == 0:
-            # Open long position
+        if signal == 'buy':
+            # Open long position or accumulate
             # Use 95% of balance to leave margin for fees
             trade_amount = self.virtual_balance * 0.95
             fee_cost = trade_amount * fee
@@ -93,7 +93,7 @@ class StrategyTrainer:
             self.position_size = 0
             self.position_entry_price = 0
             
-        elif signal == 'sell' and self.position_size == 0:
+        elif signal == 'sell':
             # Short selling (simplified: assume we can borrow)
             trade_amount = self.virtual_balance * 0.95
             fee_cost = trade_amount * fee

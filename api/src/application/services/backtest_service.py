@@ -88,19 +88,11 @@ class BacktestService:
             logger.info(f"✅ Selected strategy: {selected_strategy_name} (confidence: {ml_confidence:.2f})")
             logger.info(f"📊 Model used: {model_used}")
             
-            # 4. Optimizar Parámetros TP/SL
-            logger.info(f"🔧 Optimizing trade parameters...")
-            optimal_params = self.optimize_trade_parameters(
-                selected_strategy,
-                candles,
-                df,
-                initial_balance,
-                user_config
-            )
-            
-            take_profit_pct = optimal_params['take_profit_pct']
-            stop_loss_pct = optimal_params['stop_loss_pct']
-            logger.info(f"✅ Optimal TP: {take_profit_pct}%, SL: {stop_loss_pct}%")
+            # 4. Parámetros TP/SL (Default)
+            # optimize_trade_parameters legacy call removed
+            take_profit_pct = 2.0
+            stop_loss_pct = 1.0
+            logger.info(f"✅ Using default TP: {take_profit_pct}%, SL: {stop_loss_pct}%")
             
             # 5. Ejecutar Backtest con Estrategia Única
             logger.info(f"📈 Running backtest with {selected_strategy_name}...")
@@ -373,7 +365,7 @@ class BacktestService:
                 "optimized_parameters": {
                     "take_profit_pct": take_profit_pct,
                     "stop_loss_pct": stop_loss_pct,
-                    "expected_win_rate": optimal_params.get('win_rate', 0)
+                    "expected_win_rate": 0
                 },
                 "metrics": {
                     "initial_balance": initial_balance,
@@ -403,186 +395,3 @@ class BacktestService:
             return 10000.0
         except:
             return 10000.0
-
-
-# Nuevo código para BacktestService - Métodos a agregar
-
-def optimize_trade_parameters(self, strategy, candles, df, initial_balance, user_config):
-    """
-    Optimiza take-profit y stop-loss mediante grid search.
-    
-    Returns:
-        {
-            "take_profit_pct": 2.0,
-            "stop_loss_pct": 1.5,
-            "expected_profit": 15.3,
-            "win_rate": 68.5
-        }
-    """
-    logger.info("🔧 Optimizing trade parameters...")
-    
-    # Opciones a probar
-    tp_options = [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]
-    sl_options = [0.5, 1.0, 1.5, 2.0, 3.0]
-    
-    best_params = None
-    best_score = -float('inf')
-    
-    for tp in tp_options:
-        for sl in sl_options:
-            # Ejecutar mini-backtest
-            result = self._run_mini_backtest(
-                strategy=strategy,
-                candles=candles,
-                df=df,
-                initial_balance=initial_balance,
-                take_profit_pct=tp,
-                stop_loss_pct=sl,
-                user_config=user_config
-            )
-            
-            # Métrica: Profit ajustado por riesgo
-            profit = result['final_balance'] - initial_balance
-            max_dd = abs(result.get('max_drawdown', 0))
-            
-            # Penalizar si hay muy pocas operaciones
-            num_trades = result.get('total_trades', 0)
-            if num_trades < 2:
-                continue
-            
-            # Score: profit / (1 + drawdown)
-            risk_adjusted_profit = profit / (1 + max_dd) if max_dd > 0 else profit
-            
-            if risk_adjusted_profit > best_score:
-                best_score = risk_adjusted_profit
-                best_params = {
-                    "take_profit_pct": tp,
-                    "stop_loss_pct": sl,
-                    "expected_profit": round(profit, 2),
-                    "win_rate": round(result.get('win_rate', 0), 2),
-                    "total_trades": num_trades
-                }
-    
-    if not best_params:
-        # Fallback a valores conservadores
-        best_params = {
-            "take_profit_pct": 2.0,
-            "stop_loss_pct": 1.5,
-            "expected_profit": 0,
-            "win_rate": 0,
-            "total_trades": 0
-        }
-    
-    logger.info(f"✅ Optimal TP: {best_params['take_profit_pct']}%, SL: {best_params['stop_loss_pct']}%")
-    return best_params
-
-
-def _run_mini_backtest(self, strategy, candles, df, initial_balance, take_profit_pct, stop_loss_pct, user_config):
-    """
-    Ejecuta un backtest rápido con parámetros específicos de TP/SL.
-    """
-    virtual_balance = initial_balance
-    positions = []
-    total_position = 0
-    avg_entry_price = 0
-    fee = 0.001
-    
-    trades = []
-    equity_curve = []
-    
-    investment_limits = user_config.get("investmentLimits", {}) if user_config else {}
-    max_amount_cfg = investment_limits.get("cexMaxAmount", 100.0)
-    
-    for i in range(len(candles)):
-        candle = candles[i]
-        current_price = candle['close']
-        
-        # Obtener señal de la estrategia
-        window_slice = df.iloc[max(0, i - 100) : i + 1]
-        try:
-            signal_result = strategy.get_signal(window_slice)
-            algo_signal = signal_result.get('signal', 'hold')
-        except:
-            algo_signal = 'hold'
-        
-        # Verificar TP/SL si hay posición
-        if total_position > 0:
-            take_profit_price = avg_entry_price * (1 + take_profit_pct / 100)
-            stop_loss_price = avg_entry_price * (1 - stop_loss_pct / 100)
-            
-            if current_price >= take_profit_price:
-                algo_signal = 'sell'
-            elif current_price <= stop_loss_price:
-                algo_signal = 'sell'
-        
-        # COMPRA (acumulativa)
-        if algo_signal == 'buy' and virtual_balance > 0:
-            amount_to_spend = min(float(max_amount_cfg), virtual_balance * 0.98)
-            coin_amount = amount_to_spend / current_price
-            cost = coin_amount * current_price
-            fee_cost = cost * fee
-            
-            virtual_balance -= (cost + fee_cost)
-            
-            positions.append({
-                'price': current_price,
-                'amount': coin_amount,
-                'cost': cost
-            })
-            
-            total_position += coin_amount
-            total_cost = sum(p['cost'] for p in positions)
-            avg_entry_price = total_cost / total_position
-            
-            trades.append({'type': 'BUY', 'price': current_price})
-        
-        # VENTA (total)
-        elif algo_signal == 'sell' and total_position > 0:
-            revenue = total_position * current_price
-            fee_cost = revenue * fee
-            total_return = revenue - fee_cost
-            
-            pnl_pct = ((current_price - avg_entry_price) / avg_entry_price) * 100
-            virtual_balance += total_return
-            
-            trades.append({'type': 'SELL', 'price': current_price, 'pnl_pct': pnl_pct})
-            
-            positions = []
-            total_position = 0
-            avg_entry_price = 0
-        
-        # Track equity
-        current_equity = virtual_balance + (total_position * current_price if total_position > 0 else 0)
-        equity_curve.append(current_equity)
-    
-    # Cerrar posición final si existe
-    if total_position > 0:
-        final_price = candles[-1]['close']
-        revenue = total_position * final_price
-        virtual_balance += (revenue - revenue * fee)
-    
-    # Calcular métricas
-    final_balance = virtual_balance
-    sell_trades = [t for t in trades if t['type'] == 'SELL']
-    winning_trades = [t for t in sell_trades if t.get('pnl_pct', 0) > 0]
-    win_rate = (len(winning_trades) / len(sell_trades) * 100) if sell_trades else 0
-    
-    # Max drawdown
-    if equity_curve:
-        peak = equity_curve[0]
-        max_dd = 0
-        for equity in equity_curve:
-            if equity > peak:
-                peak = equity
-            dd = ((equity - peak) / peak) * 100
-            if dd < max_dd:
-                max_dd = dd
-    else:
-        max_dd = 0
-    
-    return {
-        'final_balance': final_balance,
-        'win_rate': win_rate,
-        'total_trades': len(sell_trades),
-        'max_drawdown': max_dd
-    }

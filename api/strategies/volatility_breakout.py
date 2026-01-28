@@ -16,9 +16,9 @@ class VolatilityBreakout(BaseStrategy):
         lower = dc['lower'].iloc[-2]  # Añadida lógica para cortos
         
         signal = 'hold'
-        if current_close > upper and not pos.get('has_position'):
-            signal = 'buy'  # Ruptura alcista
-        elif current_close < lower and not pos.get('has_position'):
-            signal = 'sell'  # Ruptura bajista
+        if current_close > upper:
+            signal = 'buy'  # Ruptura alcista (Pyramiding allowed)
+        elif current_close < lower:
+            signal = 'sell'  # Ruptura bajista (Pyramiding allowed)
             
         return {'signal': signal, 'confidence': 0.85}

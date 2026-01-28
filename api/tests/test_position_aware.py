@@ -58,11 +58,14 @@ class TestPositionAwareStrategies(unittest.TestCase):
         
         # Create overbought scenario
         df_ob = pd.DataFrame({'close': list(range(50, 100))})
+        
+        # When RSI > 70 (Overbought), it implies a trend reversal (Short signal).
+        # Even if we are in Loss, a Reversal signal is a valid exit/flip.
+        # User instruction: "Close only on opposite signal". RSI > 70 IS an opposite signal to LONG.
         result = strategy.get_signal(df_ob, ctx)
         
-        # Should NOT sell because we're at loss
-        self.assertEqual(result['signal'], 'hold')
-        print(f"✅ RSI holds at loss: {result}")
+        self.assertEqual(result['signal'], 'sell')
+        print(f"✅ RSI Reversal Exit at Loss: {result}")
     
     def test_arbitrage_bidirectional(self):
         """Test arbitrage opens both LONG and SHORT"""
