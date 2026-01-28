@@ -7,7 +7,7 @@ from api.strategies.volatility_breakout import VolatilityBreakout
 from api.strategies import load_strategies
 from api.utils.indicators import rsi, adx, atr, bollinger_bands
 
-import traceback
+
 
 logger = logging.getLogger(__name__)
 
@@ -304,8 +304,7 @@ class StrategyTrainer:
                     
                     perf_map[strat_id + 1] = pnl
                 except Exception as e:
-                    logger.error(f"Strategy {strat_id} ({getattr(strat, 'name', 'Unknown')}) failed: {e}")
-                    logger.debug(traceback.format_exc())
+                    logger.debug(f"Strategy {strat_id} failed: {e}")
                     perf_map[strat_id + 1] = -1.0
 
             # Determine winner
