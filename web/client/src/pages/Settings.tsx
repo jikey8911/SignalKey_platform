@@ -297,7 +297,14 @@ export default function Settings() {
               </div>
             </Card>
 
-            {authUser?.openId && <TelegramConfig userId={authUser.openId} />}
+            {authUser?.openId && (
+              <TelegramConfig 
+                userId={authUser.openId} 
+                telegramApiId={config?.telegramApiId}
+                telegramApiHash={config?.telegramApiHash}
+                telegramPhoneNumber={config?.telegramPhoneNumber}
+              />
+            )}
 
             <Card className="p-6">
               <div className="space-y-4">
