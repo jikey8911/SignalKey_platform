@@ -312,118 +312,164 @@ export default function Backtest() {
     </div>
   );
 
+  // --- Enhanced Chart Logic ---
+  const [zoom, setZoom] = useState(1);
+  const [panIndex, setPanIndex] = useState(0);
+  const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
+
+  // Reset zoom/pan when results change
+  useEffect(() => {
+    setZoom(1);
+    setPanIndex(0);
+    setSelectedTrade(null);
+  }, [results]);
+
+  const handleTradeClick = (trade: Trade) => {
+    setSelectedTrade(trade);
+    if (!results) return;
+
+    // Auto-pan to the trade
+    const tradeIndex = results.candles.findIndex(c => c.time === trade.time);
+    if (tradeIndex !== -1) {
+      // Center the trade in the current view
+      const visibleCount = Math.floor(results.candles.length / zoom);
+      let newPan = tradeIndex - Math.floor(visibleCount / 2);
+
+      // Clamp
+      newPan = Math.max(0, Math.min(newPan, results.candles.length - visibleCount));
+      setPanIndex(newPan);
+    }
+  };
+
   const CandleChart = ({ candles, trades }: { candles: Candle[]; trades: Trade[] }) => {
-    const minPrice = Math.min(...candles.map(c => c.low)) * 0.99;
-    const maxPrice = Math.max(...candles.map(c => c.high)) * 1.01;
-    const priceRange = maxPrice - minPrice;
+    const visibleCount = Math.floor(candles.length / zoom);
+    // Ensure panIndex is valid
+    const safePanIndex = Math.max(0, Math.min(panIndex, candles.length - visibleCount));
+
+    const visibleCandles = candles.slice(safePanIndex, safePanIndex + visibleCount);
+
+    if (visibleCandles.length === 0) return <div>No data to display</div>;
+
+    const minPrice = Math.min(...visibleCandles.map(c => c.low)) * 0.99;
+    const maxPrice = Math.max(...visibleCandles.map(c => c.high)) * 1.01;
+    const priceRange = maxPrice - minPrice || 1;
 
     const width = 1000;
     const height = 400;
-    const candleWidth = width / candles.length;
+    const candleWidth = width / visibleCandles.length;
     const padding = 40;
 
     const priceToY = (price: number) => {
       return height - ((price - minPrice) / priceRange) * (height - padding * 2) - padding;
     };
 
-    const timeToX = (index: number) => {
-      return (index / candles.length) * (width - padding * 2) + padding;
+    const indexToX = (i: number) => {
+      return (i / visibleCandles.length) * (width - padding * 2) + padding;
     };
 
     return (
-      <svg width={width} height={height} className="border border-border rounded-lg bg-background">
-        {/* Grid */}
-        {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-          const y = height - (ratio * (height - padding * 2)) - padding;
-          const price = minPrice + ratio * priceRange;
-          return (
-            <g key={`grid-${ratio}`}>
-              <line x1={padding} y1={y} x2={width - padding} y2={y} stroke="#333" strokeDasharray="5,5" strokeWidth="1" />
-              <text x={5} y={y + 4} fontSize="12" fill="#666" className="text-muted-foreground">
-                ${price.toFixed(0)}
-              </text>
-            </g>
-          );
-        })}
+      <div className="relative border border-border rounded-lg bg-background overflow-hidden">
+        {/* Controls Overlay */}
+        <div className="absolute top-2 right-2 flex gap-2 z-10">
+          <Button variant="secondary" size="sm" onClick={() => setZoom(z => Math.max(1, z - 1))}>-</Button>
+          <span className="bg-background/80 px-2 py-1 rounded text-xs flex items-center">x{zoom}</span>
+          <Button variant="secondary" size="sm" onClick={() => setZoom(z => Math.min(20, z + 1))}>+</Button>
+        </div>
 
-        {/* Candles */}
-        {candles.map((candle, index) => {
-          const x = timeToX(index) + candleWidth / 2;
-          const openY = priceToY(candle.open);
-          const closeY = priceToY(candle.close);
-          const highY = priceToY(candle.high);
-          const lowY = priceToY(candle.low);
+        {/* Pan Slider */}
+        {zoom > 1 && (
+          <div className="absolute bottom-2 left-10 right-10 z-10">
+            <input
+              type="range"
+              min={0}
+              max={candles.length - visibleCount}
+              value={safePanIndex}
+              onChange={(e) => setPanIndex(parseInt(e.target.value))}
+              className="w-full opacity-50 hover:opacity-100 transition-opacity"
+            />
+          </div>
+        )}
 
-          const isGreen = candle.close >= candle.open;
-          const color = isGreen ? '#10b981' : '#ef4444';
-
-          return (
-            <g key={`candle-${index}`}>
-              {/* Wick */}
-              <line x1={x} y1={highY} x2={x} y2={lowY} stroke={color} strokeWidth="1" />
-              {/* Body */}
-              <rect
-                x={x - candleWidth / 3}
-                y={Math.min(openY, closeY)}
-                width={candleWidth * 0.66}
-                height={Math.abs(closeY - openY) || 1}
-                fill={color}
-                stroke={color}
-                strokeWidth="1"
-              />
-            </g>
-          );
-        })}
-
-        {/* Trade Markers */}
-        {trades.map((trade, index) => {
-          const candleIndex = candles.findIndex(c => c.time === trade.time);
-          if (candleIndex === -1) return null;
-
-          const x = timeToX(candleIndex) + candleWidth / 2;
-          const y = priceToY(trade.price) - 20;
-          const isBuy = trade.side === 'BUY';
-          const markerColor = isBuy ? '#3b82f6' : '#f59e0b';
-
-          return (
-            <g key={`trade-${index}`}>
-              {/* Marker Circle */}
-              <circle cx={x} cy={y} r={6} fill={markerColor} stroke="white" strokeWidth="2" />
-
-              {/* Label */}
-              <text
-                x={x}
-                y={y - 15}
-                fontSize="11"
-                fontWeight="bold"
-                textAnchor="middle"
-                fill={markerColor}
-                className="pointer-events-none"
-              >
-                {isBuy ? '↓ BUY' : '↑ SELL'}
-              </text>
-
-              {/* Profit Label for SELL */}
-              {!isBuy && trade.profit !== undefined && (
-                <text
-                  x={x}
-                  y={y - 2}
-                  fontSize="10"
-                  textAnchor="middle"
-                  fill={trade.profit >= 0 ? '#10b981' : '#ef4444'}
-                  className="pointer-events-none"
-                >
-                  {trade.profit >= 0 ? '+' : ''}{trade.profit.toFixed(2)}%
+        <svg width="100%" viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
+          {/* Grid */}
+          {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
+            const y = height - (ratio * (height - padding * 2)) - padding;
+            const price = minPrice + ratio * priceRange;
+            return (
+              <g key={`grid-${ratio}`}>
+                <line x1={padding} y1={y} x2={width - padding} y2={y} stroke="currentColor" strokeOpacity="0.1" strokeDasharray="5,5" strokeWidth="1" />
+                <text x={5} y={y + 4} fontSize="10" fill="currentColor" className="text-muted-foreground">
+                  ${price.toFixed(price < 1 ? 4 : 2)}
                 </text>
-              )}
-            </g>
-          );
-        })}
+              </g>
+            );
+          })}
 
-        {/* Axes */}
-        <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} stroke="#666" strokeWidth="2" />
-        <line x1={padding} y1={padding} x2={padding} y2={height - padding} stroke="#666" strokeWidth="2" />
-      </svg>
+          {/* Candles */}
+          {visibleCandles.map((candle, i) => {
+            const x = indexToX(i) + candleWidth / 2;
+            const openY = priceToY(candle.open);
+            const closeY = priceToY(candle.close);
+            const highY = priceToY(candle.high);
+            const lowY = priceToY(candle.low);
+            const isGreen = candle.close >= candle.open;
+            const color = isGreen ? '#10b981' : '#ef4444';
+
+            return (
+              <g key={`candle-${i}`}>
+                <line x1={x} y1={highY} x2={x} y2={lowY} stroke={color} strokeWidth="1" />
+                <rect
+                  x={x - (candleWidth * 0.4)}
+                  y={Math.min(openY, closeY)}
+                  width={candleWidth * 0.8}
+                  height={Math.abs(closeY - openY) || 1}
+                  fill={color}
+                  stroke={color}
+                  strokeWidth="1"
+                />
+              </g>
+            );
+          })}
+
+          {/* Trade Markers (Filtered for visible range) */}
+          {trades.map((trade, idx) => {
+            // Find index in FULL array
+            const realIndex = candles.findIndex(c => c.time === trade.time);
+            if (realIndex === -1) return null;
+
+            // Check if visible
+            if (realIndex < safePanIndex || realIndex >= safePanIndex + visibleCount) return null;
+
+            // Map to visible index
+            const visibleIndex = realIndex - safePanIndex;
+
+            const x = indexToX(visibleIndex) + candleWidth / 2;
+            const y = priceToY(trade.price);
+            const isBuy = trade.side === 'BUY';
+            const markerColor = isBuy ? '#3b82f6' : '#f59e0b';
+            const isSelected = selectedTrade === trade;
+
+            return (
+              <g
+                key={`trade-${idx}`}
+                onClick={() => setSelectedTrade(trade)}
+                className="cursor-pointer hover:opacity-80"
+                style={{ transition: 'all 0.2s' }}
+              >
+                {isSelected && (
+                  <circle cx={x} cy={y} r={12} fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="2,2" className="animate-pulse text-white" />
+                )}
+                <circle cx={x} cy={y} r={isBuy ? 6 : 6} fill={markerColor} stroke="white" strokeWidth="1" />
+
+                {/* Simplified Label on Chart to avoid clutter */}
+                <text x={x} y={y - 12} fontSize="10" textAnchor="middle" fill={markerColor} fontWeight="bold">
+                  {isBuy ? 'B' : 'S'}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+      </div>
     );
   };
 
@@ -823,7 +869,11 @@ export default function Backtest() {
                   </thead>
                   <tbody>
                     {results.trades.map((trade, index) => (
-                      <tr key={index} className="border-b border-border hover:bg-muted/50">
+                      <tr
+                        key={index}
+                        className={`border-b border-border hover:bg-muted/50 cursor-pointer transition-colors ${selectedTrade === trade ? 'bg-muted/80 border-l-4 border-l-primary' : ''}`}
+                        onClick={() => handleTradeClick(trade)}
+                      >
                         <td className="py-3 px-4">
                           <div className="flex items-center gap-2">
                             {trade.side === 'BUY' ? (
@@ -836,7 +886,7 @@ export default function Backtest() {
                         </td>
                         <td className="py-3 px-4 text-foreground">${trade.price.toFixed(2)}</td>
                         <td className="py-3 px-4 text-muted-foreground">
-                          {new Date(trade.time).toLocaleTimeString()}
+                          {new Date(trade.time).toLocaleTimeString()} {new Date(trade.time).toLocaleDateString()}
                         </td>
                         <td className="py-3 px-4">
                           {trade.profit !== undefined ? (
@@ -853,6 +903,40 @@ export default function Backtest() {
                 </table>
               </div>
             </Card>
+
+            {/* Selected Trade Details Overlay/Panel */}
+            {selectedTrade && (
+              <div className="fixed bottom-6 right-6 z-50">
+                <Card className="p-4 shadow-2xl border-primary/20 bg-background/95 backdrop-blur w-72 animate-in slide-in-from-bottom-5">
+                  <div className="flex justify-between items-start mb-2">
+                    <h4 className="font-bold flex items-center gap-2">
+                      {selectedTrade.side === 'BUY' ? <TrendingUp className="text-blue-500" size={16} /> : <TrendingDown className="text-amber-500" size={16} />}
+                      Detalle Operación
+                    </h4>
+                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setSelectedTrade(null)}>×</Button>
+                  </div>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Precio:</span>
+                      <span className="font-mono">${selectedTrade.price.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Tiempo:</span>
+                      <span className="text-right">{new Date(selectedTrade.time).toLocaleString()}</span>
+                    </div>
+                    {selectedTrade.profit !== undefined && (
+                      <div className="flex justify-between pt-2 border-t border-border mt-2">
+                        <span className="text-muted-foreground">PnL:</span>
+                        <span className={`font-bold ${selectedTrade.profit >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                          {selectedTrade.profit >= 0 ? '+' : ''}{selectedTrade.profit.toFixed(2)}%
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </Card>
+              </div>
+            )}
+
           </>
         )}
 
