@@ -83,7 +83,7 @@ app.add_middleware(
 ai_service = AIService()
 cex_service = CEXService()
 dex_service = DEXService()
-backtest_service = BacktestService()
+backtest_service = BacktestService(exchange_adapter=cex_service)
 signal_bot_service = SignalBotService(cex_service=cex_service, dex_service=dex_service)
 
 tracker_service = None

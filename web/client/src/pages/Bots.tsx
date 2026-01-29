@@ -72,7 +72,7 @@ export default function Bots() {
             // Enrich data with mock PnL for visualization if not present
             const enriched = data.map((b: any) => ({
                 ...b,
-                pnl: b.pnl || [0, 0, 0] # Placeholder
+                pnl: b.pnl || [0, 0, 0] // Placeholder
             }));
             setBots(enriched);
             if (enriched.length > 0 && !selectedId) setSelectedId(enriched[0].id);

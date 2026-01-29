@@ -9,8 +9,8 @@ class StatisticalMeanReversion(BaseStrategy):
     para generar señales y características (features) para modelos de ML.
     """
     def __init__(self, config=None):
-        super().__init__(config or {})
-        self.name = "StatisticalMeanReversion"
+        super().__init__(name="StatisticalMeanReversion", description="Estrategia basada en bandas de volatilidad y reversión a la media.")
+        self.config = config or {}
         # Parámetros por defecto para el cálculo estadístico
         self.period = self.config.get('period', 24)
         self.std_dev_multiplier = self.config.get('std_dev', 2.0)
@@ -62,3 +62,28 @@ class StatisticalMeanReversion(BaseStrategy):
     def get_features(self):
         """Retorna la lista de columnas que el modelo de ML debe usar."""
         return ['dev_pct', 'trend', 'hour', 'minute', 'day_week', 'relative_strength']
+
+    def get_signal(self, df: pd.DataFrame, position_context=None) -> dict:
+        """
+        Retorna la señal de la última vela procesada.
+        """
+        if df.empty:
+            return {'signal': 'hold', 'confidence': 0.0, 'meta': {}}
+        
+        # Asegurar cálculo de indicadores
+        df = self.apply(df)
+        
+        last_signal = int(df.iloc[-1]['signal'])
+        
+        signal_map = {0: 'hold', 1: 'buy', 2: 'sell'}
+        signal_str = signal_map.get(last_signal, 'hold')
+        
+        return {
+            'signal': signal_str,
+            'confidence': 1.0 if last_signal != 0 else 0.0,
+            'meta': {
+                'price': float(df.iloc[-1]['close']),
+                'trend': int(df.iloc[-1]['trend']),
+                'raw_signal': last_signal
+            }
+        }

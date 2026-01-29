@@ -27,14 +27,16 @@ import { useLocation } from "wouter";
 import { DashboardLayoutSkeleton } from './DashboardLayoutSkeleton';
 import { Button } from "./ui/button";
 
-{ icon: LayoutDashboard, label: "Dashboard", path: "/dashboard" },
-{ icon: Users, label: "Signals", path: "/signals" },
-{ icon: PanelLeft, label: "Trades", path: "/trades" },
-{ icon: PanelLeft, label: "Bots", path: "/bots" },
-{ icon: PanelLeft, label: "Telegram", path: "/telegram-console" },
-{ icon: PanelLeft, label: "Backtest", path: "/backtest" },
-{ icon: PanelLeft, label: "Training", path: "/training" },
-{ icon: PanelLeft, label: "Settings", path: "/settings" },
+const menuItems = [
+  { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard" },
+  { icon: Users, label: "Signals", path: "/signals" },
+  { icon: PanelLeft, label: "Trades", path: "/trades" },
+  { icon: PanelLeft, label: "Bots", path: "/bots" },
+  { icon: PanelLeft, label: "Telegram", path: "/telegram-console" },
+  { icon: PanelLeft, label: "Backtest", path: "/backtest" },
+  { icon: PanelLeft, label: "Training", path: "/training" },
+  { icon: PanelLeft, label: "Settings", path: "/settings" },
+];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
 const DEFAULT_WIDTH = 280;
