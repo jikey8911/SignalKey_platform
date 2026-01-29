@@ -179,7 +179,7 @@ async def run_backtest(
         # Importar y ejecutar el servicio de backtest
         from api.src.application.services.backtest_service import BacktestService
         
-        backtest_service = BacktestService()
+        backtest_service = BacktestService(exchange_adapter=ccxt_service)
         results = await backtest_service.run_backtest(
             symbol=symbol,
             days=days,
