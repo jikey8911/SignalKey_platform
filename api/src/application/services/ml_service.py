@@ -798,6 +798,69 @@ class MLService:
             
         return model, scaler, {}
 
+    async def train_agnostic_strategies(self, symbols: List[str], timeframe: str = '1h', days: int = 365, user_id: str = "default_user", exchange_id: str = None, use_random_date: bool = False) -> Dict[str, str]:
+        """
+        Entrena modelos agnósticos (uno por estrategia) usando datos de múltiples símbolos.
+        """
+        try:
+            logger.info(f"Starting Agnostic Strategy Training for {len(symbols)} symbols...")
+            
+            # 1. Resolve Exchange
+            target_exchange_id = exchange_id
+            if not target_exchange_id:
+                 _, config = await self.cex_service.get_exchange_instance(user_id)
+                 if config and "exchanges" in config:
+                     active_ex = next((e for e in config["exchanges"] if e.get("isActive", True)), None)
+                     if active_ex:
+                         target_exchange_id = active_ex["exchangeId"]
+            
+            if not target_exchange_id:
+                raise ValueError("No exchange_id provided and no active exchange found.")
+
+            # 2. Fetch Data for all symbols
+            symbols_data = {}
+            for symbol in symbols:
+                try:
+                    ohlcv = await ccxt_service.get_historical_ohlcv(
+                        symbol=symbol,
+                        exchange_id=target_exchange_id,
+                        timeframe=timeframe,
+                        days_back=days,
+                        use_random_date=use_random_date
+                    )
+                    
+                    if len(ohlcv) < 200:
+                        logger.warning(f"Skipping {symbol} for agnostic training: Not enough data ({len(ohlcv)})")
+                        continue
+                        
+                    df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                    df.drop_duplicates(subset=['timestamp'], inplace=True)
+                    df.sort_values('timestamp', inplace=True)
+                    df.reset_index(drop=True, inplace=True)
+                    if not df.empty:
+                        symbols_data[symbol] = df
+                except Exception as e:
+                    logger.error(f"Error fetching data for {symbol}: {e}")
+                    continue
+
+            if not symbols_data:
+                return {"status": "error", "message": "No valid data collected for training"}
+
+            # 3. Train Agnostic Models
+            # Instantiate the NEW StrategyTrainer
+            trainer = StrategyTrainer() 
+            results = await asyncio.get_running_loop().run_in_executor(None, lambda: trainer.train_all(symbols_data))
+            
+            return {
+                "status": "completed",
+                "results": results,
+                "symbols_processed": len(symbols_data)
+            }
+
+        except Exception as e:
+            logger.error(f"Error in train_agnostic_strategies: {e}")
+            raise e
+
 
     async def get_models_status(self) -> List[Dict[str, Any]]:
         loop = asyncio.get_running_loop()

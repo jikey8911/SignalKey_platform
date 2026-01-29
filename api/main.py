@@ -95,12 +95,14 @@ from api.src.adapters.driving.api.routers.backtest_router import router as backt
 from api.src.adapters.driving.api.routers.websocket_router import router as websocket_router
 from api.src.adapters.driving.api.routers.ml_router import router as ml_router
 from api.src.adapters.driving.api.routers.market_data_router import router as market_data_router
+from api.src.adapters.driving.api.routers.bot_router import router as bot_router
 
 app.include_router(telegram_router)
 app.include_router(backtest_router)
 app.include_router(websocket_router)
 app.include_router(ml_router)
 app.include_router(market_data_router)
+app.include_router(bot_router)
 
 # --- Endpoints --- #
 

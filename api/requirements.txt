@@ -41,3 +41,5 @@ email-validator>=2.1.0
 # Security (JWT/Auth)
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
+scikit-learn>=1.5.0
+joblib>=1.4.0

@@ -112,3 +112,32 @@ async def predict_strategy(request: PredictRequest):
     except Exception as e:
         logger.error(f"Error predicting strategy: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/train-strategies")
+async def train_strategies(request: BatchTrainRequest, background_tasks: BackgroundTasks):
+    """
+    Entrena modelos agnósticos (Random Forest) para cada estrategia disponible.
+    Usa datos de los símbolos proporcionados para aprender patrones generales.
+    """
+    try:
+        # Default to True for random dates as per requirement "soporte de fechas aleatorias"
+        # Since BatchTrainRequest doesn't have use_random_date field yet, we default to True or assume logic handles it.
+        # Ideally we update BatchTrainRequest, but user didn't ask to change the model explicitly, just "Update ml_router".
+        # I'll rely on defaults or hardcode True for this specific endpoint effectively fulfilling the requirement.
+        
+        background_tasks.add_task(
+            ml_service.train_agnostic_strategies,
+            request.symbols,
+            request.timeframe,
+            request.days,
+            request.user_id,
+            request.exchange_id,
+            True # use_random_date=True forced for this endpoint to meet Sprint 1 req
+        )
+        return {
+            "status": "started",
+            "message": f"Started Agnostic Strategy Training using {len(request.symbols)} symbols."
+        }
+    except Exception as e:
+        logger.error(f"Error starting strategy training: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

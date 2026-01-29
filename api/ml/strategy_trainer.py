@@ -1,329 +1,116 @@
+import os
+import importlib
 import pandas as pd
-import numpy as np
+import joblib
 import logging
-from api.strategies.rsi_reversion import RSIReversion
-from api.strategies.trend_ema import TrendEMA
-from api.strategies.volatility_breakout import VolatilityBreakout
-from api.strategies import load_strategies
-from api.utils.indicators import rsi, adx, atr, bollinger_bands
+from typing import Dict, List, Optional
+from sklearn.ensemble import RandomForestClassifier
 
-
-
-logger = logging.getLogger(__name__)
+# Configure logger
+logger = logging.getLogger("StrategyTrainer")
+if not logger.handlers:
+    logging.basicConfig(level=logging.INFO)
 
 class StrategyTrainer:
-    def __init__(self, data: pd.DataFrame, initial_balance: float = 10000.0, use_virtual_balance: bool = True):
-        self.data = data
-        _, self.strategies = load_strategies()
-        # Map IDs: 1..N based on sorted order. 0=Hold
-        # Map IDs: 1=RSI, 2=EMA, 3=Breakout. 0=Hold (default if no profit)
-        
-        # Virtual Balance Management
-        self.use_virtual_balance = use_virtual_balance
-        self.initial_balance = initial_balance
-        self.virtual_balance = initial_balance  # Current cash balance
-        self.position_size = 0  # Current position (in base currency)
-        self.position_entry_price = 0  # Entry price of current position
+    """
+    Motor de entrenamiento que carga estrategias dinámicamente y genera 
+    modelos capaces de operar en cualquier símbolo (Agnósticos).
+    """
+    def __init__(self, strategies_dir: str = "api/strategies", models_dir: str = "api/data/models"):
+        # Adjust paths to be relative to project root if needed
+        # Assuming running from project root e:\antigravity\signaalKei_platform
+        self.strategies_dir = strategies_dir
+        self.models_dir = models_dir
+        os.makedirs(self.models_dir, exist_ok=True)
 
-    def _calculate_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Calcula features técnicas avanzadas para el modelo.
-        Debe coincidir con la lógica de inferencia del MLService.
-        """
-        # Copia para no afectar original
-        df = df.copy()
-        
-        # 1. RSI (Momentum)
-        df['rsi'] = rsi(df['close'], 14) / 100.0
-        
-        # 2. ADX (Trend Strength)
-        df['adx'] = adx(df['high'], df['low'], df['close'], 14) / 100.0
-        
-        # 3. ATR% (Volatility normalized)
-        atr_val = atr(df['high'], df['low'], df['close'], 14)
-        df['atr_pct'] = atr_val / df['close']
-        
-        # 4. Bollinger Bandwidth (Compression)
-        bb = bollinger_bands(df['close'], 20, 2.0)
-        df['bb_width'] = (bb['upper'] - bb['lower']) / bb['mid']
-        
-        # 5. Relative Volume (Liquidity)
-        vol_sma = df['volume'].rolling(20).mean()
-        # Log ratio with safety for 0 volume
-        df['vol_rel'] = np.log((df['volume'] + 0.1) / (vol_sma.replace(0, 0.1)))
-        
-        return df
-
-    def _execute_virtual_trade(self, signal: str, entry_price: float, exit_price: float, fee: float = 0.001) -> float:
-        """
-        Simula ejecución de trade con lógica avanzada de gestión de posiciones.
-        Soporta:
-        - Acumulación: Compra adicional si ya es LONG.
-        - Cierre Inverso: Venta inmediata si es LONG.
-        - Shorting: Venta si es FLAT.
-        Retorna PnL proyectado (Horizonte) o Realizado (Cierre inmediato).
-        """
-        if not self.use_virtual_balance:
-            # Fallback simple
-            if signal == 'buy': return ((exit_price - entry_price) / entry_price) - (fee * 2)
-            elif signal == 'sell': return ((entry_price - exit_price) / entry_price) - (fee * 2)
-            return 0
-        
-        # PnL Calculation
-        pnl = 0.0
-        
-        # Estado Inicial
-        is_long = self.position_size > 0
-        is_short = self.position_size < 0 # Not fully supported by current simple size, assuming size > 0 is LONG quantity
-        # Para soporte completo de SHORT necesitaríamos flags adicionales, pero por ahora asumimos LONG-ONLY/Trading Clásico
-        # El código original usaba self.position_size solo como cantidad positiva.
-        # Ajustemos para soportar acumulación lógica.
-        
-        if signal == 'buy':
-            # --- SCENARIO 1: BUY ---
+    def discover_strategies(self) -> List[str]:
+        """Busca archivos de estrategia válidos en el directorio."""
+        if not os.path.exists(self.strategies_dir):
+            logger.warning(f"Strategies directory {self.strategies_dir} does not exist.")
+            return []
             
-            # A) Si estamos LONG -> ACUMULAR
-            if is_long:
-                # Calcular nuevo precio promedio (Avg Entry)
-                # Invertir el 95% del balance restante
-                if self.virtual_balance > 0:
-                    trade_amount = self.virtual_balance * 0.95
-                    fee_cost = trade_amount * fee
-                    net_trade_amount = trade_amount - fee_cost
-                    new_coins = net_trade_amount / entry_price
-                    
-                    total_coins = self.position_size + new_coins
-                    # Cost Basis Actual + Nuevo Costo
-                    current_cost_basis = self.position_size * self.position_entry_price
-                    total_cost_basis = current_cost_basis + net_trade_amount
-                    
-                    self.position_entry_price = total_cost_basis / total_coins
-                    self.position_size = total_coins
-                    self.virtual_balance -= trade_amount
-                    
-                # El PnL se basa en mantener esta NUEVA posición acumulada hasta el horizonte (exit_price)
-                exit_value = self.position_size * exit_price
-                exit_fee = exit_value * fee
-                realized_value = exit_value - exit_fee
-                
-                total_invested = self.position_size * self.position_entry_price
-                pnl = (realized_value - total_invested) / total_invested if total_invested > 0 else 0
-                
-            # B) Si estamos FLAT -> ABRIR LONG
+        return [f[:-3] for f in os.listdir(self.strategies_dir) 
+                if f.endswith(".py") and f != "base.py" and not f.startswith("__")]
+
+    def load_strategy_class(self, strategy_name: str):
+        """Dynamic strategy class loading."""
+        try:
+            module_path = f"api.strategies.{strategy_name}"
+            module = importlib.import_module(module_path)
+            
+            # Try snake_case to PascalCase conversion first
+            class_name_pascal = "".join(w.title() for w in strategy_name.split("_"))
+            
+            if hasattr(module, class_name_pascal):
+                return getattr(module, class_name_pascal)
+            elif hasattr(module, strategy_name): # Fallback to filename as classname
+                return getattr(module, strategy_name)
             else:
-                if self.virtual_balance <= 0: return -1.0
-                
-                trade_amount = self.virtual_balance * 0.95
-                fee_cost = trade_amount * fee
-                net_trade_amount = trade_amount - fee_cost
-                new_coins = net_trade_amount / entry_price
-                
-                self.position_size = new_coins
-                self.position_entry_price = entry_price
-                self.virtual_balance -= trade_amount
-                
-                # PnL al horizonte
-                exit_value = self.position_size * exit_price
-                exit_fee = exit_value * fee
-                realized_value = exit_value - exit_fee
-                
-                total_invested = net_trade_amount
-                pnl = (realized_value - total_invested) / total_invested if total_invested > 0 else 0
-                
-            # Reset simulation state (clean up)
-            self.position_size = 0
-            self.position_entry_price = 0
-            
-        elif signal == 'sell':
-            # --- SCENARIO 2: SELL ---
-            
-            # A) Si estamos LONG -> CERRAR POSICIÓN (CLOSE)
-            if is_long:
-                # Vendemos AHORA al precio actual (entry_price), NO al futuro (exit_price)
-                # Porque la señal es "Salirse ya".
-                exit_value = self.position_size * entry_price # Vende a precio ACTUAL
-                exit_fee = exit_value * fee
-                realized_value = exit_value - exit_fee
-                self.virtual_balance += realized_value
-                
-                total_invested = self.position_size * self.position_entry_price
-                
-                # PnL Realizado AHORA
-                pnl = (realized_value - total_invested) / total_invested if total_invested > 0 else 0
-                
-            # B) Si estamos FLAT -> ABRIR SHORT (Opcional, si la estrategia lo soporta)
-            else:
-                # Shorting Logic
-                trade_amount = self.virtual_balance * 0.95
-                fee_cost = trade_amount * fee
-                position_value = trade_amount - fee_cost
-                
-                # Short: Ganamos si precio baja. 
-                # Entry: entry_price. Exit: exit_price.
-                # PnL Short simplificado: (Entry - Exit) / Entry
-                
-                # Borrowed Amount
-                short_size = position_value / entry_price
-                
-                # Cover at exit_price
-                cover_cost = short_size * exit_price
-                cover_fee = cover_cost * fee
-                
-                pnl = (position_value - (cover_cost + cover_fee)) / position_value
-        
-            # Reset
-            self.position_size = 0
-            self.position_entry_price = 0
-            
-        elif signal == 'hold':
-             # Si hacemos HOLD, mantenemos la posición hasta exit_price
-             if is_long:
-                 exit_value = self.position_size * exit_price
-                 exit_fee = exit_value * fee
-                 realized_value = exit_value - exit_fee
-                 total_invested = self.position_size * self.position_entry_price
-                 pnl = (realized_value - total_invested) / total_invested if total_invested > 0 else 0
-             else:
-                 pnl = 0 # Cash is flat
-        
-        # Safety limit
-        if pnl < -1.0: pnl = -1.0
-        
-        return pnl
-    
-    def generate_labeled_dataset(self, window_size=60, forecast_horizon=12) -> pd.DataFrame:
-        """
-        Analiza bloques de datos y determina qué estrategia fue más rentable.
-        Retorna DataFrame con Features y Label (best_strategy).
-        Usa virtual_balance para simular trading realista.
-        """
-        # Primero calculamos features vectorizados (más rápido)
-        # Pero necesitamos features alignados con la ventana 'i'.
-        # La feature en 'i' es lo que ve el modelo para predecir 'i -> i+horizon'.
-        
-        df_feat = self._calculate_features(self.data)
-        # Drop NaN iniciales
-        df_feat.dropna(inplace=True)
-        
-        # Feature columns
-        feat_cols = ['rsi', 'adx', 'atr_pct', 'bb_width', 'vol_rel']
-        
-        results = []
-        fee = 0.001
-        
-        # Alinear indices: df_feat es un subset le quedan menos filas.
-        # Iteramos sobre el indice de df_feat
-        
-        # Valid loop bounds
-        # i must be index in data. 
-        # features at i use [i-window_size : i]? 
-        # No, features at row 'i' are calculated using past data automatically by rolling/ewm.
-        # So df_feat.iloc[k] contains features looking back from k.
-        
-        # Tournament Loop
-        # Necesitamos datos futuros para calcular Profit
-        
-        available_indices = df_feat.index
-        
-        for idx in range(0, len(available_indices) - forecast_horizon):
-            current_time_idx = available_indices[idx] # Timestamp index if dataframe indexed by date, or int
-            
-            # Necesitamos el indice entero en self.data para hacer slicing del futuro
-            # Si self.data tiene integer index range es facil
-            # Asumiremos integer range index si reseteamos index antes
-            
-            # Map back to raw data location
-            raw_loc = self.data.index.get_loc(current_time_idx)
-            
-            # Window Data para Estrategias (Backtest real necesita velas OHLCV)
-            # Estrategias necesitan ~100 velas para warmup interno (EMA)
-            start_loc = raw_loc - 100
-            if start_loc < 0: continue
-            
-            window_slice = self.data.iloc[start_loc : raw_loc + 1].copy() # +1 to force include current candle?
-            # Strategy usually takes DataFrame and calculates signal based on last row
-            
-            # Future Data for Labeling
-            future_slice = self.data.iloc[raw_loc : raw_loc + forecast_horizon + 1]
-            if len(future_slice) < forecast_horizon: continue
-            
-            entry_price = future_slice['close'].iloc[0] # Close actual
-            exit_price = future_slice['close'].iloc[-1] # Close en horizon
-            
-            # Randomly simulate existing position state to train for accumulation/management
-            # 30% chance of having an existing position (LONG only for simplicity in this version)
-            import random
-            simulate_position = random.random() < 0.3
-            sim_avg_entry = entry_price * random.uniform(0.95, 1.05) if simulate_position else 0
-            sim_amount = (self.initial_balance * 0.5) / sim_avg_entry if simulate_position else 0  # 50% invested
+                logger.error(f"Class {class_name_pascal} or {strategy_name} not found in {module_path}")
+                return None
+        except Exception as e:
+            logger.error(f"Error loading strategy {strategy_name}: {e}")
+            return None
 
-            perf_map = {}
-            for strat_id, strat in enumerate(self.strategies): # 0=RSI, 1=EMA... (IDs 1,2,3)
-                try:
-                    # Reset virtual balance for each strategy test
-                    # If we simulate a position, we must adjust balance
-                    if simulate_position:
-                        self.virtual_balance = self.initial_balance * 0.5
-                        self.position_size = sim_amount
-                        self.position_entry_price = sim_avg_entry
-                    else:
-                        self.virtual_balance = self.initial_balance
-                        self.position_size = 0
-                        self.position_entry_price = 0
-                    
-                    # Create position context
-                    # unrealized_pnl is crucial for strategies like RSIReversion to decide on averaging down
-                    curr_pnl_pct = ((entry_price - sim_avg_entry) / sim_avg_entry * 100) if simulate_position else 0
-                    
-                    # Calculate Break-Even Price (Exit Price to cover Entry+Exit fees)
-                    # PnL = (Exit * (1-fee) - Entry * (1+fee)) / (Entry * (1+fee)) = 0
-                    # Exit * (1-fee) = Entry * (1+fee) -> Exit = Entry * (1+fee)/(1-fee)
-                    # Use avg_entry if position exists, else current_price (for hypothetical next trade? context usually refers to EXISTING position)
-                    
-                    be_price = 0
-                    if simulate_position and sim_avg_entry > 0:
-                        be_price = sim_avg_entry * (1 + fee) / (1 - fee)
-                    
-                    position_context = {
-                        'has_position': simulate_position,
-                        'position_type': 'LONG' if simulate_position else None,
-                        'avg_entry_price': sim_avg_entry,
-                        'current_price': entry_price,
-                        'unrealized_pnl_pct': curr_pnl_pct,
-                        'position_count': 1 if simulate_position else 0,
-                        'break_even_price': be_price
-                    }
-                    
-                    # Get signal with position context
-                    res = strat.get_signal(window_slice, position_context)
-                    signal = res.get('signal')
-                    
-                    # Execute virtual trade (Accumulate or Open)
-                    # We pass the SIMULATED state to the execution logic via 'self'
-                    pnl = self._execute_virtual_trade(signal, entry_price, exit_price, fee)
-                    
-                    perf_map[strat_id + 1] = pnl
-                except Exception as e:
-                    logger.debug(f"Strategy {strat_id} failed: {e}")
-                    perf_map[strat_id + 1] = -1.0
+    def train_agnostic_model(self, strategy_name: str, symbols_data: Dict[str, pd.DataFrame]):
+        """
+        Entrena un modelo global para una estrategia usando datos de múltiples activos.
+        """
+        try:
+            # Importación dinámica del módulo de estrategia
+            StrategyClass = self.load_strategy_class(strategy_name)
+            if not StrategyClass: return False
+            
+            strategy = StrategyClass()
 
-            # Determine winner
-            # Default Winner: 0 (Hold)
-            best_strat_id = 0
-            best_pnl = 0.002 # Min threshold
+            datasets = []
+            for symbol, df in symbols_data.items():
+                logger.info(f"Procesando patrones de {symbol} con {strategy_name}...")
+                processed = strategy.apply(df.copy()).dropna()
+                if not processed.empty:
+                    # Rename 'signal' to 'label' if strategy outputs 'signal' 
+                    # Use 'signal' as label 
+                    datasets.append(processed)
+
+            if not datasets: 
+                logger.warning(f"No valid data found for {strategy_name}")
+                return False
+
+            # Combinación de datos de todos los símbolos (Entrenamiento Agnóstico)
+            full_dataset = pd.concat(datasets)
             
-            if perf_map:
-                winner_id = max(perf_map, key=perf_map.get)
-                winner_pnl = perf_map[winner_id]
-                if winner_pnl > best_pnl:
-                    best_strat_id = winner_id
+            # Selección de características (Features) - Dynamic
+            # Default features if strategy doesn't specify
+            features = getattr(strategy, 'get_features', lambda: ['dev_pct', 'trend', 'hour', 'day_week'])()
             
-            # Extract features for this row
-            row_feats = df_feat.loc[current_time_idx, feat_cols].to_dict()
-            row_feats['label'] = best_strat_id
-            # Use actual timestamp from original data
-            row_feats['timestamp'] = self.data.loc[current_time_idx, 'timestamp']
+            # Verify features exist in dataset
+            missing_cols = [c for c in features if c not in full_dataset.columns]
+            if missing_cols:
+                logger.error(f"Missing features in dataset for {strategy_name}: {missing_cols}")
+                return False
+
+            X = full_dataset[features]
+            y = full_dataset['signal']
+
+            # Entrenamiento del clasificador
+            model = RandomForestClassifier(n_estimators=100, random_state=42)
+            model.fit(X, y)
+
+            # Persistencia: Un solo modelo por estrategia
+            model_file = os.path.join(self.models_dir, f"{strategy_name}.pkl")
+            joblib.dump(model, model_file)
             
-            results.append(row_feats)
-            
-        return pd.DataFrame(results)
+            logger.info(f"Modelo {strategy_name}.pkl generado exitosamente.")
+            return True
+        except Exception as e:
+            logger.error(f"Error en entrenamiento de {strategy_name}: {e}")
+            return False
+
+    def train_all(self, symbols_data: Dict[str, pd.DataFrame]):
+        """Entrena todas las estrategias disponibles."""
+        strategies = self.discover_strategies()
+        results = {}
+        for strat in strategies:
+            success = self.train_agnostic_model(strat, symbols_data)
+            results[strat] = "Success" if success else "Failed"
+        return results
