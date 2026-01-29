@@ -41,6 +41,37 @@ async def toggle_bot_status(bot_id: str, status: str):
     await repo.update_status(bot_id, status)
     return {"message": f"Bot {status}"}
 
+from api.src.application.services.execution_engine import ExecutionEngine
+from bson import ObjectId
+from api.src.adapters.driven.notifications.socket_service import socket_service
+
+# Nota: Engine requiere el adaptador de DB para funcionar
+engine = ExecutionEngine(repo, socket_service) 
+
+class SignalWebhook(BaseModel):
+    bot_id: str
+    signal: int # 1: Long, 2: Short
+    price: float
+
+@router.post("/webhook-signal")
+async def receive_external_signal(data: SignalWebhook):
+    """
+    Endpoint sp3 para recibir señales (ej: de Telegram o Modelos) 
+    y disparar el motor de ejecución.
+    """
+    # 1. Buscar la instancia en la DB para conocer su estado (Active/Paused) y modo (Sim/Real)
+    # repo.collection accesses the motor collection
+    bot = await repo.collection.find_one({"_id": ObjectId(data.bot_id)})
+    if not bot:
+        raise HTTPException(status_code=404, detail="Instancia de bot no encontrada")
+
+    bot['id'] = str(bot['_id'])
+    
+    # 2. Procesar a través del motor dual
+    result = await engine.process_signal(bot, {"signal": data.signal, "price": data.price})
+    
+    return {"status": "processed", "execution": result}
+
 @router.delete("/{bot_id}")
 async def delete_bot(bot_id: str):
     await repo.delete(bot_id)
