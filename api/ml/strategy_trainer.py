@@ -29,8 +29,8 @@ class StrategyTrainer:
             logger.warning(f"Strategies directory {self.strategies_dir} does not exist.")
             return []
             
-        return [f[:-3] for f in os.listdir(self.strategies_dir) 
-                if f.endswith(".py") and f != "base.py" and not f.startswith("__")]
+        return [file_name[:-3] for file_name in os.listdir(self.strategies_dir) 
+                if file_name.endswith(".py") and file_name != "base.py" and not file_name.startswith("__")]
 
     def load_strategy_class(self, strategy_name: str):
         """Dynamic strategy class loading."""
@@ -81,7 +81,7 @@ class StrategyTrainer:
             
             # Selección de características (Features) - Dynamic
             # Default features if strategy doesn't specify
-            features = getattr(strategy, 'get_features', lambda: ['dev_pct', 'trend', 'hour', 'day_week'])()
+            features = getattr(strategy, 'get_features', lambda: ['dev_pct', 'trend', 'hour', 'minute', 'day_week', 'relative_strength'])()
             
             # Verify features exist in dataset
             missing_cols = [c for c in features if c not in full_dataset.columns]
