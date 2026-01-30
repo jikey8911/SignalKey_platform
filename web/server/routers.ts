@@ -1,7 +1,7 @@
 import { COOKIE_NAME } from "@shared/const";
-import { getSessionCookieOptions } from "./_core/cookies";
-import { systemRouter } from "./_core/systemRouter";
-import { publicProcedure, router, protectedProcedure } from "./_core/trpc";
+import { getSessionCookieOptions } from "./lib/cookies";
+import { systemRouter } from "./lib/systemRouter";
+import { publicProcedure, router, protectedProcedure } from "./lib/trpc";
 import { z } from "zod";
 import { User, AppConfig, TradingSignal, Trade, VirtualBalance, connectMongo } from "./mongodb";
 
@@ -164,11 +164,11 @@ export const appRouter = router({
         // Use the public endpoint to get all supported exchanges
         const res = await fetch(`${INTERNAL_API_URL}/market/exchanges`);
         const exchangeIds = await res.json() as string[];
-        
+
         // Map to the object structure expected by the frontend
         return exchangeIds.map(id => ({
           exchangeId: id,
-          isActive: true 
+          isActive: true
         }));
 
       } catch (e) {

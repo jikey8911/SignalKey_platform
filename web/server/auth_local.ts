@@ -1,7 +1,7 @@
 import { Router } from "express";
 import bcrypt from "bcryptjs";
 import { User } from "./mongodb";
-import { sdk } from "./_core/sdk";
+import { signSession } from "./lib/jwt";
 import { COOKIE_NAME, ONE_YEAR_MS } from "../shared/const";
 
 
@@ -32,7 +32,7 @@ authRouter.post("/register", async (req, res) => {
         });
 
         // Auto-login after register
-        const token = await sdk.signSession({
+        const token = signSession({
             openId: username,
             appId: process.env.VITE_APP_ID || "signalkey-dev",
             name: username
@@ -76,7 +76,7 @@ authRouter.post("/login", async (req, res) => {
         }
 
         try {
-            const token = await sdk.signSession({
+            const token = signSession({
                 openId: user.openId,
                 appId: process.env.VITE_APP_ID || "signalkey-dev",
                 name: user.name || username

@@ -61,15 +61,19 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         socket.onclose = () => {
             console.log('WebSocket Global Desconectado');
             setIsConnected(false);
-            socketRef.current = null;
 
-            // Solo reconectar si el usuario sigue autenticado
-            if (user?.openId && !reconnectTimeoutRef.current) {
-                console.log('Programando reconexión en 5 segundos...');
-                reconnectTimeoutRef.current = setTimeout(() => {
-                    reconnectTimeoutRef.current = null;
-                    connect();
-                }, 5000);
+            // Check if this socket is still the current one. If socketRef.current is null, it means we closed it intentionally.
+            if (socketRef.current === socket) {
+                socketRef.current = null;
+
+                // Solo reconectar si el usuario sigue autenticado
+                if (user?.openId && !reconnectTimeoutRef.current) {
+                    console.log('Programando reconexión en 5 segundos...');
+                    reconnectTimeoutRef.current = setTimeout(() => {
+                        reconnectTimeoutRef.current = null;
+                        connect();
+                    }, 5000);
+                }
             }
         };
 
@@ -96,8 +100,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             // Cerrar socket si existe
             if (socketRef.current) {
                 console.log('Cerrando WebSocket Global por desmontaje');
-                socketRef.current.close();
-                socketRef.current = null;
+                const socketToClose = socketRef.current;
+                socketRef.current = null; // Mark as null BEFORE closing so onclose knows it was intentional
+                socketToClose.close();
             }
         };
     }, [user?.openId]); // Removido 'connect' de las dependencias para evitar ciclos
