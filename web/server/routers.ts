@@ -3,10 +3,6 @@ import { getSessionCookieOptions } from "./lib/cookies";
 import { systemRouter } from "./lib/systemRouter";
 import { publicProcedure, router, protectedProcedure } from "./lib/trpc";
 import { z } from "zod";
-import { User, AppConfig, TradingSignal, Trade, VirtualBalance, connectMongo } from "./mongodb";
-
-// Asegurar conexión a MongoDB
-connectMongo();
 
 const BACKEND_PORT = process.env.BACKEND_PORT || "8000";
 const INTERNAL_API_URL = process.env.INTERNAL_API_URL || `http://localhost:${BACKEND_PORT}`;
@@ -16,37 +12,24 @@ export const appRouter = router({
   auth: router({
     me: publicProcedure.query(async (opts) => {
       if (!opts.ctx.user) return null;
-      // Sincronizar con MongoDB si es necesario
-      let mongoUser = await User.findOne({ openId: opts.ctx.user.openId });
-      if (!mongoUser) {
-        mongoUser = await User.create({
-          openId: opts.ctx.user.openId,
-          name: opts.ctx.user.name,
-          email: opts.ctx.user.email,
-          role: opts.ctx.user.role
-        });
-      }
 
-      // Asegurar que exista AppConfig
-      let config = await AppConfig.findOne({ userId: mongoUser._id });
-      if (!config) {
-        await AppConfig.create({
-          userId: mongoUser._id,
-          demoMode: true,
-          investmentLimits: { cexMaxAmount: 100, dexMaxAmount: 1 },
-          virtualBalances: { cex: 10000, dex: 10 }
+      try {
+        // Call backend /auth/me endpoint
+        const res = await fetch(`${INTERNAL_API_URL}/auth/me`, {
+          headers: {
+            'Cookie': `manus.sid=${opts.ctx.req.cookies[COOKIE_NAME]}`
+          }
         });
 
-        // Inicializar VirtualBalances si no existen
-        const hasBalances = await VirtualBalance.exists({ userId: mongoUser._id });
-        if (!hasBalances) {
-          await VirtualBalance.insertMany([
-            { userId: mongoUser._id, marketType: 'CEX', asset: 'USDT', amount: 10000 },
-            { userId: mongoUser._id, marketType: 'DEX', asset: 'SOL', amount: 10 }
-          ]);
+        if (res.ok) {
+          const data = await res.json();
+          return data.user;
         }
+      } catch (e) {
+        console.error("Error fetching user from backend:", e);
       }
-      return mongoUser;
+
+      return opts.ctx.user;
     }),
     logout: publicProcedure.mutation(({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
@@ -68,9 +51,16 @@ export const appRouter = router({
       }
     }),
     getConfig: protectedProcedure.query(async ({ ctx }) => {
-      const mongoUser = await User.findOne({ openId: ctx.user.openId });
-      if (!mongoUser) return null;
-      return await AppConfig.findOne({ userId: mongoUser._id });
+      try {
+        const res = await fetch(`${INTERNAL_API_URL}/config/${ctx.user.openId}`);
+        if (res.ok) {
+          const data = await res.json();
+          return data.config;
+        }
+      } catch (e) {
+        console.error("Error fetching config from backend:", e);
+      }
+      return null;
     }),
     updateConfig: protectedProcedure
       .input(z.object({
@@ -118,43 +108,56 @@ export const appRouter = router({
         }).optional()
       }))
       .mutation(async ({ ctx, input }) => {
-        const mongoUser = await User.findOne({ openId: ctx.user.openId });
-        if (!mongoUser) throw new Error("User not found in MongoDB");
+        try {
+          const res = await fetch(`${INTERNAL_API_URL}/config/${ctx.user.openId}`, {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(input)
+          });
 
-        await AppConfig.findOneAndUpdate(
-          { userId: mongoUser._id },
-          { $set: input },
-          { upsert: true, new: true }
-        );
-        return { success: true };
+          if (res.ok) {
+            return { success: true };
+          }
+        } catch (e) {
+          console.error("Error updating config:", e);
+        }
+        throw new Error("Failed to update config");
       }),
     getSignals: protectedProcedure.query(async ({ ctx }) => {
-      const mongoUser = await User.findOne({ openId: ctx.user.openId });
-      if (!mongoUser) return [];
-      return await TradingSignal.find({ userId: mongoUser._id }).sort({ createdAt: -1 }).limit(50);
+      try {
+        const res = await fetch(`${INTERNAL_API_URL}/signals?user_id=${ctx.user.openId}&limit=50`);
+        if (res.ok) {
+          return await res.json();
+        }
+      } catch (e) {
+        console.error("Error fetching signals:", e);
+      }
+      return [];
     }),
     getTrades: protectedProcedure.query(async ({ ctx }) => {
-      const mongoUser = await User.findOne({ openId: ctx.user.openId });
-      if (!mongoUser) return [];
-      return await Trade.find({ userId: mongoUser._id }).sort({ createdAt: -1 }).limit(100);
+      try {
+        const res = await fetch(`${INTERNAL_API_URL}/trades?user_id=${ctx.user.openId}&limit=100`);
+        if (res.ok) {
+          return await res.json();
+        }
+      } catch (e) {
+        console.error("Error fetching trades:", e);
+      }
+      return [];
     }),
     getBalances: protectedProcedure.query(async ({ ctx }) => {
-      const mongoUser = await User.findOne({ openId: ctx.user.openId });
-      if (!mongoUser) return [];
-
       try {
-        // Intentar obtener balances enriquecidos desde la API (incluye balance real del exchange)
         const res = await fetch(`${INTERNAL_API_URL}/balances/${ctx.user.openId}`);
         if (res.ok) {
           const data = await res.json();
           return data;
         }
       } catch (e) {
-        console.error("Error fetching balances from API, falling back to DB:", e);
+        console.error("Error fetching balances from API:", e);
       }
-
-      // Fallback a solo balances virtuales de la DB
-      return await VirtualBalance.find({ userId: mongoUser._id });
+      return [];
     }),
   }),
 

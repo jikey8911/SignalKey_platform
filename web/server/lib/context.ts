@@ -1,7 +1,8 @@
 import type { CreateExpressContextOptions } from "@trpc/server/adapters/express";
 import { COOKIE_NAME } from "@shared/const";
 import { verifySession } from "./jwt";
-import { User } from "../mongodb";
+
+const BACKEND_API_URL = process.env.INTERNAL_API_URL || process.env.BACKEND_API_URL || "http://localhost:8000";
 
 export type TrpcContext = {
     req: CreateExpressContextOptions["req"];
@@ -39,18 +40,28 @@ export async function createContext(
             return { req: opts.req, res: opts.res, user: null };
         }
 
-        // Get user from MongoDB
-        const mongoUser = await User.findOne({ openId: session.openId });
-        if (!mongoUser) {
-            return { req: opts.req, res: opts.res, user: null };
-        }
+        // Get user from backend API instead of MongoDB
+        try {
+            const response = await fetch(`${BACKEND_API_URL}/auth/me`, {
+                headers: {
+                    'Cookie': `manus.sid=${token}`
+                }
+            });
 
-        user = {
-            openId: mongoUser.openId,
-            name: mongoUser.name,
-            email: mongoUser.email,
-            role: mongoUser.role,
-        };
+            if (response.ok) {
+                const data = await response.json();
+                user = data.user;
+            }
+        } catch (apiError) {
+            console.error('[Context] Error fetching user from backend API:', apiError);
+            // Fallback to session data if backend is unavailable
+            user = {
+                openId: session.openId,
+                name: session.name || session.openId,
+                email: null,
+                role: 'user',
+            };
+        }
     } catch (error) {
         console.error('[Context] Authentication error:', error);
         user = null;

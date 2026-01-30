@@ -4,7 +4,6 @@ import { createServer } from "http";
 import net from "net";
 import HttpProxy from "http-proxy";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { authRouter } from "./auth_local";
 import { appRouter } from "./routers";
 import { createContext } from "./lib/context";
 import { serveStatic, setupVite } from "./lib/vite";
@@ -31,26 +30,16 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
-  // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
-  // Local Auth routes
-  app.use("/api/auth", authRouter);
-  // tRPC API
-  app.use(
-    "/api/trpc",
-    createExpressMiddleware({
-      router: appRouter,
-      createContext,
-    })
-  );
 
   // Manual Proxy for Backend API (market, ml, etc.)
+  // IMPORTANT: Proxy must be BEFORE body parser to avoid consuming request body
   const proxy = HttpProxy.createProxyServer({
     target: "http://127.0.0.1:8000",
     changeOrigin: true,
     ws: true,
-  });
+    // Preserve cookies and headers
+    xfwd: true,
+  } as any);
 
   proxy.on("error", (err: Error, req: any, res: any) => {
     console.error("Proxy error:", err);
@@ -60,11 +49,37 @@ async function startServer() {
     }
   });
 
-  // Proxy generic /api requests (that were not caught by above auth/trpc)
-  app.use("/api", (req, res) => {
-    // req.url is already stripped of /api prefix by Express when mounted here
+  // CRITICAL: Preserve Set-Cookie headers from backend
+  proxy.on("proxyRes", (proxyRes: any, req: any, res: any) => {
+    // Copy Set-Cookie headers from backend response to client response
+    const setCookieHeaders = proxyRes.headers["set-cookie"];
+    if (setCookieHeaders) {
+      res.setHeader("Set-Cookie", setCookieHeaders);
+    }
+  });
+
+  // Proxy /api requests BEFORE body parser
+  app.use("/api", (req, res, next) => {
+    // Skip tRPC routes - they need body parsing
+    if (req.url.startsWith("/trpc")) {
+      return next();
+    }
+    // Proxy all other /api requests to backend
     proxy.web(req, res);
   });
+
+  // Configure body parser AFTER proxy (only for non-proxied routes)
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+  // tRPC API
+  app.use(
+    "/api/trpc",
+    createExpressMiddleware({
+      router: appRouter,
+      createContext,
+    })
+  );
 
   // Handle WS Upgrades for backend
   server.on("upgrade", (req, socket, head) => {

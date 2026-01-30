@@ -1,5 +1,5 @@
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -10,6 +10,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import axios from "axios";
+import { useAuth } from "@/_core/hooks/useAuth";
+import { trpc } from "@/lib/trpc";
 
 const formSchema = z.object({
     username: z.string().min(3, "Username must be at least 3 characters"),
@@ -19,6 +21,15 @@ const formSchema = z.object({
 export default function Login() {
     const [activeTab, setActiveTab] = useState("login");
     const [isLoading, setIsLoading] = useState(false);
+    const { user, loading } = useAuth();
+    const utils = trpc.useUtils();
+
+    // Redirect to home if already authenticated
+    useEffect(() => {
+        if (!loading && user) {
+            window.location.href = "/";
+        }
+    }, [user, loading]);
 
     const form = useForm<z.infer<typeof formSchema>>({
         resolver: zodResolver(formSchema),
@@ -33,13 +44,22 @@ export default function Login() {
         const endpoint = activeTab === "login" ? "/api/auth/login" : "/api/auth/register";
 
         try {
-            await axios.post(endpoint, values);
+            const response = await axios.post(endpoint, values, {
+                withCredentials: true, // Enable cookies
+            });
+
+            console.log('Auth response:', response.data);
             toast.success(activeTab === "login" ? "Login successful" : "Registration successful");
+
+            // Invalidate auth cache to force refetch
+            await utils.auth.me.invalidate();
+
+            // Redirect to home
             window.location.href = "/";
         } catch (error: any) {
-            const msg = error.response?.data?.error || "Authentication failed";
+            console.error('Auth error:', error);
+            const msg = error.response?.data?.detail || error.response?.data?.error || "Authentication failed";
             toast.error(msg);
-        } finally {
             setIsLoading(false);
         }
     }
