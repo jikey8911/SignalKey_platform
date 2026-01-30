@@ -2,7 +2,9 @@ import logging
 import asyncio
 from datetime import datetime
 from api.src.application.services.simulation_service import SimulationService
+from api.src.application.services.simulation_service import SimulationService
 from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+from api.strategies.base import BaseStrategy
 
 class ExecutionEngine:
     """
@@ -41,7 +43,7 @@ class ExecutionEngine:
         if mode == 'simulated':
             execution_result = await self.simulator.execute_trade(bot_instance, signal, price, amount)
         else:
-            side = 'buy' if signal == 1 else 'sell'
+            side = 'buy' if signal == BaseStrategy.SIGNAL_BUY else 'sell'
             
             # Using real_exchange (CCXTService) to place order.
             # Need instance.
@@ -77,7 +79,7 @@ class ExecutionEngine:
             event_payload = {
                 "bot_id": bot_instance['id'],
                 "symbol": symbol,
-                "type": "LONG" if signal == 1 else "SHORT",
+                "type": "LONG" if signal == BaseStrategy.SIGNAL_BUY else "SHORT",
                 "price": price,
                 "timestamp": datetime.now().isoformat(),
                 "mode": mode,

@@ -87,9 +87,15 @@ class StrategyTrainer:
             full_dataset = pd.concat(datasets)
             
             # Selección de características (Features) - Dynamic
-            # Default features if strategy doesn't specify
-            features = getattr(strategy, 'get_features', lambda: ['dev_pct', 'trend', 'hour', 'minute', 'day_week', 'relative_strength'])()
+            # Enforce strict contract: Strategy MUST implement get_features
+            features = strategy.get_features()
             
+            if not features:
+                 msg = f"❌ [StrategyTrainer] Strategy {strategy_name} returned empty features list."
+                 logger.error(msg)
+                 if emit_callback: await emit_callback(msg, "error")
+                 return False
+
             # Verify features exist in dataset
             missing_cols = [c for c in features if c not in full_dataset.columns]
             if missing_cols:

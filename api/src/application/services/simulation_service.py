@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 from bson import ObjectId
+from api.strategies.base import BaseStrategy
 
 class SimulationService:
     """
@@ -16,7 +17,7 @@ class SimulationService:
         Ejecuta operación virtual y persiste el log necesario para el Dashboard de PnL.
         """
         bot_id = bot_instance['id']
-        side = "buy" if signal == 1 else "sell"
+        side = "buy" if signal == BaseStrategy.SIGNAL_BUY else "sell"
         fee = amount * self.fee_rate
         
         # Log del trade optimizado para graficación posterior (Tarea 4.3/4.4)

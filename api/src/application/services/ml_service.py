@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import List, Dict, Any
 from api.ml.strategy_trainer import StrategyTrainer
 from api.src.domain.services.exchange_port import ExchangePort
+from api.strategies.base import BaseStrategy
 
 class MLService:
     """
@@ -84,7 +85,8 @@ class MLService:
             if not StrategyClass: return None
             
             strategy = StrategyClass()
-            features = getattr(strategy, 'get_features', lambda: ['dev_pct', 'trend_direction', 'hour', 'day_week'])()
+            strategy = StrategyClass()
+            features = strategy.get_features()
             
             total_pnl = 0.0
             trades_count = 0
@@ -212,8 +214,8 @@ class MLService:
                 pred = model.predict(last_row)[0]
                 
                 action = "HOLD"
-                if pred == 1: action = "BUY"
-                elif pred == 2: action = "SELL"
+                if pred == BaseStrategy.SIGNAL_BUY: action = "BUY"
+                elif pred == BaseStrategy.SIGNAL_SELL: action = "SELL"
                 
                 final_results[strat_name] = {"action": action}
                 

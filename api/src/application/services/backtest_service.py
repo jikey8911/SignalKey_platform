@@ -5,7 +5,9 @@ import logging
 import importlib
 from typing import Dict, Any, List, Optional
 from api.ml.strategy_trainer import StrategyTrainer
+from api.ml.strategy_trainer import StrategyTrainer
 from api.src.domain.services.exchange_port import IExchangePort
+from api.strategies.base import BaseStrategy
 
 class BacktestService:
     """
@@ -239,7 +241,7 @@ class BacktestService:
                     previous_signal = signal
                     
                     # --- Trading Logic ---
-                    if signal == 1: # SIGNAL: BUY / LONG
+                    if signal == BaseStrategy.SIGNAL_BUY: # SIGNAL: BUY / LONG
                         # 1. Cerrar Cortos si existen
                         if short_amount > 0:
                             pnl = short_invested - (short_amount * price)
@@ -280,7 +282,8 @@ class BacktestService:
                                 "label": "DCA_LONG" if is_dca else "OPEN_LONG"
                             })
                             
-                    elif signal == 2: # SIGNAL: SELL / SHORT
+                            
+                    elif signal == BaseStrategy.SIGNAL_SELL: # SIGNAL: SELL / SHORT
                         # 1. Cerrar Largos si existen
                         if long_amount > 0:
                             pnl = (long_amount * price) - long_invested
