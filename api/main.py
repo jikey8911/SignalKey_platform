@@ -80,10 +80,14 @@ app.add_middleware(
 )
 
 # Inicialización de servicios globales
+from api.src.adapters.driven.exchange.ccxt_adapter import CcxtAdapter
+ccxt_adapter = CcxtAdapter(db_adapter=db) # Initialize Adapter with DB
+
 ai_service = AIService()
-cex_service = CEXService()
+# Inject configured adapter into CEXService
+cex_service = CEXService(ccxt_adapter=ccxt_adapter) 
 dex_service = DEXService()
-backtest_service = BacktestService(exchange_adapter=cex_service)
+backtest_service = BacktestService(exchange_adapter=ccxt_adapter) # Use generic adapter for backtest
 signal_bot_service = SignalBotService(cex_service=cex_service, dex_service=dex_service)
 
 tracker_service = None

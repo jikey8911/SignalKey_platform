@@ -8,7 +8,9 @@ class RsiReversion(BaseStrategy):
     """
     def __init__(self, config=None):
         super().__init__(config or {})
-        self.rsi_period = 14
+        self.rsi_period = int(self.config.get('rsi_period', 14))
+        self.oversold = int(self.config.get('oversold', 25))
+        self.overbought = int(self.config.get('overbought', 75))
 
     def apply(self, df: pd.DataFrame) -> pd.DataFrame:
         delta = df['close'].diff()
@@ -22,10 +24,10 @@ class RsiReversion(BaseStrategy):
         df['signal'] = self.SIGNAL_WAIT
         
         # LONG: RSI extremadamente bajo (sobreventa agresiva)
-        df.loc[df['rsi'] < 25, 'signal'] = self.SIGNAL_BUY
+        df.loc[df['rsi'] < self.oversold, 'signal'] = self.SIGNAL_BUY
         
         # SHORT: RSI extremadamente alto (sobrecompra agresiva)
-        df.loc[df['rsi'] > 75, 'signal'] = self.SIGNAL_SELL
+        df.loc[df['rsi'] > self.overbought, 'signal'] = self.SIGNAL_SELL
         
         return df
 

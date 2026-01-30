@@ -10,12 +10,10 @@ from unittest.mock import MagicMock, AsyncMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from api.src.application.services.backtest_service import BacktestService
-from api.strategies.rsi_reversion import RSIReversion
+from api.strategies.rsi_reversion import RsiReversion as RSIReversion
 
 @pytest.mark.asyncio
 async def test_run_backtest_accumulation():
-    service = BacktestService()
-
     # 1. Prepare Mock OHLCV Data (List of Lists for CCXT)
     # Format: [timestamp, open, high, low, close, volume]
     base_price = 100
@@ -50,62 +48,66 @@ async def test_run_backtest_accumulation():
             1000
         ])
 
-    # 2. Mock CCXT Service
-    # We patch where it is used (in backtest_service module)
-    with patch('api.src.application.services.backtest_service.ccxt_service') as mock_ccxt:
-        mock_ccxt.get_historical_ohlcv = AsyncMock(return_value=ohlcv_data)
-        
-        # 3. Mock ML Service to return RSI Strategy
-        # We want strict logic: RSI < 30 BUY, RSI > 70 SELL
-        strategy = RSIReversion(oversold=40, overbought=60) # Relaxed to ensure accumulation
-        
-        service.ml_service.select_best_strategy = MagicMock(return_value={
-            'strategy_name': 'RSIReversion',
-            'model_used': 'TEST_MOCK',
-            'confidence': 0.99
-        })
-        
-        # Ensure our specific strategy instance is used
-        service.strategies = {'RSIReversion': strategy}
+    # 2. Mock Exchange Adapter
+    mock_exchange = AsyncMock()
+    
+    # Mock get_historical_data to return DataFrame
+    df_data = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df_data['timestamp'] = pd.to_datetime(df_data['timestamp'], unit='ms')
+    mock_exchange.get_historical_data = AsyncMock(return_value=df_data)
 
-        # 4. Run Backtest
-        print("🚀 Starting Backtest Run...")
-        result = await service.run_backtest(
-            user_id="integration_test_user",
-            symbol="BTC/USDT",
-            days=7,
-            timeframe="1h",
-            initial_balance=10000
-        )
+    service = BacktestService(exchange_adapter=mock_exchange)
+    # 3. Mock Strategy Trainer / Discovery
+    # We want strict logic: RSI < 30 BUY, RSI > 70 SELL
+    strategy = RSIReversion(config={'oversold': 40, 'overbought': 60}) # Relaxed to ensure accumulation
         
-        # 5. Analyze Results
-        if 'error' in result:
-            pytest.fail(f"Backtest returned error: {result['error']}")
-            
-        trades = result.get('trades', [])
-        print(f"✅ Backtest Finished. Trades found: {len(trades)}")
+    service.ml_service.select_best_strategy = MagicMock(return_value={
+        'strategy_name': 'RSIReversion',
+        'model_used': 'TEST_MOCK',
+        'confidence': 0.99
+    })
+    
+    # Ensure our specific strategy instance is used
+    service.strategies = {'RSIReversion': strategy}
+
+    # 4. Run Backtest
+    print("🚀 Starting Backtest Run...")
+    result = await service.run_backtest(
+        user_id="integration_test_user",
+        symbol="BTC/USDT",
+        days=7,
+        timeframe="1h",
+        initial_balance=10000
+    )
         
-        buy_trades = [t for t in trades if t['type'] == 'BUY']
-        sell_trades = [t for t in trades if t['type'] == 'SELL_TO_CLOSE']
+    # 5. Analyze Results
+    if 'error' in result:
+        pytest.fail(f"Backtest returned error: {result['error']}")
         
-        print("\n--- Trade Log ---")
-        for t in trades:
-            print(f"{t['time']} | {t['type']} | Price: {t['price']} | Amt: {t['amount']} | Pos#: {t.get('position_number', 'N/A')}")
-            
-        # Assertions
-        assert len(trades) > 0, "No trades executed"
+    trades = result.get('trades', [])
+    print(f"✅ Backtest Finished. Trades found: {len(trades)}")
+    
+    buy_trades = [t for t in trades if t['type'] == 'BUY']
+    sell_trades = [t for t in trades if t['type'] == 'SELL_TO_CLOSE']
+    
+    print("\n--- Trade Log ---")
+    for t in trades:
+        print(f"{t['time']} | {t['type']} | Price: {t['price']} | Amt: {t['amount']} | Pos#: {t.get('position_number', 'N/A')}")
         
-        # Check Accumulation: Should have multiple BUYS
-        # With the drop pattern, RSI should stay low for a while
-        assert len(buy_trades) >= 2, f"Expected accumulation (>=2 buys), got {len(buy_trades)}"
-        
-        # Check Exit: Should have CLOSED the position
-        assert len(sell_trades) >= 1, "Position was not closed on reversal"
-        
-        # Check Profitability
-        final_balance = result['metrics']['final_balance']
-        print(f"Final Balance: {final_balance}")
-        assert final_balance > 10000, "Strategy failed to profit on evident pump"
+    # Assertions
+    assert len(trades) > 0, "No trades executed"
+    
+    # Check Accumulation: Should have multiple BUYS
+    # With the drop pattern, RSI should stay low for a while
+    assert len(buy_trades) >= 2, f"Expected accumulation (>=2 buys), got {len(buy_trades)}"
+    
+    # Check Exit: Should have CLOSED the position
+    assert len(sell_trades) >= 1, "Position was not closed on reversal"
+    
+    # Check Profitability
+    final_balance = result['metrics']['final_balance']
+    print(f"Final Balance: {final_balance}")
+    assert final_balance > 10000, "Strategy failed to profit on evident pump"
 
 if __name__ == "__main__":
     # Allow running directly script

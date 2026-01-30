@@ -9,9 +9,15 @@ from typing import Optional, Dict, Any, List
 logger = logging.getLogger(__name__)
 
 class CEXService:
-    def __init__(self):
+    def __init__(self, ccxt_adapter=None):
         self.exchanges = {} # Cache de instancias de exchange por user_id
         self.public_exchanges = {} # Cache de instancias públicas por exchange_id
+        # Dependency Injection or Fallback to global
+        if ccxt_adapter:
+            self.ccxt_provider = ccxt_adapter
+        else:
+            from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+            self.ccxt_provider = ccxt_service
 
     async def close_all(self):
         """Cierra todas las sesiones de exchange abiertas"""
@@ -31,7 +37,7 @@ class CEXService:
 
     async def test_connection(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None):
         """Prueba la conexión delegando a CCXTService"""
-        return await ccxt_service.test_connection_private(exchange_id, api_key, secret, password, uid)
+        return await self.ccxt_provider.test_connection_private(exchange_id, api_key, secret, password, uid)
 
     async def fetch_balance(self, user_id: str, exchange_id: Optional[str] = None) -> Dict[str, Any]:
         """Obtiene el balance total del usuario delegando a CCXTService"""
@@ -50,7 +56,7 @@ class CEXService:
                 logger.error(f"CEXService: Credenciales no encontradas para {exchange_id or 'active exchange'}")
                 return {}
 
-            return await ccxt_service.fetch_balance_private(
+            return await self.ccxt_provider.fetch_balance_private(
                 ex_cfg["exchangeId"], 
                 ex_cfg["apiKey"], 
                 ex_cfg["secret"], 
@@ -83,7 +89,7 @@ class CEXService:
             return self.exchanges[cache_key], config
 
         # 2. Crear instancia usando CCXTService
-        instance = await ccxt_service.get_private_instance(
+        instance = await self.ccxt_provider.get_private_instance(
             exchange_id, 
             ex_cfg["apiKey"], 
             ex_cfg["secret"], 
@@ -105,7 +111,7 @@ class CEXService:
         if exchange_id in self.public_exchanges:
             return self.public_exchanges[exchange_id]
             
-        instance = await ccxt_service.create_public_instance(exchange_id)
+        instance = await self.ccxt_provider.create_public_instance(exchange_id)
         if instance:
             self.public_exchanges[exchange_id] = instance
             
@@ -166,7 +172,7 @@ class CEXService:
             
             if not exchange:
                 # Usar CCXTService para instancia pública cacheada
-                exchange = await ccxt_service.create_public_instance(exchange_id)
+                exchange = await self.ccxt_provider.create_public_instance(exchange_id)
 
             if not exchange:
                 return 0.0
@@ -340,3 +346,30 @@ class CEXService:
         except Exception as e:
             logger.error(f"Error fetching positions from {exchange_id or 'active exchange'}: {e}")
             return []
+
+    async def get_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False) -> Any:
+        """
+        Obtiene datos históricos y los retorna como DataFrame para uso de MLService.
+        Adaptador que conecta la capa de Aplicación con Infraestructura (CCXT).
+        """
+        import pandas as pd
+        try:
+            # Usar instancia pública por defecto para datos históricos
+            # Ojo: ccxt_service.get_historical_ohlcv maneja el fetch
+            ohlcv = await self.ccxt_provider.get_historical_ohlcv(
+                symbol=symbol,
+                exchange_id="binance", # Default a binance para datos generales si no se especifica
+                timeframe=timeframe,
+                days_back=int(limit / 24) + 1, # Aprox dias
+                use_random_date=use_random_date
+            )
+            
+            if not ohlcv:
+                return pd.DataFrame()
+            
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            return df
+        except Exception as e:
+            logger.error(f"Error CEXService.get_historical_data for {symbol}: {e}")
+            return pd.DataFrame()

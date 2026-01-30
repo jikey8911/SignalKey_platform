@@ -23,3 +23,12 @@ class IExchangePort(ABC):
     async def fetch_open_orders(self, user_id: str, symbol: Optional[str] = None) -> List[Order]:
         """Fetch open orders."""
         pass
+
+    @abstractmethod
+    async def get_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False, user_id: str = "default_user") -> Any:
+        """Fetch historical data as DataFrame."""
+        """Fetch historical data as DataFrame."""
+        pass
+
+# Alias for backward compatibility
+ExchangePort = IExchangePort

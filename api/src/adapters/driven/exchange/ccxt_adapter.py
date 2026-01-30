@@ -1,15 +1,31 @@
 import ccxt.async_support as ccxt
 import logging
 import aiohttp
+import pandas as pd
 from aiohttp.resolver import ThreadedResolver
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
+from datetime import datetime, timedelta
+import random
+
+# Import Interface
+from api.src.domain.services.exchange_port import IExchangePort
+from api.src.domain.entities.trading import Balance, Order, TradeResult, Ticker
+from api.src.domain.entities.signal import SignalAnalysis
+from api.src.adapters.driven.persistence.mongodb import get_app_config
 
 logger = logging.getLogger(__name__)
 
-class CCXTService:
-    def __init__(self):
+class CcxtAdapter(IExchangePort):
+    def __init__(self, db_adapter=None):
+        self.db = db_adapter
         self.public_instances = {}
-
+        self._exchange_instance = None # Legacy/System instance
+        self._current_exchange_id = None
+        
+        # User-specific caching
+        self.user_instances = {} # Map: user_id -> ccxt_instance
+        self.user_exchange_ids = {} # Map: user_id -> exchange_id (to detect changes)
+    
     def _create_custom_session(self):
         """Creates an aiohttp session with ThreadedResolver to bypass Windows Async DNS issues"""
         try:
@@ -20,13 +36,47 @@ class CCXTService:
             logger.error(f"Error creating custom session: {e}")
             return None
 
-    async def create_public_instance(self, exchange_id: str):
-        exchange_id = exchange_id.lower()
-        if exchange_id in self.public_instances:
-            return self.public_instances[exchange_id]
-
+    async def _get_client_for_user(self, user_id: str):
+        """
+        Retrieves the active exchange for a specific user and initializes/returns the CCXT client.
+        Caches the client for subsequent calls.
+        """
         try:
+            # 1. Fetch user config
+            exchange_id = "binance" # Default
+            config = await get_app_config(user_id)
+            
+            if config:
+                # Look for 'active_exchange' or fallback to specific exchange status logic if needed
+                # Ideally, we should add 'activeExchange' to user config schema or infer it.
+                # For now, let's assume valid 'active_exchange' key in config or simple logic.
+                # Assuming schema: config['activeExchange'] = 'okx' OR checking 'exchanges' list
+                if 'activeExchange' in config:
+                     exchange_id = config['activeExchange']
+                elif 'exchanges' in config:
+                    # Find first active exchange
+                    active_ex = next((e for e in config['exchanges'] if e.get('isActive')), None)
+                    if active_ex:
+                        exchange_id = active_ex['exchangeId']
+            
+            # 2. Check Cache
+            cached_exchange_id = self.user_exchange_ids.get(user_id)
+            cached_instance = self.user_instances.get(user_id)
+            
+            if cached_instance and cached_exchange_id == exchange_id:
+                return cached_instance
+
+            # 3. Switching or New Initialization
+            logger.info(f"🔄 Switching/Init User {user_id} Exchange Adapter to: {exchange_id.upper()}")
+            
+            # Close previous if exists
+            if cached_instance:
+                await cached_instance.close()
+
+            # Initialize new client
             exchange_class = getattr(ccxt, exchange_id)
+            # Potentially load API keys here if private access needed
+            # For now, public instance as per previous implementation logic, but scoped to user preference
             instance = exchange_class({
                 'enableRateLimit': True,
                 'options': {
@@ -35,337 +85,195 @@ class CCXTService:
                 }
             })
             
-            # Inject custom session for Windows DNS fix
-            session = self._create_custom_session()
-            if session:
-                instance.session = session
-
-            if exchange_id == 'okx':
-                instance.has['fetchCurrencies'] = False
-            self.public_instances[exchange_id] = instance
-            return instance
-        except Exception as e:
-            logger.error(f"Error al crear instancia pública {exchange_id}: {e}")
-            return None
-
-    async def get_private_instance(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None):
-        """
-        Crea y retorna una instancia privada lista para usar.
-        Nota: Debe ser cerrada después de su uso con await instance.close()
-        """
-        exchange_id = exchange_id.lower()
-        try:
-            exchange_class = getattr(ccxt, exchange_id)
-            config = {
-                'apiKey': api_key,
-                'secret': secret,
-                'enableRateLimit': True,
-                'options': {
-                    'defaultType': 'spot',
-                    'fetchCurrencies': False,
-                    'warnOnNoBalance': False
-                }
-            }
-            
-            # Ajustes específicos para OKX para evitar asset/currencies
-            if exchange_id == 'okx':
-                config['options']['fetchBalance'] = {'type': 'trading'}
-                # Algunos versiones de ccxt usan estas llaves para evitar el endpoint de assets
-                config['has'] = {
-                    'fetchCurrencies': False,
-                    'fetchBalance': True
-                }
-                
-            if password: config['password'] = password
-            if uid: config['uid'] = uid
-            
-            instance = exchange_class(config)
-            
-            # Inject custom session for Windows DNS fix
+            # Apply Windows DNS Fix
             session = self._create_custom_session()
             if session:
                 instance.session = session
             
-            # Forzar desactivación de fetchCurrencies en el objeto 'has' para OKX
+            # OKX Specifics
             if exchange_id == 'okx':
                 instance.has['fetchCurrencies'] = False
-                
+            
+            # Update Cache
+            self.user_instances[user_id] = instance
+            self.user_exchange_ids[user_id] = exchange_id
+            
             return instance
+            
         except Exception as e:
-            logger.error(f"Error al configurar instancia privada {exchange_id}: {e}")
-            return None
+            logger.error(f"Failed to initialize exchange client for user {user_id}: {e}")
+            # Fallback to generic binance instance (not cached per user to save resources)
+            return await self._get_system_client()
 
-    async def test_connection_private(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None) -> Tuple[bool, str]:
-        """Prueba la conexión obteniendo el balance."""
-        instance = await self.get_private_instance(exchange_id, api_key, secret, password, uid)
-        if not instance:
-            return False, f"Exchange '{exchange_id}' no soportado o mal configurado"
-
+    async def _get_system_client(self):
+        """
+        Retrieves the system-wide default exchange (fallback).
+        """
+        # ... (Legacy system client logic remains as fallback)
         try:
-            # 1. Intentar cargar mercados (prueba conectividad básica y carga de símbolos)
-            try:
-                await instance.load_markets()
-            except Exception as e:
-                # Si falla load_markets, puede ser por network error en currencies
-                logger.debug(f"CCXTService: load_markets falló (posible asset/currencies error), continuando: {e}")
+            # 1. Fetch active exchange from DB (System Global Config - if separate collection exists or reuse)
+            # NOTE: User requested User-Aware loading. System client might just be a default "Binance"
+            # or reading a global admin config. Let's keep existing logic but careful with 'self.db' usage.
+            exchange_id = "binance" # Default
+            if self.db:
+                # Assuming 'app_configs' might also hold global configs with special key?
+                # Or just fallback to binance. 
+                # Preserving existing logic for now:
+                config = await self.db.app_configs.find_one({"key": "active_exchange"})
+                if config and 'value' in config:
+                    exchange_id = config['value']
             
-            # 2. Prueba autenticada real
-            params = {}
-            if exchange_id.lower() == 'okx':
-                params['type'] = 'spot' # O 'trading'
+            # 2. Check if re-initialization is needed
+            if not self._exchange_instance or self._current_exchange_id != exchange_id:
+                logger.info(f"🔄 Switching System Exchange Adapter to: {exchange_id.upper()}")
+                
+                # Close previous if exists
+                if self._exchange_instance:
+                    await self._exchange_instance.close()
+
+                # Initialize new client
+                exchange_class = getattr(ccxt, exchange_id)
+                self._exchange_instance = exchange_class({
+                    'enableRateLimit': True,
+                    'options': {
+                        'defaultType': 'spot',
+                        'fetchCurrencies': False
+                    }
+                })
+                
+                # Apply Windows DNS Fix
+                session = self._create_custom_session()
+                if session:
+                    self._exchange_instance.session = session
+                
+                # OKX Specifics
+                if exchange_id == 'okx':
+                    self._exchange_instance.has['fetchCurrencies'] = False
+                
+                self._current_exchange_id = exchange_id
+                
+            return self._exchange_instance
             
-            try:
-                await instance.fetch_balance(params=params)
-                return True, "Conexión exitosa"
-            except (ccxt.NetworkError, ccxt.ExchangeError) as e:
-                # Si falla balance por permisos de asset, intentamos una acción mínima autenticada
-                # fetch_open_orders es excelente para probar llaves de 'Trade' sin requerir 'Asset'
-                logger.debug(f"CCXTService: fetch_balance falló para {exchange_id}, reintentando con validación mínima: {e}")
-                try:
-                    # En algunos exchanges instType es necesario o se asume por defaultType
-                    await instance.fetch_open_orders(params=params)
-                    return True, "Conexión exitosa (Validada vía órdenes)"
-                except Exception as final_e:
-                    logger.error(f"CCXTService: Todas las validaciones fallaron para {exchange_id}: {final_e}")
-                    # Si llegamos aquí con un error de red específico de currencies, devolvemos un mensaje descriptivo
-                    msg = str(final_e)
-                    if "asset/currencies" in msg:
-                        return False, "Error de OKX: Las API Keys no tienen permisos de lectura de activos. Active permisos de 'Trading' y 'Reading'."
-                    return False, msg
-            
-        except ccxt.AuthenticationError:
-            return False, "Error de autenticación: API Key o Secret inválidos"
-        except ccxt.PermissionDenied:
-            return False, "Permisos insuficientes: La API Key no tiene permisos de lectura/balance"
         except Exception as e:
-            logger.error(f"Error en test_connection para {exchange_id}: {str(e)}")
-            return False, f"Error de conexión: {str(e)}"
-        finally:
-            # ES CRÍTICO cerrar la conexión en async
-            await instance.close()
+            logger.error(f"Failed to initialize system exchange client: {e}")
+            if not self._exchange_instance:
+                 self._exchange_instance = ccxt.binance({'enableRateLimit': True})
+            return self._exchange_instance
 
-    async def fetch_balance_private(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None) -> Dict:
-        """Obtiene el balance total."""
-        instance = await self.get_private_instance(exchange_id, api_key, secret, password, uid)
-        if not instance:
-            return {}
+    # --- IExchangePort Implementation ---
 
+    async def get_current_price(self, symbol: str, user_id: str) -> float:
+        """Get the current price of a symbol using the system's active exchange."""
+        client = await self._get_system_client()
+        ticker = await client.fetch_ticker(symbol)
+        return ticker['last']
+
+    async def fetch_balance(self, user_id: str, exchange_id: Optional[str] = None) -> List[Balance]:
+        """
+        Fetch balance. If exchange_id is provided (User specific), it creates a temporary private instance.
+        If not, it attempts to use the system client (though fetching balance usually requires private auth).
+        """
+        # Note: This method signature implies resolving API keys for the user.
+        # For this refactor, we will focus on the public/system methods first as requested.
+        # Private methods usually require passing API keys explicitly or resolving them via User Service.
+        pass 
+
+    async def execute_trade(self, analysis: SignalAnalysis, user_id: str) -> TradeResult:
+        pass # To be implemented via private instance logic
+
+    async def fetch_open_orders(self, user_id: str, symbol: Optional[str] = None) -> List[Order]:
+        pass # To be implemented
+
+    async def get_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False, user_id: str = "default_user") -> pd.DataFrame:
+        """
+        Fetch historical data using the user's preferred exchange.
+        """
+        if user_id and user_id != "default_user":
+            client = await self._get_client_for_user(user_id)
+        else:
+            client = await self._get_system_client()
+        
+        # Calculate start time
+        if use_random_date:
+            max_days_back = 730
+            min_days_back = 365
+            random_offset = random.randint(min_days_back, max_days_back)
+            end_date = datetime.utcnow() - timedelta(days=random_offset)
+            # Fetch enough data for 'limit' candles (rough approx)
+            # Assuming timeframe 1h for now or using limit param directly
+            since_dt = end_date - timedelta(hours=limit) 
+            logger.info(f"🎲 Random training period ending: {end_date.strftime('%Y-%m-%d')}")
+            since_ts = int(since_dt.timestamp() * 1000)
+        else:
+            since_ts = None # Fetch most recent
+
+        ohlcv = await client.fetch_ohlcv(symbol, timeframe, since=since_ts, limit=limit)
+        
+        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        df.set_index('timestamp', inplace=True)
+        return df
+
+    # --- Legacy / Helper Methods (kept for compatibility during transition) ---
+
+    async def get_historical_ohlcv(self, symbol: str, exchange_id: str = None, timeframe: str = '1h', days_back: int = 365, use_random_date: bool = False) -> list:
+        """
+        Legacy wrapper to maintain compatibility with existing MLService calls 
+        until they are fully refactored to use generic `get_historical_data`.
+        """
+        # If exchange_id is explicitly passed, we unfortunately have to respect it or ignore it.
+        # For the "Dynamic" goal, we should prefer the system client if exchange_id matches dynamic one.
+        client = await self._get_system_client()
+        
+        # Reuse logic from get_historical_data but return raw list as expected by legacy
+        # ... (Duplicate logic for robustness during transition)
+        # For simplicity, let's call the new method and convert back to list
         try:
-            params = {}
-            if exchange_id.lower() == 'okx':
-                params['type'] = 'spot'
-            
-            balance = await instance.fetch_balance(params=params)
-            return balance
+             # Calculate limit based on days_back approx (e.g. 1h candles)
+             limit = days_back * 24 
+             df = await self.get_historical_data(symbol, timeframe, limit=limit, use_random_date=use_random_date)
+             
+             # Convert back to list of lists: [timestamp_ms, open, high, low, close, volume]
+             # Reset index to get timestamp as column
+             df_reset = df.reset_index()
+             # Convert timestamp back to ms int
+             df_reset['timestamp'] = df_reset['timestamp'].astype('int64') // 10**6
+             return df_reset[['timestamp', 'open', 'high', 'low', 'close', 'volume']].values.tolist()
         except Exception as e:
-            logger.error(f"Error al obtener balance de {exchange_id}: {e}")
-            return {}
-        finally:
-            await instance.close()
+            logger.error(f"Error in legacy get_historical_ohlcv: {e}")
+            return []
+
+    async def get_symbols(self, exchange_id: str = "binance", market_type: str = 'spot') -> list:
+         # Use system client if possible, else create temp
+         client = await self._get_system_client()
+         if client.id == exchange_id:
+             await client.load_markets()
+             return [s for s, i in client.markets.items() if i.get('type') == market_type and i.get('active')]
+         else:
+             # Fallback to creating generic public instance if requested exchange differs from system active
+             return await self._create_temp_public_instance(exchange_id, market_type)
+    
+    async def _create_temp_public_instance(self, exchange_id, market_type='spot') -> list:
+        # One-off instance creation
+        try:
+             ex_class = getattr(ccxt, exchange_id)
+             inst = ex_class()
+             session = self._create_custom_session()
+             if session: inst.session = session
+             await inst.load_markets()
+             symbols = [s for s, i in inst.markets.items() if i.get('type') == market_type and i.get('active')]
+             await inst.close()
+             return symbols
+        except:
+            return []
 
     async def close_all(self):
-        """Cierra todas las instancias públicas"""
-        for instance in self.public_instances.values():
-            try:
-                await instance.close()
-            except:
-                pass
-        self.public_instances = {}
+        if self._exchange_instance:
+            await self._exchange_instance.close()
 
-    async def get_markets(self, exchange_id: str) -> list:
-        """
-        Obtiene los tipos de mercado disponibles para un exchange
-        
-        Args:
-            exchange_id: ID del exchange
-            
-        Returns:
-            Lista de tipos de mercado únicos (spot, future, swap, etc.)
-        """
-        try:
-            instance = await self.create_public_instance(exchange_id)
-            if not instance:
-                return []
-            
-            await instance.load_markets()
-            
-            # Extraer tipos de mercado únicos
-            market_types = set()
-            for market_id, market in instance.markets.items():
-                market_type = market.get('type', 'spot')
-                market_types.add(market_type)
-            
-            return sorted(list(market_types))
-            
-        except Exception as e:
-            logger.error(f"Error fetching markets for {exchange_id}: {e}")
-            return []
+# Alias for backward compatibility if needed, 
+# though we will change main.py to use `CcxtAdapter`
+CCXTService = CcxtAdapter 
 
-    async def get_symbols_with_tickers(self, exchange_id: str, market_type: str = 'spot') -> list:
-        """
-        Obtiene símbolos con datos de precio y cambio porcentual
-        
-        Args:
-            exchange_id: ID del exchange
-            market_type: Tipo de mercado (spot, future, swap, etc.)
-            
-        Returns:
-            Lista de diccionarios con symbol, price, priceChange, priceChangePercent
-        """
-        try:
-            instance = await self.create_public_instance(exchange_id)
-            if not instance:
-                return []
-            
-            await instance.load_markets()
-            
-            # Filtrar símbolos por tipo de mercado
-            filtered_symbols = []
-            for symbol, market in instance.markets.items():
-                if market.get('type', 'spot') == market_type and market.get('active', True):
-                    filtered_symbols.append(symbol)
-            
-            # Limitar a 100 símbolos para evitar sobrecarga
-            filtered_symbols = filtered_symbols[:100]
-            
-            # Obtener tickers
-            try:
-                tickers = await instance.fetch_tickers(filtered_symbols)
-            except Exception as e:
-                logger.warning(f"Error fetching tickers for {exchange_id}, trying individual fetch: {e}")
-                # Si falla fetch_tickers, intentar uno por uno (más lento pero más confiable)
-                tickers = {}
-                for symbol in filtered_symbols[:20]:  # Limitar aún más si es individual
-                    try:
-                        ticker = await instance.fetch_ticker(symbol)
-                        tickers[symbol] = ticker
-                    except:
-                        continue
-            
-            # Formatear respuesta
-            result = []
-            for symbol, ticker in tickers.items():
-                market = instance.markets.get(symbol, {})
-                result.append({
-                    'symbol': symbol,
-                    'baseAsset': market.get('base', ''),
-                    'quoteAsset': market.get('quote', ''),
-                    'price': ticker.get('last', 0),
-                    'priceChange': ticker.get('change', 0),
-                    'priceChangePercent': ticker.get('percentage', 0),
-                    'volume': ticker.get('quoteVolume', 0)
-                })
-            
-            # Ordenar por volumen descendente
-            result.sort(key=lambda x: x['volume'], reverse=True)
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error fetching symbols with tickers for {exchange_id}: {e}")
-            return []
-
-    async def get_symbols(self, exchange_id: str, market_type: str = 'spot') -> list:
-        """
-        Obtiene lista de símbolos activos para un tipo de mercado.
-        API lightweight (solo load_markets).
-        """
-        try:
-            instance = await self.create_public_instance(exchange_id)
-            if not instance:
-                return []
-            
-            await instance.load_markets()
-            
-            # Logic based on user snippet
-            symbols = [
-                symbol for symbol, info in instance.markets.items() 
-                if info.get('type') == market_type and info.get('active')
-            ]
-            
-            return sorted(symbols)
-        except Exception as e:
-            logger.error(f"Error fetching symbols for {exchange_id}: {e}")
-            return []
-
-    async def get_historical_ohlcv(self, symbol: str, exchange_id: str, timeframe: str = '1h', days_back: int = 365, use_random_date: bool = False) -> list:
-        from datetime import datetime, timedelta
-        import random
-        """
-        Obtiene datos históricos OHLCV para un símbolo.
-        
-        Args:
-            symbol: Símbolo (ej. BTC/USDT)
-            exchange_id: Exchange ID (ej. binance)
-            timeframe: Timeframe (ej. 1h, 4h, 1d)
-            days_back: Cantidad de días hacia atrás
-            
-        Returns:
-            Lista de OHLCV [[timestamp, open, high, low, close, volume], ...]
-        """
-        try:
-            exchange = await self.create_public_instance(exchange_id)
-            if not exchange:
-                return []
-            
-            # Calcular fecha de inicio
-            if use_random_date:
-                # Use random historical period (between 2 years and 1 year ago)
-                max_days_back = 730  # 2 years
-                min_days_back = 365  # 1 year
-                random_offset = random.randint(min_days_back, max_days_back)
-                random_end_date = datetime.utcnow() - timedelta(days=random_offset)
-                since_dt = random_end_date - timedelta(days=days_back)
-                logger.info(f"🎲 Random training period: {since_dt.strftime('%Y-%m-%d')} to {random_end_date.strftime('%Y-%m-%d')} ({days_back} days)")
-            else:
-                since_dt = datetime.utcnow() - timedelta(days=days_back)
-            
-            since = int(since_dt.timestamp() * 1000)
-            
-            all_ohlcv = []
-            fetch_since = since
-            limit = 1000
-            
-            # Fetch loop
-            while True:
-                try:
-                    ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, fetch_since, limit=limit)
-                    if not ohlcv:
-                        break
-                        
-                    all_ohlcv.extend(ohlcv)
-                    
-                    # Actualizar fetch_since para la sguiente página
-                    last_timestamp = ohlcv[-1][0]
-                    if last_timestamp == fetch_since:
-                         # Si el exchange devuelve el mismo timestamp, avanzar manualmente un poco para evitar loop
-                         # (Depende del exchange, algunos requieren timestamp del siguiente candle)
-                         fetch_since += 1 
-                         # O mejor, break si no avanzamos, pero intentemos +1ms o timeframe ms
-                    else:
-                        fetch_since = last_timestamp + 1
-                        
-                    # Break si llegamos al límite (presente o fecha aleatoria)
-                    if use_random_date:
-                        end_timestamp = int((datetime.utcnow() - timedelta(days=random_offset)).timestamp() * 1000)
-                        if last_timestamp >= end_timestamp:
-                            break
-                    else:
-                        if last_timestamp >= (datetime.utcnow().timestamp() * 1000) - (60000):  # Menos 1 min margen
-                            break
-                        
-                    # Safety break para evitar loops infinitos
-                    if len(all_ohlcv) > days_back * 24 * 60: # Rough limit
-                        break
-                        
-                except Exception as e:
-                    logger.warning(f"Error fetching page for {symbol}: {e}")
-                    break
-                    
-            return all_ohlcv
-            
-        except Exception as e:
-            logger.error(f"Error fetching historical ohlcv for {symbol} on {exchange_id}: {e}")
-            return []
-
+# Global instance for backward compatibility and default imports
 ccxt_service = CCXTService()

@@ -1,6 +1,6 @@
 from .base import BaseStrategy
-from .rsi_reversion import RSIReversion
-from .trend_ema import TrendEMA
+from .rsi_reversion import RsiReversion as RSIReversion
+from .trend_ema import TrendEma as TrendEMA
 from .volatility_breakout import VolatilityBreakout
 import os
 import importlib
