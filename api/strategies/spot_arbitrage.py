@@ -1,62 +1,43 @@
 import pandas as pd
 import numpy as np
-from typing import Dict, Any
+from typing import List
 from .base import BaseStrategy
 
 class SpotArbitrage(BaseStrategy):
-    def __init__(self, period: int = 20, z_threshold: float = 2.0):
-        """
-        Arbitraje de spot en un solo exchange basado en reversión a la media (Z-Score).
-        
-        Args:
-            period (int): Ventana de tiempo para calcular el precio medio esperado.
-            z_threshold (float): Desviación estándar para disparar la operación.
-        """
-        super().__init__(
-            "Spot_Arbitrage_Basic", 
-            "Arbitraje por desviación estadística del precio esperado (Básico)"
-        )
-        self.period = period
-        self.z_threshold = z_threshold
+    """
+    Estrategia de Arbitraje estadístico basada en Z-Score.
+    Identifica anomalías de precio respecto a su media histórica.
+    """
+    def __init__(self, config=None):
+        super().__init__(config or {})
+        self.period = self.config.get('period', 20)
+        self.z_threshold = self.config.get('z_threshold', 2.0)
 
-    def get_signal(self, data: pd.DataFrame, position_context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """
-        Calcula si el precio actual está lo suficientemente lejos del precio 
-        esperado para considerarse una oportunidad de arbitraje.
-        """
-        close = data['close']
+    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty or len(df) < self.period:
+            return df
+
+        # 1. Cálculos Estadísticos
+        df['mean'] = df['close'].rolling(window=self.period).mean()
+        df['std'] = df['close'].rolling(window=self.period).std()
         
-        # 1. Calcular el precio esperado (Media Móvil)
-        expected_price = close.rolling(window=self.period).mean()
+        # Z-Score: (Precio - Media) / Desviación
+        df['z_score'] = (df['close'] - df['mean']) / df['std']
         
-        # 2. Calcular la volatilidad (Desviación Estándar)
-        std_dev = close.rolling(window=self.period).std()
+        # 2. Features dinámicas
+        df['deviation_pct'] = (df['close'] - df['mean']) / df['mean']
+        df['volatility_z'] = df['std'].pct_change()
+
+        # 3. Señales ESTÁNDAR
+        df['signal'] = self.SIGNAL_WAIT
         
-        # 3. Calcular el Z-Score (Cuántas desviaciones se alejó el precio)
-        # Z = (Precio Actual - Precio Esperado) / Desviación
-        last_close = close.iloc[-1]
-        last_expected = expected_price.iloc[-1]
-        last_std = std_dev.iloc[-1]
+        # LONG: El precio está anormalmente bajo (Z < -threshold)
+        df.loc[df['z_score'] <= -self.z_threshold, 'signal'] = self.SIGNAL_BUY
         
-        z_score = (last_close - last_expected) / last_std if last_std != 0 else 0
+        # SHORT: El precio está anormalmente alto (Z > threshold)
+        df.loc[df['z_score'] >= self.z_threshold, 'signal'] = self.SIGNAL_SELL
         
-        signal = 'hold'
-        confidence = min(abs(z_score) / (self.z_threshold * 2), 1.0)
-        
-        # Lógica de Arbitraje:
-        # Si el precio es muy bajo (Z < -threshold), compramos esperando que suba al precio esperado.
-        # Si el precio es muy alto (Z > threshold), vendemos esperando que baje al precio esperado.
-        if z_score <= -self.z_threshold:
-            signal = 'buy'
-        elif z_score >= self.z_threshold:
-            signal = 'sell'
-            
-        return {
-            'signal': signal,
-            'confidence': round(confidence, 2),
-            'meta': {
-                'z_score': round(z_score, 4),
-                'expected_price': round(last_expected, 6),
-                'deviation_pct': round(((last_close - last_expected) / last_expected) * 100, 2)
-            }
-        }
+        return df
+
+    def get_features(self) -> List[str]:
+        return ['z_score', 'deviation_pct', 'volatility_z']

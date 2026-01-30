@@ -1,34 +1,37 @@
 import pandas as pd
+import numpy as np
 from .base import BaseStrategy
 
 class SpotIntraExchangeArbitrage(BaseStrategy):
-    def __init__(self, period=20, z_threshold=2.0, min_profit=0.5):
-        super().__init__("Spot_Arbitrage", "Arbitraje estadístico bidireccional")
-        self.period = period
-        self.z_threshold = z_threshold
-        self.min_profit = min_profit
+    """
+    Basada en tu lógica de Z-Score.
+    Mejora: Adaptada al contrato de IA y ejecución automática con filtros de volatilidad.
+    """
+    def __init__(self, config=None):
+        super().__init__(config or {})
+        self.period = self.config.get('period', 20)
+        self.z_threshold = self.config.get('z_threshold', 2.0)
 
-    def get_signal(self, data: pd.DataFrame, position_context: dict = None) -> dict:
-        close = data['close']
-        avg = close.rolling(self.period).mean().iloc[-1]
-        std = close.rolling(self.period).std().iloc[-1]
-        z_score = (close.iloc[-1] - avg) / std if std != 0 else 0
+    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+        if len(df) < self.period: return df
+
+        # Lógica de Z-Score
+        df['avg'] = df['close'].rolling(self.period).mean()
+        df['std'] = df['close'].rolling(self.period).std()
+        df['z_score'] = (df['close'] - df['avg']) / df['std']
         
-        pos = position_context or {'has_position': False}
-        pnl = pos.get('unrealized_pnl_pct', 0)
-        signal = 'hold'
+        # Features dinámicas para que la IA entienda el contexto
+        df['volatility_index'] = df['std'] / df['avg']
+        df['distance_pct'] = (df['close'] - df['avg']) / df['avg']
 
-        # Lógica para abrir/promediar (Sin restricción de PnL)
-        if z_score <= -self.z_threshold:  # Infravalorado
-             signal = 'buy'
-        elif z_score >= self.z_threshold:  # Sobrevalorado
-             signal = 'sell'
+        # Señal ESTÁNDAR
+        df['signal'] = self.SIGNAL_WAIT
+        
+        # Arbitraje estadístico puro:
+        df.loc[df['z_score'] <= -self.z_threshold, 'signal'] = self.SIGNAL_BUY
+        df.loc[df['z_score'] >= self.z_threshold, 'signal'] = self.SIGNAL_SELL
 
-        # Lógica para cerrar con profit
-        if pos.get('has_position') and pnl >= self.min_profit:
-            if pos.get('position_type') == 'LONG' and z_score >= 0:
-                signal = 'sell'
-            if pos.get('position_type') == 'SHORT' and z_score <= 0:
-                signal = 'buy'
+        return df
 
-        return {'signal': signal, 'confidence': 0.9, 'meta': {'z_score': z_score, 'pnl': pnl}}
+    def get_features(self):
+        return ['z_score', 'volatility_index', 'distance_pct']

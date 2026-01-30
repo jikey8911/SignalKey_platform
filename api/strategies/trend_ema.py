@@ -1,24 +1,34 @@
 import pandas as pd
-from api.utils.indicators import ema
 from .base import BaseStrategy
 
-class TrendEMA(BaseStrategy):
-    def __init__(self, fast=20, slow=50):
-        super().__init__("TrendEMA", "Seguimiento de tendencia bidireccional")
-        self.fast = fast
-        self.slow = slow
+class TrendEma(BaseStrategy):
+    """
+    Estrategia de seguimiento de tendencia mediante cruce de EMAs 
+    con filtro de volumen para confirmar fuerza.
+    """
+    def __init__(self, config=None):
+        super().__init__(config or {})
+        self.fast = 9
+        self.slow = 21
 
-    def get_signal(self, data: pd.DataFrame, position_context: dict = None) -> dict:
-        f_ema = ema(data['close'], self.fast)
-        s_ema = ema(data['close'], self.slow)
-        pos = position_context or {'has_position': False}
+    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+        df['ema_f'] = df['close'].ewm(span=self.fast).mean()
+        df['ema_s'] = df['close'].ewm(span=self.slow).mean()
+        df['vol_sma'] = df['volume'].rolling(window=20).mean()
         
-        signal = 'hold'
-        # Cruce Dorado (Long)
-        if f_ema.iloc[-1] > s_ema.iloc[-1] and f_ema.iloc[-2] <= s_ema.iloc[-2]:
-            signal = 'buy'
-        # Cruce de la Muerte (Short)
-        elif f_ema.iloc[-1] < s_ema.iloc[-1] and f_ema.iloc[-2] >= s_ema.iloc[-2]:
-            signal = 'sell'
-            
-        return {'signal': signal, 'confidence': 0.75}
+        # Features
+        df['ema_diff'] = (df['ema_f'] - df['ema_s']) / df['ema_s']
+        df['vol_ratio'] = df['volume'] / df['vol_sma']
+
+        df['signal'] = self.SIGNAL_WAIT
+        
+        # LONG: Cruce alcista + Volumen superior al promedio
+        df.loc[(df['ema_f'] > df['ema_s']) & (df['vol_ratio'] > 1.2), 'signal'] = self.SIGNAL_BUY
+        
+        # SHORT: Cruce bajista + Volumen superior al promedio
+        df.loc[(df['ema_f'] < df['ema_s']) & (df['vol_ratio'] > 1.2), 'signal'] = self.SIGNAL_SELL
+        
+        return df
+
+    def get_features(self):
+        return ['ema_diff', 'vol_ratio']

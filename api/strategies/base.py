@@ -1,33 +1,34 @@
-from abc import ABC, abstractmethod
 import pandas as pd
-from typing import Dict, Any, Optional
+from abc import ABC, abstractmethod
+from typing import List
 
 class BaseStrategy(ABC):
-    def __init__(self, name: str, description: str):
-        self.name = name
-        self.description = description
+    """
+    Clase base que define el contrato estándar para todas las estrategias.
+    Garantiza que la IA aprenda de columnas dinámicas pero responda señales universales.
+    """
+    
+    # --- CONTRATO DE SEÑALES ESTÁNDAR (Inamovible para el Motor) ---
+    SIGNAL_WAIT = 0   # Neutro / Esperar
+    SIGNAL_BUY = 1    # LONG / Compra
+    SIGNAL_SELL = 2   # SHORT / Venta
+
+    def __init__(self, config: dict = None):
+        self.config = config or {}
+        self.name = self.__class__.__name__
 
     @abstractmethod
-    def get_signal(self, data: pd.DataFrame, position_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Analiza los datos y retorna una señal considerando el estado de la posición actual.
-        
-        Args:
-            data (pd.DataFrame): DataFrame con al menos columnas 'open', 'high', 'low', 'close', 'volume'.
-            position_context (Optional[Dict]): Información de posición actual:
-                - has_position: bool
-                - position_type: 'LONG' | 'SHORT' | None
-                - avg_entry_price: float
-                - current_price: float
-                - unrealized_pnl_pct: float
-                - position_count: int
-                - break_even_price: float (precio de salida para cubrir fees)
-            
-        Returns:
-            dict: {
-                'signal': 'buy' | 'sell' | 'hold',
-                'confidence': float (0.0 to 1.0),
-                'meta': dict (extra info, optional)
-            }
+        Calcula indicadores y genera la columna 'signal' 
+        usando exclusivamente las constantes SIGNAL_*.
+        """
+        pass
+
+    @abstractmethod
+    def get_features(self) -> List[str]:
+        """
+        Retorna la lista exacta de columnas (features) que el modelo de IA 
+        debe usar como entrada para predecir la señal estándar.
         """
         pass
