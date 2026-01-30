@@ -114,7 +114,7 @@ export default function TelegramConsole() {
   };
 
   return (
-    <SignalsKeiLayout currentPage="/telegram-console">
+    <div className="p-6 space-y-6">
       <div className="space-y-6 max-w-7xl">
         {/* Header */}
         <div className="flex justify-between items-start">
@@ -271,6 +271,6 @@ export default function TelegramConsole() {
           </div>
         </Card>
       </div>
-    </SignalsKeiLayout>
+    </div>
   );
 }

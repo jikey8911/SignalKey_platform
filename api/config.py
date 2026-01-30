@@ -31,6 +31,9 @@ class Config:
     DEX_WALLET_PRIVATE_KEY = os.getenv("DEX_WALLET_PRIVATE_KEY")
     SOLANA_RPC_URL = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
     
+    # Security
+    JWT_SECRET = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
+    
     # App Settings
     DEBUG = os.getenv("DEBUG", "True") == "True"
     DEMO_MODE = os.getenv("DEMO_MODE", "True") == "True"

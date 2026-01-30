@@ -7,6 +7,7 @@ export interface SessionPayload {
 }
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+console.log(`[JWT] Secret prefix: ${JWT_SECRET.substring(0, 4)}... (len: ${JWT_SECRET.length})`);
 const ONE_YEAR_MS = 365 * 24 * 60 * 60 * 1000;
 
 /**

@@ -1,5 +1,4 @@
 import React, { useState } from 'react';
-import { SignalsKeiLayout } from '@/components/SignalsKeiLayout';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { trpc } from '@/lib/trpc';
@@ -219,497 +218,495 @@ export default function Settings() {
   );
 
   return (
-    <SignalsKeiLayout currentPage="/settings">
-      <div className="space-y-6 max-w-5xl pb-10">
-        <div className="flex justify-between items-center">
-          <div>
-            <h2 className="text-3xl font-bold text-foreground mb-2">Configuración</h2>
-            <p className="text-muted-foreground">Gestiona tus credenciales y límites de inversión</p>
-          </div>
-          <Button onClick={handleSave} disabled={updateConfigMutation.isPending} className="flex items-center gap-2">
-            <Save size={18} />
-            {updateConfigMutation.isPending ? 'Guardando...' : 'Guardar Todo'}
+    <div className="p-6 space-y-6 max-w-5xl pb-10">
+      <div className="flex justify-between items-center">
+        <div>
+          <h2 className="text-3xl font-bold text-foreground mb-2">Configuración</h2>
+          <p className="text-muted-foreground">Gestiona tus credenciales y límites de inversión</p>
+        </div>
+        <Button onClick={handleSave} disabled={updateConfigMutation.isPending} className="flex items-center gap-2">
+          <Save size={18} />
+          {updateConfigMutation.isPending ? 'Guardando...' : 'Guardar Todo'}
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* AI & API Keys */}
+        <div className="space-y-6">
+          <Card className="p-6">
+            <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">🤖 Inteligencia Artificial</h3>
+            <p className="text-xs text-muted-foreground mb-4">
+              Configura múltiples proveedores. El sistema usará el seleccionado como primario y el resto como respaldo (failover).
+            </p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-primary mb-1 uppercase tracking-wider">
+                  Proveedor Primario (Preferido)
+                </label>
+                <select
+                  value={formData.aiProvider}
+                  onChange={(e) => setFormData({ ...formData, aiProvider: e.target.value as any })}
+                  className="w-full px-3 py-2 border border-border rounded bg-muted/30 text-sm font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                  <option value="gemini">Google Gemini (Recomendado)</option>
+                  <option value="openai">OpenAI (GPT-4o mini)</option>
+                  <option value="perplexity">Perplexity AI (Web Search)</option>
+                  <option value="grok">Grok (xAI)</option>
+                </select>
+              </div>
+
+              <div className="pt-2 border-t border-border/50 space-y-3">
+                <InputField
+                  label="Google Gemini Key"
+                  value={formData.geminiApiKey}
+                  onChange={(v: string) => setFormData({ ...formData, geminiApiKey: v })}
+                  type="password"
+                  placeholder="AIzaSy..."
+                />
+                <InputField
+                  label="OpenAI API Key"
+                  value={formData.openaiApiKey}
+                  onChange={(v: string) => setFormData({ ...formData, openaiApiKey: v })}
+                  type="password"
+                  placeholder="sk-..."
+                />
+                <InputField
+                  label="Perplexity API Key"
+                  value={formData.perplexityApiKey}
+                  onChange={(v: string) => setFormData({ ...formData, perplexityApiKey: v })}
+                  type="password"
+                  placeholder="pplx-..."
+                />
+                <InputField
+                  label="Grok (xAI) API Key"
+                  value={formData.grokApiKey}
+                  onChange={(v: string) => setFormData({ ...formData, grokApiKey: v })}
+                  type="password"
+                  placeholder="xai-..."
+                />
+              </div>
+
+              <div className="p-2 bg-primary/5 rounded border border-primary/10">
+                <p className="text-[10px] text-primary/80 italic leading-tight">
+                  💡 <strong>Smart Failover:</strong> Si {formData.aiProvider} falla o alcanza su límite, el bot intentará automáticamente con las otras llaves configuradas.
+                </p>
+              </div>
+            </div>
+          </Card>
+
+          {authUser?.openId && (
+            <TelegramConfig
+              userId={authUser.openId}
+              telegramApiId={config?.telegramApiId}
+              telegramApiHash={config?.telegramApiHash}
+              telegramPhoneNumber={config?.telegramPhoneNumber}
+            />
+          )}
+
+          <Card className="p-6">
+            <div className="space-y-4">
+              {/* Channel Selection */}
+              <div className="pt-2">
+                <div className="flex justify-between items-center mb-2">
+                  <label className="block text-xs font-semibold text-foreground">Canales Permitidos</label>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={async () => {
+                      if (!authUser?.openId) {
+                        toast.error("Usuario no autenticado");
+                        return;
+                      }
+                      try {
+                        const res = await fetch(`${CONFIG.API_BASE_URL}/telegram/dialogs/${authUser.openId}`);
+                        const data = await res.json();
+                        const dialogs = data.dialogs;
+                        if (Array.isArray(dialogs)) {
+                          setAvailableChannels(dialogs);
+                          toast.success(`Cargados ${dialogs.length} canales`);
+                        } else {
+                          toast.error("Formato de respuesta inválido");
+                        }
+                      } catch (e) {
+                        toast.error("Error cargando canales (¿Telegram conectado?)");
+                        console.error(e);
+                      }
+                    }}
+                  >
+                    Cargar Canales
+                  </Button>
+                </div>
+
+                {availableChannels.length > 0 && (
+                  <div className="max-h-60 overflow-y-auto border border-border rounded p-2 text-sm bg-background space-y-1">
+                    {availableChannels.map((channel: any) => (
+                      <label key={channel.id} className="flex items-center gap-2 p-1 hover:bg-muted/50 rounded cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={formData.telegramChannels.allow.includes(channel.id)}
+                          onChange={(e) => {
+                            const newAllow = e.target.checked
+                              ? [...formData.telegramChannels.allow, channel.id]
+                              : formData.telegramChannels.allow.filter(id => id !== channel.id);
+                            setFormData({
+                              ...formData,
+                              telegramChannels: { ...formData.telegramChannels, allow: newAllow }
+                            });
+                          }}
+                          className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4"
+                        />
+                        <span className="truncate">{channel.name || "Sin Nombre"} <span className="text-xs text-muted-foreground">({channel.id})</span></span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+
+                <div className="text-xs text-muted-foreground mt-2 p-2 bg-muted/20 rounded border border-border/50">
+                  {formData.telegramChannels.allow.length === 0
+                    ? "⚠️ Lista vacía: Se analizarán mensajes de TODOS los canales."
+                    : `✅ ${formData.telegramChannels.allow.length} canales seleccionados. El resto será ignorado.`}
+                </div>
+              </div>
+            </div>
+          </Card>
+
+          <Card className="p-6">
+            <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">💰 Límites de Inversión</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <InputField
+                label="Máximo CEX (USDT)"
+                value={formData.investmentLimits.cexMaxAmount}
+                onChange={(v: string) => setFormData({ ...formData, investmentLimits: { ...formData.investmentLimits, cexMaxAmount: parseFloat(v) } })}
+                type="number"
+              />
+              <InputField
+                label="Máximo DEX (SOL)"
+                value={formData.investmentLimits.dexMaxAmount}
+                onChange={(v: string) => setFormData({ ...formData, investmentLimits: { ...formData.investmentLimits, dexMaxAmount: parseFloat(v) } })}
+                type="number"
+              />
+            </div>
+          </Card>
+
+          <Card className="p-6">
+            <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">💵 Balance Virtual Inicial</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <InputField
+                label="CEX (USDT)"
+                value={formData.virtualBalances.cex}
+                onChange={(v: string) => setFormData({ ...formData, virtualBalances: { ...formData.virtualBalances, cex: parseFloat(v) || 0 } })}
+                type="number"
+              />
+              <InputField
+                label="DEX (SOL)"
+                value={formData.virtualBalances.dex}
+                onChange={(v: string) => setFormData({ ...formData, virtualBalances: { ...formData.virtualBalances, dex: parseFloat(v) || 0 } })}
+                type="number"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground mt-3 p-2 bg-muted/20 rounded border border-border/50">
+              💡 Este balance se usará para simular operaciones en modo demo. Se actualizará automáticamente con cada trade simulado.
+            </p>
+          </Card>
+        </div>
+
+        {/* DEX & General */}
+        <div className="space-y-6">
+          <Card className="p-6">
+            <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">🔄 DEX Config (0x Swap)</h3>
+            <div className="space-y-4">
+              <InputField
+                label="0x Swap API Key"
+                value={formData.zeroExApiKey}
+                onChange={(v: string) => setFormData({ ...formData, zeroExApiKey: v })}
+                type="password"
+              />
+              <InputField
+                label="Wallet Private Key"
+                value={formData.dexConfig.walletPrivateKey}
+                onChange={(v: string) => setFormData({ ...formData, dexConfig: { ...formData.dexConfig, walletPrivateKey: v } })}
+                type="password"
+              />
+              <InputField
+                label="RPC URL"
+                value={formData.dexConfig.rpcUrl}
+                onChange={(v: string) => setFormData({ ...formData, dexConfig: { ...formData.dexConfig, rpcUrl: v } })}
+              />
+            </div>
+          </Card>
+
+          <Card className="p-6">
+            <h3 className="text-lg font-semibold mb-4">⚙️ Modo de Operación</h3>
+            <div className="space-y-4">
+              <div className="flex items-center gap-4">
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.isAutoEnabled}
+                    onChange={(e) => setFormData({ ...formData, isAutoEnabled: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
+                  <span className="ml-3 text-sm font-medium text-foreground">Procesamiento Automático</span>
+                </label>
+              </div>
+
+              <div className="flex items-center gap-4">
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={formData.demoMode}
+                    onChange={(e) => setFormData({ ...formData, demoMode: e.target.checked })}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
+                  <span className="ml-3 text-sm font-medium text-foreground">Modo Demo (Simulación)</span>
+                </label>
+              </div>
+            </div>
+            <p className="text-[10px] text-muted-foreground mt-3 italic">
+              * Si desactivas el procesamiento automático, no se recibirán nuevos mensajes ni se generarán señales. Los trades activos seguirán monitoreándose.
+            </p>
+          </Card>
+        </div>
+      </div>
+
+      {/* CEX Exchanges */}
+      <Card className="p-6">
+        <div className="flex justify-between items-center mb-6">
+          <h3 className="text-lg font-semibold flex items-center gap-2">💱 Exchanges Centralizados (CEX)</h3>
+          <Button onClick={addExchange} variant="outline" size="sm" className="flex items-center gap-1">
+            <Plus size={16} /> Añadir Exchange
           </Button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* AI & API Keys */}
-          <div className="space-y-6">
-            <Card className="p-6">
-              <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">🤖 Inteligencia Artificial</h3>
-              <p className="text-xs text-muted-foreground mb-4">
-                Configura múltiples proveedores. El sistema usará el seleccionado como primario y el resto como respaldo (failover).
-              </p>
+        <div className="space-y-6">
+          {formData.exchanges.map((ex, index) => (
+            <div key={index} className="p-4 border border-border rounded-lg bg-muted/30 relative">
+              <button
+                onClick={() => removeExchange(index)}
+                className="absolute top-4 right-4 text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 size={18} />
+              </button>
 
-              <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                 <div>
-                  <label className="block text-xs font-semibold text-primary mb-1 uppercase tracking-wider">
-                    Proveedor Primario (Preferido)
-                  </label>
+                  <label className="block text-xs font-semibold text-foreground mb-1">Exchange</label>
                   <select
-                    value={formData.aiProvider}
-                    onChange={(e) => setFormData({ ...formData, aiProvider: e.target.value as any })}
-                    className="w-full px-3 py-2 border border-border rounded bg-muted/30 text-sm font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                    value={ex.exchangeId}
+                    onChange={(e) => updateExchange(index, 'exchangeId', e.target.value)}
+                    className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground"
                   >
-                    <option value="gemini">Google Gemini (Recomendado)</option>
-                    <option value="openai">OpenAI (GPT-4o mini)</option>
-                    <option value="perplexity">Perplexity AI (Web Search)</option>
-                    <option value="grok">Grok (xAI)</option>
+                    {CCXT_EXCHANGES.map(exchange => (
+                      <option key={exchange} value={exchange}>
+                        {exchange.charAt(0).toUpperCase() + exchange.slice(1)}
+                      </option>
+                    ))}
                   </select>
                 </div>
-
-                <div className="pt-2 border-t border-border/50 space-y-3">
-                  <InputField
-                    label="Google Gemini Key"
-                    value={formData.geminiApiKey}
-                    onChange={(v: string) => setFormData({ ...formData, geminiApiKey: v })}
-                    type="password"
-                    placeholder="AIzaSy..."
-                  />
-                  <InputField
-                    label="OpenAI API Key"
-                    value={formData.openaiApiKey}
-                    onChange={(v: string) => setFormData({ ...formData, openaiApiKey: v })}
-                    type="password"
-                    placeholder="sk-..."
-                  />
-                  <InputField
-                    label="Perplexity API Key"
-                    value={formData.perplexityApiKey}
-                    onChange={(v: string) => setFormData({ ...formData, perplexityApiKey: v })}
-                    type="password"
-                    placeholder="pplx-..."
-                  />
-                  <InputField
-                    label="Grok (xAI) API Key"
-                    value={formData.grokApiKey}
-                    onChange={(v: string) => setFormData({ ...formData, grokApiKey: v })}
-                    type="password"
-                    placeholder="xai-..."
-                  />
-                </div>
-
-                <div className="p-2 bg-primary/5 rounded border border-primary/10">
-                  <p className="text-[10px] text-primary/80 italic leading-tight">
-                    💡 <strong>Smart Failover:</strong> Si {formData.aiProvider} falla o alcanza su límite, el bot intentará automáticamente con las otras llaves configuradas.
-                  </p>
-                </div>
+                <InputField
+                  label="API Key"
+                  value={ex.apiKey}
+                  onChange={(v: string) => updateExchange(index, 'apiKey', v)}
+                  type="password"
+                />
+                <InputField
+                  label="API Secret"
+                  value={ex.secret}
+                  onChange={(v: string) => updateExchange(index, 'secret', v)}
+                  type="password"
+                />
               </div>
-            </Card>
 
-            {authUser?.openId && (
-              <TelegramConfig 
-                userId={authUser.openId} 
-                telegramApiId={config?.telegramApiId}
-                telegramApiHash={config?.telegramApiHash}
-                telegramPhoneNumber={config?.telegramPhoneNumber}
-              />
-            )}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <InputField
+                  label="Passphrase (OKX/KuCoin)"
+                  value={ex.password}
+                  onChange={(v: string) => updateExchange(index, 'password', v)}
+                  type="password"
+                />
+                <InputField
+                  label="UID"
+                  value={ex.uid}
+                  onChange={(v: string) => updateExchange(index, 'uid', v)}
+                />
+                <div className="flex items-end pb-2 gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={ex.isActive}
+                      onChange={(e) => updateExchange(index, 'isActive', e.target.checked)}
+                    />
+                    <span className="text-sm">Activo</span>
+                  </label>
 
-            <Card className="p-6">
-              <div className="space-y-4">
-                {/* Channel Selection */}
-                <div className="pt-2">
-                  <div className="flex justify-between items-center mb-2">
-                    <label className="block text-xs font-semibold text-foreground">Canales Permitidos</label>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={async () => {
-                        if (!authUser?.openId) {
-                          toast.error("Usuario no autenticado");
-                          return;
-                        }
-                        try {
-                          const res = await fetch(`${CONFIG.API_BASE_URL}/telegram/dialogs/${authUser.openId}`);
-                          const data = await res.json();
-                          const dialogs = data.dialogs;
-                          if (Array.isArray(dialogs)) {
-                            setAvailableChannels(dialogs);
-                            toast.success(`Cargados ${dialogs.length} canales`);
-                          } else {
-                            toast.error("Formato de respuesta inválido");
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-auto"
+                    onClick={async () => {
+                      if (!ex.apiKey || !ex.secret) {
+                        toast.error("API Key y Secret requeridos");
+                        return;
+                      }
+                      const loadingToast = toast.loading("Probando conexión...");
+                      try {
+                        // 1. Probar conexión básica
+                        const res = await fetch(`${CONFIG.API_BASE_URL}/test-connection`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(ex)
+                        });
+                        const data = await res.json();
+
+                        if (data.success) {
+                          // 2. Si es exitosa, intentar cargar tipos de mercados disponibles
+                          try {
+                            const marketsRes = await fetch(`${CONFIG.API_BASE_URL}/backtest/markets/${authUser?.openId}/${ex.exchangeId}`);
+                            const marketsData = await marketsRes.json();
+                            const marketsList = marketsData.markets || [];
+
+                            toast.dismiss(loadingToast);
+                            toast.success(
+                              <div>
+                                <div className="font-bold">Conexión Exitosa</div>
+                                <div className="text-xs mt-1">Mercados disponibles: {marketsList.join(', ') || 'Ninguno detectado'}</div>
+                              </div>
+                            );
+                          } catch (mError) {
+                            console.error("Error fetching markets for test:", mError);
+                            toast.dismiss(loadingToast);
+                            toast.success("Conexión Exitosa (No se pudieron cargar detalles de mercados)");
                           }
-                        } catch (e) {
-                          toast.error("Error cargando canales (¿Telegram conectado?)");
-                          console.error(e);
+                        } else {
+                          toast.dismiss(loadingToast);
+                          toast.error("Error: " + data.message);
                         }
-                      }}
-                    >
-                      Cargar Canales
-                    </Button>
-                  </div>
-
-                  {availableChannels.length > 0 && (
-                    <div className="max-h-60 overflow-y-auto border border-border rounded p-2 text-sm bg-background space-y-1">
-                      {availableChannels.map((channel: any) => (
-                        <label key={channel.id} className="flex items-center gap-2 p-1 hover:bg-muted/50 rounded cursor-pointer">
-                          <input
-                            type="checkbox"
-                            checked={formData.telegramChannels.allow.includes(channel.id)}
-                            onChange={(e) => {
-                              const newAllow = e.target.checked
-                                ? [...formData.telegramChannels.allow, channel.id]
-                                : formData.telegramChannels.allow.filter(id => id !== channel.id);
-                              setFormData({
-                                ...formData,
-                                telegramChannels: { ...formData.telegramChannels, allow: newAllow }
-                              });
-                            }}
-                            className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4"
-                          />
-                          <span className="truncate">{channel.name || "Sin Nombre"} <span className="text-xs text-muted-foreground">({channel.id})</span></span>
-                        </label>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="text-xs text-muted-foreground mt-2 p-2 bg-muted/20 rounded border border-border/50">
-                    {formData.telegramChannels.allow.length === 0
-                      ? "⚠️ Lista vacía: Se analizarán mensajes de TODOS los canales."
-                      : `✅ ${formData.telegramChannels.allow.length} canales seleccionados. El resto será ignorado.`}
-                  </div>
+                      } catch (e: any) {
+                        toast.dismiss(loadingToast);
+                        toast.error("Error de red: " + e.message);
+                      }
+                    }}
+                  >
+                    Probar y Ver Mercados 🔌
+                  </Button>
                 </div>
               </div>
-            </Card>
+            </div>
+          ))}
+        </div>
+      </Card>
 
-            <Card className="p-6">
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">💰 Límites de Inversión</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <InputField
-                  label="Máximo CEX (USDT)"
-                  value={formData.investmentLimits.cexMaxAmount}
-                  onChange={(v: string) => setFormData({ ...formData, investmentLimits: { ...formData.investmentLimits, cexMaxAmount: parseFloat(v) } })}
-                  type="number"
-                />
-                <InputField
-                  label="Máximo DEX (SOL)"
-                  value={formData.investmentLimits.dexMaxAmount}
-                  onChange={(v: string) => setFormData({ ...formData, investmentLimits: { ...formData.investmentLimits, dexMaxAmount: parseFloat(v) } })}
-                  type="number"
-                />
-              </div>
-            </Card>
+      <Card className="p-6 mt-6">
+        <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">🤖 Configuración de Bots de Señales</h3>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-foreground mb-2">
+                Máximo de Bots Activos
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="20"
+                value={formData.botStrategy.maxActiveBots}
+                onChange={(e) => setFormData({
+                  ...formData,
+                  botStrategy: { ...formData.botStrategy, maxActiveBots: parseInt(e.target.value) }
+                })}
+                className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">Número máximo de bots que pueden estar activos simultáneamente</p>
+            </div>
 
-            <Card className="p-6">
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">💵 Balance Virtual Inicial</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <InputField
-                  label="CEX (USDT)"
-                  value={formData.virtualBalances.cex}
-                  onChange={(v: string) => setFormData({ ...formData, virtualBalances: { ...formData.virtualBalances, cex: parseFloat(v) || 0 } })}
-                  type="number"
-                />
-                <InputField
-                  label="DEX (SOL)"
-                  value={formData.virtualBalances.dex}
-                  onChange={(v: string) => setFormData({ ...formData, virtualBalances: { ...formData.virtualBalances, dex: parseFloat(v) || 0 } })}
-                  type="number"
-                />
-              </div>
-              <p className="text-xs text-muted-foreground mt-3 p-2 bg-muted/20 rounded border border-border/50">
-                💡 Este balance se usará para simular operaciones en modo demo. Se actualizará automáticamente con cada trade simulado.
-              </p>
-            </Card>
+            <div>
+              <label className="block text-xs font-semibold text-foreground mb-2">
+                Niveles de Take Profit
+              </label>
+              <input
+                type="number"
+                min="1"
+                max="10"
+                value={formData.botStrategy.tpLevels}
+                onChange={(e) => setFormData({
+                  ...formData,
+                  botStrategy: { ...formData.botStrategy, tpLevels: parseInt(e.target.value) }
+                })}
+                className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">Número de niveles de TP para cada bot</p>
+            </div>
           </div>
 
-          {/* DEX & General */}
-          <div className="space-y-6">
-            <Card className="p-6">
-              <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">🔄 DEX Config (0x Swap)</h3>
-              <div className="space-y-4">
-                <InputField
-                  label="0x Swap API Key"
-                  value={formData.zeroExApiKey}
-                  onChange={(v: string) => setFormData({ ...formData, zeroExApiKey: v })}
-                  type="password"
-                />
-                <InputField
-                  label="Wallet Private Key"
-                  value={formData.dexConfig.walletPrivateKey}
-                  onChange={(v: string) => setFormData({ ...formData, dexConfig: { ...formData.dexConfig, walletPrivateKey: v } })}
-                  type="password"
-                />
-                <InputField
-                  label="RPC URL"
-                  value={formData.dexConfig.rpcUrl}
-                  onChange={(v: string) => setFormData({ ...formData, dexConfig: { ...formData.dexConfig, rpcUrl: v } })}
-                />
-              </div>
-            </Card>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-foreground mb-2">
+                % Cambio para TP
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                min="0.1"
+                max="10"
+                value={formData.botStrategy.tpPercent}
+                onChange={(e) => setFormData({
+                  ...formData,
+                  botStrategy: { ...formData.botStrategy, tpPercent: parseFloat(e.target.value) }
+                })}
+                className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">Porcentaje de cambio de precio para cada TP</p>
+            </div>
 
-            <Card className="p-6">
-              <h3 className="text-lg font-semibold mb-4">⚙️ Modo de Operación</h3>
-              <div className="space-y-4">
-                <div className="flex items-center gap-4">
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={formData.isAutoEnabled}
-                      onChange={(e) => setFormData({ ...formData, isAutoEnabled: e.target.checked })}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-green-600"></div>
-                    <span className="ml-3 text-sm font-medium text-foreground">Procesamiento Automático</span>
-                  </label>
-                </div>
+            <div>
+              <label className="block text-xs font-semibold text-foreground mb-2">
+                % Stop Loss
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                min="0.1"
+                max="10"
+                value={formData.botStrategy.slPercent}
+                onChange={(e) => setFormData({
+                  ...formData,
+                  botStrategy: { ...formData.botStrategy, slPercent: parseFloat(e.target.value) }
+                })}
+                className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">Porcentaje de caída para Stop Loss</p>
+            </div>
 
-                <div className="flex items-center gap-4">
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={formData.demoMode}
-                      onChange={(e) => setFormData({ ...formData, demoMode: e.target.checked })}
-                      className="sr-only peer"
-                    />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-primary/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary"></div>
-                    <span className="ml-3 text-sm font-medium text-foreground">Modo Demo (Simulación)</span>
-                  </label>
-                </div>
-              </div>
-              <p className="text-[10px] text-muted-foreground mt-3 italic">
-                * Si desactivas el procesamiento automático, no se recibirán nuevos mensajes ni se generarán señales. Los trades activos seguirán monitoreándose.
-              </p>
-            </Card>
+            <div>
+              <label className="block text-xs font-semibold text-foreground mb-2">
+                % Venta por TP
+              </label>
+              <input
+                type="number"
+                step="0.1"
+                min="1"
+                max="100"
+                value={formData.botStrategy.sellPercentPerTP}
+                onChange={(e) => setFormData({
+                  ...formData,
+                  botStrategy: { ...formData.botStrategy, sellPercentPerTP: parseFloat(e.target.value) }
+                })}
+                className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+              <p className="text-[10px] text-muted-foreground mt-1">Porcentaje a vender en cada nivel de TP</p>
+            </div>
+          </div>
+
+          <div className="p-3 bg-muted rounded-lg">
+            <p className="text-xs text-muted-foreground">
+              <strong>Ejemplo:</strong> Con 3 niveles de TP al 2% y 33.3% venta por nivel:
+              Compra a $100 → TP1: $102 (vende 33.3%) → TP2: $104 (vende 33.3%) → TP3: $106 (vende 33.4%)
+            </p>
           </div>
         </div>
-
-        {/* CEX Exchanges */}
-        <Card className="p-6">
-          <div className="flex justify-between items-center mb-6">
-            <h3 className="text-lg font-semibold flex items-center gap-2">💱 Exchanges Centralizados (CEX)</h3>
-            <Button onClick={addExchange} variant="outline" size="sm" className="flex items-center gap-1">
-              <Plus size={16} /> Añadir Exchange
-            </Button>
-          </div>
-
-          <div className="space-y-6">
-            {formData.exchanges.map((ex, index) => (
-              <div key={index} className="p-4 border border-border rounded-lg bg-muted/30 relative">
-                <button
-                  onClick={() => removeExchange(index)}
-                  className="absolute top-4 right-4 text-muted-foreground hover:text-destructive"
-                >
-                  <Trash2 size={18} />
-                </button>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                  <div>
-                    <label className="block text-xs font-semibold text-foreground mb-1">Exchange</label>
-                    <select
-                      value={ex.exchangeId}
-                      onChange={(e) => updateExchange(index, 'exchangeId', e.target.value)}
-                      className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground"
-                    >
-                      {CCXT_EXCHANGES.map(exchange => (
-                        <option key={exchange} value={exchange}>
-                          {exchange.charAt(0).toUpperCase() + exchange.slice(1)}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <InputField
-                    label="API Key"
-                    value={ex.apiKey}
-                    onChange={(v: string) => updateExchange(index, 'apiKey', v)}
-                    type="password"
-                  />
-                  <InputField
-                    label="API Secret"
-                    value={ex.secret}
-                    onChange={(v: string) => updateExchange(index, 'secret', v)}
-                    type="password"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <InputField
-                    label="Passphrase (OKX/KuCoin)"
-                    value={ex.password}
-                    onChange={(v: string) => updateExchange(index, 'password', v)}
-                    type="password"
-                  />
-                  <InputField
-                    label="UID"
-                    value={ex.uid}
-                    onChange={(v: string) => updateExchange(index, 'uid', v)}
-                  />
-                  <div className="flex items-end pb-2 gap-2">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={ex.isActive}
-                        onChange={(e) => updateExchange(index, 'isActive', e.target.checked)}
-                      />
-                      <span className="text-sm">Activo</span>
-                    </label>
-
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="ml-auto"
-                      onClick={async () => {
-                        if (!ex.apiKey || !ex.secret) {
-                          toast.error("API Key y Secret requeridos");
-                          return;
-                        }
-                        const loadingToast = toast.loading("Probando conexión...");
-                        try {
-                          // 1. Probar conexión básica
-                          const res = await fetch(`${CONFIG.API_BASE_URL}/test-connection`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(ex)
-                          });
-                          const data = await res.json();
-
-                          if (data.success) {
-                            // 2. Si es exitosa, intentar cargar tipos de mercados disponibles
-                            try {
-                              const marketsRes = await fetch(`${CONFIG.API_BASE_URL}/backtest/markets/${authUser?.openId}/${ex.exchangeId}`);
-                              const marketsData = await marketsRes.json();
-                              const marketsList = marketsData.markets || [];
-
-                              toast.dismiss(loadingToast);
-                              toast.success(
-                                <div>
-                                  <div className="font-bold">Conexión Exitosa</div>
-                                  <div className="text-xs mt-1">Mercados disponibles: {marketsList.join(', ') || 'Ninguno detectado'}</div>
-                                </div>
-                              );
-                            } catch (mError) {
-                              console.error("Error fetching markets for test:", mError);
-                              toast.dismiss(loadingToast);
-                              toast.success("Conexión Exitosa (No se pudieron cargar detalles de mercados)");
-                            }
-                          } else {
-                            toast.dismiss(loadingToast);
-                            toast.error("Error: " + data.message);
-                          }
-                        } catch (e: any) {
-                          toast.dismiss(loadingToast);
-                          toast.error("Error de red: " + e.message);
-                        }
-                      }}
-                    >
-                      Probar y Ver Mercados 🔌
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <Card className="p-6 mt-6">
-          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">🤖 Configuración de Bots de Señales</h3>
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-foreground mb-2">
-                  Máximo de Bots Activos
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="20"
-                  value={formData.botStrategy.maxActiveBots}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    botStrategy: { ...formData.botStrategy, maxActiveBots: parseInt(e.target.value) }
-                  })}
-                  className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-                <p className="text-[10px] text-muted-foreground mt-1">Número máximo de bots que pueden estar activos simultáneamente</p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-foreground mb-2">
-                  Niveles de Take Profit
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="10"
-                  value={formData.botStrategy.tpLevels}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    botStrategy: { ...formData.botStrategy, tpLevels: parseInt(e.target.value) }
-                  })}
-                  className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-                <p className="text-[10px] text-muted-foreground mt-1">Número de niveles de TP para cada bot</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-xs font-semibold text-foreground mb-2">
-                  % Cambio para TP
-                </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  min="0.1"
-                  max="10"
-                  value={formData.botStrategy.tpPercent}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    botStrategy: { ...formData.botStrategy, tpPercent: parseFloat(e.target.value) }
-                  })}
-                  className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-                <p className="text-[10px] text-muted-foreground mt-1">Porcentaje de cambio de precio para cada TP</p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-foreground mb-2">
-                  % Stop Loss
-                </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  min="0.1"
-                  max="10"
-                  value={formData.botStrategy.slPercent}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    botStrategy: { ...formData.botStrategy, slPercent: parseFloat(e.target.value) }
-                  })}
-                  className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-                <p className="text-[10px] text-muted-foreground mt-1">Porcentaje de caída para Stop Loss</p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-foreground mb-2">
-                  % Venta por TP
-                </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  min="1"
-                  max="100"
-                  value={formData.botStrategy.sellPercentPerTP}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    botStrategy: { ...formData.botStrategy, sellPercentPerTP: parseFloat(e.target.value) }
-                  })}
-                  className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                />
-                <p className="text-[10px] text-muted-foreground mt-1">Porcentaje a vender en cada nivel de TP</p>
-              </div>
-            </div>
-
-            <div className="p-3 bg-muted rounded-lg">
-              <p className="text-xs text-muted-foreground">
-                <strong>Ejemplo:</strong> Con 3 niveles de TP al 2% y 33.3% venta por nivel:
-                Compra a $100 → TP1: $102 (vende 33.3%) → TP2: $104 (vende 33.3%) → TP3: $106 (vende 33.4%)
-              </p>
-            </div>
-          </div>
-        </Card>
-      </div>
-    </SignalsKeiLayout>
+      </Card>
+    </div>
   );
 }

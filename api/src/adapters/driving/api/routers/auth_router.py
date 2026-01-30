@@ -11,7 +11,9 @@ from api.src.adapters.driven.database.mongodb_connection import get_database
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
 # JWT Configuration
-SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
+from api.config import Config
+SECRET_KEY = Config.JWT_SECRET
+print(f"[AUTH] JWT Secret prefix: {SECRET_KEY[:4]}... (len: {len(SECRET_KEY)})")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 365
 

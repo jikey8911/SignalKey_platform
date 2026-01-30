@@ -120,7 +120,9 @@ async def run_backtest(
     timeframe: str = "1h",
     use_ai: bool = True, # Default to True for ML backtest
     strategy: str = "auto", # Default to auto/neural
-    model_id: Optional[str] = None # Received from frontend
+    model_id: Optional[str] = None, # Received from frontend
+    initial_balance: float = 10000.0, # User configured initial balance
+    trade_amount: Optional[float] = None # User configured trade amount (DCA step)
 ):
     """
     Ejecuta un backtest con estrategia SMA o con IA
@@ -133,6 +135,8 @@ async def run_backtest(
         timeframe: Timeframe de las velas
         use_ai: Si True, usa IA; si False, usa estrategia SMA
         strategy: Estrategia de IA ("standard" o "sniper") si use_ai=True
+        initial_balance: Balance inicial del backtest
+        trade_amount: Monto por operación (override)
     
     Returns:
         Resultados del backtest con métricas
@@ -189,7 +193,9 @@ async def run_backtest(
             strategy=strategy,
             user_id=user_id,
             exchange_id=exchange_id,
-            model_id=model_id
+            model_id=model_id,
+            initial_balance=initial_balance,
+            trade_amount=trade_amount
         )
         
         return results
@@ -268,7 +274,8 @@ async def get_ml_models():
         Lista de modelos con sus metadatos (símbolo, accuracy, última fecha de entrenamiento)
     """
     try:
-        ml_service = MLService()
+        from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+        ml_service = MLService(exchange_adapter=ccxt_service)
         models = await ml_service.get_models_status()
         
         logger.info(f"Found {len(models)} trained ML models")

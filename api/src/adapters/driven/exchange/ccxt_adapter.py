@@ -214,6 +214,75 @@ class CcxtAdapter(IExchangePort):
         df.set_index('timestamp', inplace=True)
         return df
 
+    async def get_public_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False, exchange_id: str = "binance") -> pd.DataFrame:
+        """
+        Fetch historical data using PUBLIC API (no credentials required).
+        This method creates a temporary public-only connection for fetching OHLCV data.
+        Ideal for ML training where authentication is not needed.
+        
+        Args:
+            symbol: Trading pair symbol (e.g., 'BTC/USDT')
+            timeframe: Candle timeframe (e.g., '1h', '4h', '1d')
+            limit: Number of candles to fetch
+            use_random_date: If True, fetches data from a random historical period
+            exchange_id: Exchange to use (default: 'binance')
+        
+        Returns:
+            DataFrame with OHLCV data
+        """
+        try:
+            # Create temporary public instance
+            exchange_class = getattr(ccxt, exchange_id.lower())
+            public_instance = exchange_class({
+                'enableRateLimit': True,
+                'options': {
+                    'defaultType': 'spot',
+                    'fetchCurrencies': False
+                }
+            })
+            
+            # Apply Windows DNS Fix
+            session = self._create_custom_session()
+            if session:
+                public_instance.session = session
+            
+            # OKX Specifics
+            if exchange_id.lower() == 'okx':
+                public_instance.has['fetchCurrencies'] = False
+            
+            try:
+                # Calculate start time
+                if use_random_date:
+                    max_days_back = 730
+                    min_days_back = 365
+                    random_offset = random.randint(min_days_back, max_days_back)
+                    end_date = datetime.utcnow() - timedelta(days=random_offset)
+                    since_dt = end_date - timedelta(hours=limit)
+                    logger.info(f"🎲 Public API: Random training period ending: {end_date.strftime('%Y-%m-%d')}")
+                    since_ts = int(since_dt.timestamp() * 1000)
+                else:
+                    since_ts = None  # Fetch most recent
+
+                # Fetch OHLCV data
+                ohlcv = await public_instance.fetch_ohlcv(symbol, timeframe, since=since_ts, limit=limit)
+                
+                # Convert to DataFrame
+                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                df.set_index('timestamp', inplace=True)
+                
+                logger.info(f"✅ Public API: Fetched {len(df)} candles for {symbol} from {exchange_id}")
+                return df
+                
+            finally:
+                # Always close the temporary instance
+                await public_instance.close()
+                
+        except Exception as e:
+            logger.error(f"❌ Public API: Error fetching data for {symbol} from {exchange_id}: {e}")
+            # Return empty DataFrame on error
+            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+
     # --- Legacy / Helper Methods (kept for compatibility during transition) ---
 
     async def get_historical_ohlcv(self, symbol: str, exchange_id: str = None, timeframe: str = '1h', days_back: int = 365, use_random_date: bool = False) -> list:

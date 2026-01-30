@@ -9,7 +9,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/ml", tags=["ml"])
 
 # Inyección de dependencia correcta
-ml_service = MLService(exchange_adapter=CEXService())
+# Avoid global instantiation that might fail during import
+# ml_service will be initialized inside endpoints or via Depends
 
 class TrainRequest(BaseModel):
     symbol: str
@@ -46,11 +47,9 @@ async def train_all_strategies_endpoint(request: BatchTrainRequest, background_t
         # Resolve dependencies inside endpoint to ensure correct context
         # Ideally use FastAPI depends, but for now we create fresh instances or import from main if possible.
         # However, to avoid circular imports with main, we use fresh instantiation but configured correctly.
-        from api.main import ccxt_adapter, cex_service 
-        # But importing from api.main inside router might be cyclic if main imports routers.
-        # Fallback: Create generic instances. Since user_id is passed, logical flow works.
+        import api.main as main
         logging.info(f"🔧 Initializing MLService for User: {request.user_id}")
-        service = MLService(exchange_adapter=CEXService(ccxt_adapter=ccxt_adapter))
+        service = MLService(exchange_adapter=main.ccxt_adapter)
         
         background_tasks.add_task(
             service.train_all_strategies, 
@@ -81,30 +80,26 @@ async def get_models():
     models = await MLService(exchange_adapter=CEXService()).get_available_models()
     return [{"id": m, "status": "Ready", "type": "RandomForest"} for m in models]
 
-@router.post("/train-selector")
-async def train_selector(request: BatchTrainRequest, background_tasks: BackgroundTasks):
+@router.get("/strategies")
+async def get_available_strategies():
     """
-    Entrena el Modelo Selector (Meta-Learning) de forma manual e independiente.
-    Este modelo aprende a elegir la mejor estrategia basándose en condiciones de mercado.
+    Retorna la lista de estrategias disponibles desde api/strategies.
+    Útil para mostrar en el inventario .pkl del frontend.
     """
     try:
-        from api.main import ccxt_adapter
-        service = MLService(exchange_adapter=CEXService(ccxt_adapter=ccxt_adapter))
+        from api.strategies import load_strategies
+        strategies_dict, strategies_list = load_strategies()
         
-        background_tasks.add_task(
-            service.train_selector_model,
-            request.symbols,
-            request.timeframe,
-            request.days,
-            request.user_id
-        )
+        # Return list of strategy names
+        strategy_names = [s.__class__.__name__ for s in strategies_list]
         return {
-            "status": "started", 
-            "message": f"Selector training started using {len(request.symbols)} symbols."
+            "strategies": strategy_names,
+            "count": len(strategy_names)
         }
     except Exception as e:
-        logger.error(f"Error starting selector training: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error loading strategies: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load strategies: {str(e)}")
+
 
 @router.post("/predict")
 async def predict_strategy(request: PredictRequest):

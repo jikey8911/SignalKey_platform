@@ -83,6 +83,10 @@ app.add_middleware(
 from api.src.adapters.driven.exchange.ccxt_adapter import CcxtAdapter
 ccxt_adapter = CcxtAdapter(db_adapter=db) # Initialize Adapter with DB
 
+# Inyección de dependencia para servicios globalmente accesibles
+from api.config import Config
+logger.info(f"[INIT] JWT Secret prefix: {Config.JWT_SECRET[:4]}... (len: {len(Config.JWT_SECRET)})")
+
 ai_service = AIService()
 # Inject configured adapter into CEXService
 cex_service = CEXService(ccxt_adapter=ccxt_adapter) 

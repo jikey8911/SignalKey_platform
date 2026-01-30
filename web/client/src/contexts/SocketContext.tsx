@@ -27,21 +27,20 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
         // Evitar crear múltiples conexiones si ya existe una activa o conectando
         if (socketRef.current && (socketRef.current.readyState === WebSocket.OPEN || socketRef.current.readyState === WebSocket.CONNECTING)) {
-            console.log('WebSocket ya está conectado o conectando, evitando duplicado');
             return;
         }
 
-        // Determinar la URL del WebSocket basándose en la ubicación actual
+        // Determinar la URL del WebSocket
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        // Usar CONFIG.WS_BASE_URL pero asegurar que el protocolo sea correcto si es wss
         const wsBase = CONFIG.WS_BASE_URL.replace(/^ws(s)?:/, protocol);
         const wsUrl = `${wsBase}/ws/${user.openId}`;
 
-        console.log(`Intentando conectar a WebSocket Global: ${wsUrl}`);
+        console.log(`[WebSocket] Intentando conectar: ${wsUrl}`);
         const socket = new WebSocket(wsUrl);
+        socketRef.current = socket;
 
         socket.onopen = () => {
-            console.log('WebSocket Global Conectado');
+            console.log('[WebSocket] Conectado');
             setIsConnected(true);
             if (reconnectTimeoutRef.current) {
                 clearTimeout(reconnectTimeoutRef.current);
@@ -54,21 +53,19 @@ export function SocketProvider({ children }: { children: ReactNode }) {
                 const message: SocketMessage = JSON.parse(event.data);
                 setLastMessage(message);
             } catch (e) {
-                console.error('Error parseando mensaje de WebSocket Global', e);
+                console.error('[WebSocket] Error parseando mensaje', e);
             }
         };
 
-        socket.onclose = () => {
-            console.log('WebSocket Global Desconectado');
+        socket.onclose = (event) => {
+            console.log(`[WebSocket] Desconectado: ${event.code} ${event.reason}`);
             setIsConnected(false);
 
-            // Check if this socket is still the current one. If socketRef.current is null, it means we closed it intentionally.
-            if (socketRef.current === socket) {
+            // Solo reconectar si el cierre no fue intencional y el usuario sigue autenticado
+            if (socketRef.current === socket && user?.openId) {
                 socketRef.current = null;
-
-                // Solo reconectar si el usuario sigue autenticado
-                if (user?.openId && !reconnectTimeoutRef.current) {
-                    console.log('Programando reconexión en 5 segundos...');
+                if (!reconnectTimeoutRef.current) {
+                    console.log('[WebSocket] Programando reconexión en 5s...');
                     reconnectTimeoutRef.current = setTimeout(() => {
                         reconnectTimeoutRef.current = null;
                         connect();
@@ -78,11 +75,9 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         };
 
         socket.onerror = (error) => {
-            console.error('WebSocket Global Error:', error);
+            console.error('[WebSocket] Error:', error);
             socket.close();
         };
-
-        socketRef.current = socket;
     }, [user?.openId]);
 
     useEffect(() => {
@@ -91,21 +86,19 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         }
 
         return () => {
-            // Limpiar timeout de reconexión
             if (reconnectTimeoutRef.current) {
                 clearTimeout(reconnectTimeoutRef.current);
                 reconnectTimeoutRef.current = null;
             }
 
-            // Cerrar socket si existe
             if (socketRef.current) {
-                console.log('Cerrando WebSocket Global por desmontaje');
+                console.log('[WebSocket] Cerrando por limpieza');
                 const socketToClose = socketRef.current;
-                socketRef.current = null; // Mark as null BEFORE closing so onclose knows it was intentional
+                socketRef.current = null;
                 socketToClose.close();
             }
         };
-    }, [user?.openId]); // Removido 'connect' de las dependencias para evitar ciclos
+    }, [user?.openId]);
 
     const sendMessage = useCallback((message: any) => {
         if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/Badge';
-import { BrainCircuit, Database, Play, History, CheckCircle2, RotateCcw, Terminal, Plus } from 'lucide-react';
+import { BrainCircuit, Database, Play, History, CheckCircle2, RotateCcw, Terminal, Plus, Trophy } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSocketContext } from '@/contexts/SocketContext';
 import { useAuth } from '@/_core/hooks/useAuth';
@@ -21,7 +21,7 @@ export default function Training() {
     const [selectedSymbols, setSelectedSymbols] = useState<string[]>(['BTC/USDT', 'ETH/USDT']); // Defaults
 
     const [loading, setLoading] = useState(false);
-    const [models, setModels] = useState(['StatisticalMeanRev', 'TrendMaster_Agnostic']);
+    const [models, setModels] = useState<string[]>([]);
     const [logs, setLogs] = useState<string[]>([]);
 
     // Socket integration
@@ -48,6 +48,27 @@ export default function Training() {
             scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
         }
     }, [logs]);
+
+    // Fetch available strategies from backend
+    useEffect(() => {
+        const fetchStrategies = async () => {
+            try {
+                const res = await fetch('http://localhost:8000/ml/strategies');
+                if (res.ok) {
+                    const data = await res.json();
+                    setModels(data.strategies || []);
+                } else {
+                    console.error('Failed to fetch strategies');
+                    // Fallback to default
+                    setModels(['StatisticalMeanReversion', 'TrendEma', 'RsiReversion']);
+                }
+            } catch (e) {
+                console.error('Error fetching strategies:', e);
+                setModels(['StatisticalMeanReversion', 'TrendEma', 'RsiReversion']);
+            }
+        };
+        fetchStrategies();
+    }, []);
 
     // 1. Fetch Exchanges on Mount
     useEffect(() => {
@@ -162,12 +183,13 @@ export default function Training() {
     return (
         <div className="p-6 space-y-6 animate-in fade-in duration-500">
             <div className="flex justify-between items-center">
-                <h1 className="text-3xl font-bold tracking-tighter">Training Center sp4</h1>
+                <h1 className="text-3xl font-bold tracking-tighter">Training Center</h1>
                 <Badge variant="outline" className="bg-blue-500/5 text-blue-500 border-blue-500/20">
                     IA Engine Agnostic
                 </Badge>
             </div>
 
+            {/* Main Training Section */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <Card className="lg:col-span-2 border-white/5 bg-slate-900/40">
                     <CardHeader>
@@ -229,10 +251,10 @@ export default function Training() {
                                 ))}
                             </div>
 
-                            {/* Available Symbols List (Limited view) */}
+                            {/* Available Symbols List */}
                             <div className="pt-2">
                                 <label className="text-[10px] font-bold uppercase text-slate-500 mb-2 block">Agregar Símbolo</label>
-                                <div className="h-32 overflow-y-auto pr-2 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
+                                <div className="h-48 overflow-y-auto pr-2 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
                                     {availableSymbols.filter(s => !selectedSymbols.includes(s)).map(s => (
                                         <button
                                             key={s}
@@ -256,7 +278,7 @@ export default function Training() {
                             <div className="text-[10px] font-bold uppercase text-slate-500 mb-2 flex items-center gap-2">
                                 <Terminal className="w-3 h-3" /> Live Real-Time Logs
                             </div>
-                            <div ref={scrollRef} className="h-40 overflow-y-auto bg-slate-950 rounded-xl p-3 border border-white/5 font-mono text-[10px] text-slate-300 space-y-1 shadow-inner">
+                            <div ref={scrollRef} className="h-64 overflow-y-auto bg-slate-950 rounded-xl p-3 border border-white/5 font-mono text-[10px] text-slate-300 space-y-1 shadow-inner">
                                 {logs.length === 0 ? (
                                     <span className="text-slate-600 italic">Waiting for training sequence...</span>
                                 ) : (
@@ -270,22 +292,34 @@ export default function Training() {
                     </CardContent>
                 </Card>
 
-                <Card className="border-white/5 bg-slate-900/40">
-                    <CardHeader>
-                        <CardTitle className="text-sm flex items-center gap-2 opacity-70">
-                            <History className="w-4 h-4 text-blue-500" /> Inventario .pkl
-                        </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-3">
-                        {models.map(m => (
-                            <div key={m} className="p-3 border border-white/5 rounded-xl bg-slate-950/50 flex justify-between items-center group hover:border-blue-500/30 transition-all">
-                                <span className="text-xs font-mono font-bold text-slate-400 group-hover:text-blue-400">{m}.pkl</span>
-                                <CheckCircle2 className="w-3 h-3 text-green-500" />
-                            </div>
-                        ))}
-                    </CardContent>
-                </Card>
+                <div className="space-y-6">
+                    <Card className="border-white/5 bg-slate-900/40">
+                        <CardHeader>
+                            <CardTitle className="text-sm flex items-center gap-2 opacity-70">
+                                <History className="w-4 h-4 text-blue-500" /> Inventario .pkl
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                            {models.map(m => (
+                                <div key={m} className="p-3 border border-white/5 rounded-xl bg-slate-950/50 flex justify-between items-center group hover:border-blue-500/30 transition-all">
+                                    <span className="text-xs font-mono font-bold text-slate-400 group-hover:text-blue-400">{m}.pkl</span>
+                                    <CheckCircle2 className="w-3 h-3 text-green-500" />
+                                </div>
+                            ))}
+                        </CardContent>
+                    </Card>
+
+                    <Card className="border-white/5 bg-gradient-to-br from-blue-600/10 to-transparent">
+                        <CardHeader>
+                            <CardTitle className="text-sm opacity-70">Info</CardTitle>
+                        </CardHeader>
+                        <CardContent className="text-xs text-slate-500 leading-relaxed">
+                            Los modelos entrenados se guardan localmente para ser utilizados en el Backtest Tournament y en los Bots en vivo.
+                            Se recomienda entrenar con al menos 60 días de datos para mayor robustez.
+                        </CardContent>
+                    </Card>
+                </div>
             </div>
         </div>
-    );
+    )
 }

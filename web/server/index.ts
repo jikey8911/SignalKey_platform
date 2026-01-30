@@ -8,6 +8,8 @@ import { appRouter } from "./routers";
 import { createContext } from "./lib/context";
 import { serveStatic, setupVite } from "./lib/vite";
 
+const BACKEND_API_URL = process.env.INTERNAL_API_URL || process.env.BACKEND_API_URL || "http://localhost:8000";
+
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
     const server = net.createServer();
@@ -64,8 +66,16 @@ async function startServer() {
     if (req.url.startsWith("/trpc")) {
       return next();
     }
+
+    // Log the request for debugging
+    console.log(`[Proxy] ${req.method} /api${req.url} -> ${BACKEND_API_URL}${req.url}`);
+
     // Proxy all other /api requests to backend
-    proxy.web(req, res);
+    // req.url already has /api stripped by Express
+    proxy.web(req, res, {
+      target: BACKEND_API_URL,
+      changeOrigin: true,
+    });
   });
 
   // Configure body parser AFTER proxy (only for non-proxied routes)
