@@ -347,29 +347,22 @@ class CEXService:
             logger.error(f"Error fetching positions from {exchange_id or 'active exchange'}: {e}")
             return []
 
-    async def get_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False) -> Any:
+    async def get_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False, user_id: str = "default_user") -> Any:
         """
         Obtiene datos históricos y los retorna como DataFrame para uso de MLService.
         Adaptador que conecta la capa de Aplicación con Infraestructura (CCXT).
+        Ahora soporta user_id para cargar configuración específica del usuario o fallback a sistema.
         """
         import pandas as pd
         try:
-            # Usar instancia pública por defecto para datos históricos
-            # Ojo: ccxt_service.get_historical_ohlcv maneja el fetch
-            ohlcv = await self.ccxt_provider.get_historical_ohlcv(
+            # Usar directamente el método optimizado del provider que ya devuelve DataFrame
+            return await self.ccxt_provider.get_historical_data(
                 symbol=symbol,
-                exchange_id="binance", # Default a binance para datos generales si no se especifica
                 timeframe=timeframe,
-                days_back=int(limit / 24) + 1, # Aprox dias
-                use_random_date=use_random_date
+                limit=limit,
+                use_random_date=use_random_date,
+                user_id=user_id
             )
-            
-            if not ohlcv:
-                return pd.DataFrame()
-            
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-            return df
         except Exception as e:
             logger.error(f"Error CEXService.get_historical_data for {symbol}: {e}")
             return pd.DataFrame()

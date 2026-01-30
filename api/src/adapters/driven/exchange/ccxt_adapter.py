@@ -243,29 +243,90 @@ class CcxtAdapter(IExchangePort):
             logger.error(f"Error in legacy get_historical_ohlcv: {e}")
             return []
 
-    async def get_symbols(self, exchange_id: str = "binance", market_type: str = 'spot') -> list:
-         # Use system client if possible, else create temp
-         client = await self._get_system_client()
-         if client.id == exchange_id:
-             await client.load_markets()
-             return [s for s, i in client.markets.items() if i.get('type') == market_type and i.get('active')]
-         else:
-             # Fallback to creating generic public instance if requested exchange differs from system active
-             return await self._create_temp_public_instance(exchange_id, market_type)
-    
-    async def _create_temp_public_instance(self, exchange_id, market_type='spot') -> list:
-        # One-off instance creation
+    async def get_markets(self, exchange_id: str) -> List[str]:
+        """
+        Retrieves available market types (spot, swap, future, margin) for a given exchange.
+        """
+        exchange_id = exchange_id.lower()
         try:
-             ex_class = getattr(ccxt, exchange_id)
-             inst = ex_class()
-             session = self._create_custom_session()
-             if session: inst.session = session
-             await inst.load_markets()
-             symbols = [s for s, i in inst.markets.items() if i.get('type') == market_type and i.get('active')]
-             await inst.close()
-             return symbols
-        except:
+            # If requesting the currently active system exchange, reuse it
+            if self._exchange_instance and self._current_exchange_id == exchange_id:
+                if not self._exchange_instance.markets:
+                    await self._exchange_instance.load_markets()
+                markets = self._exchange_instance.markets
+            else:
+                # Create temporary instance for metadata fetching
+                markets = await self._fetch_markets_temp(exchange_id)
+
+            if not markets:
+                return []
+
+            # Extract unique types
+            types = set()
+            for symbol, info in markets.items():
+                if info.get('active'):
+                    # CCXT standarizes types: spot, swap, future, margin, option
+                    m_type = info.get('type')
+                    if info.get('spot'): m_type = 'spot' 
+                    if info.get('swap'): m_type = 'swap'
+                    if info.get('future'): m_type = 'future'
+                    if m_type:
+                        types.add(m_type)
+            
+            return list(types)
+        except Exception as e:
+            logger.error(f"Error getting markets for {exchange_id}: {e}")
             return []
+
+    async def get_symbols(self, exchange_id: str, market_type: str) -> List[str]:
+        """
+        Retrieves active symbols for a specific exchange and market type.
+        """
+        exchange_id = exchange_id.lower()
+        try:
+            # Reuse system instance if possible
+            if self._exchange_instance and self._current_exchange_id == exchange_id:
+                if not self._exchange_instance.markets:
+                    await self._exchange_instance.load_markets()
+                markets = self._exchange_instance.markets
+            else:
+                markets = await self._fetch_markets_temp(exchange_id)
+
+            if not markets:
+                return []
+
+            symbols = []
+            for symbol, info in markets.items():
+                is_active = info.get('active')
+                m_type = info.get('type')
+                
+                # Normalizar tipos si es necesario (algunos exchanges usan flags booleanos)
+                if info.get('spot'): m_type = 'spot'
+                if info.get('swap'): m_type = 'swap'
+                if info.get('future'): m_type = 'future'
+
+                if is_active and m_type == market_type:
+                    symbols.append(symbol)
+            
+            return sorted(symbols)
+        except Exception as e:
+            logger.error(f"Error getting symbols for {exchange_id} {market_type}: {e}")
+            return []
+
+    async def _fetch_markets_temp(self, exchange_id: str) -> Dict:
+        """Helper to fetch markets using a temporary instance."""
+        exchange_id = exchange_id.lower()
+        try:
+            ex_class = getattr(ccxt, exchange_id)
+            async with ex_class() as inst:
+                session = self._create_custom_session()
+                if session: inst.session = session
+                
+                # Optimize loading if possible (some exchanges support fetching only markets)
+                return await inst.load_markets()
+        except Exception as e:
+            logger.error(f"Error fetching markets temp for {exchange_id}: {e}")
+            return {}
 
     async def close_all(self):
         if self._exchange_instance:

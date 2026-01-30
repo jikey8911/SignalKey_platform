@@ -22,31 +22,40 @@ class MLService:
         self.logger = logging.getLogger("MLService")
         self.models_dir = "api/data/models"
 
-    async def train_all_strategies(self, symbols: List[str], timeframe: str, days: int) -> Dict[str, Any]:
+    async def train_all_strategies(self, symbols: List[str], timeframe: str, days: int, user_id: str = "default_user") -> Dict[str, Any]:
         """
         Ciclo de entrenamiento masivo y agnóstico.
         Orquesta la obtención de datos + Entrenamiento de Modelos de Estategia + Entrenamiento del Selector.
         """
-        self.logger.info(f"Iniciando orquestación de entrenamiento para {len(symbols)} activos.")
-        
+        self.logger.info(f"Iniciando orquestación de entrenamiento para {len(symbols)} activos (User: {user_id}).")
+
+        # Callback para sockets
+        async def socket_callback(msg: str, type: str = "info"):
+            if user_id and user_id != "default_user":
+                from api.src.adapters.driven.notifications.socket_service import socket_service
+                await socket_service.emit_to_user(user_id, "training_log", {"message": msg, "type": type})
+
         # 1. Obtención de Datasets (con fechas aleatorias para robustez)
         data_collection = {}
         for symbol in symbols:
             try:
                 # Usamos random_date=True para el entrenamiento
-                df = await self.exchange.get_historical_data(symbol, timeframe, limit=2000, use_random_date=True)
+                df = await self.exchange.get_historical_data(symbol, timeframe, limit=2000, use_random_date=True, user_id=user_id)
                 if not df.empty:
                     data_collection[symbol] = df
                     self.logger.info(f"Dataset de entrenamiento listo para {symbol}: {len(df)} velas.")
+                    await socket_callback(f"📉 Loaded {len(df)} candles for {symbol}", "info")
             except Exception as e:
                 self.logger.error(f"No se pudo obtener datos para {symbol}: {e}")
+                await socket_callback(f"⚠️ Failed to load data for {symbol}: {e}", "warning")
 
         if not data_collection:
+            await socket_callback("❌ Training failed: No data collected.", "error")
             return {"status": "error", "message": "Fallo en la recolección de datos de entrenamiento."}
 
         try:
-            # 2. Entrenar Modelos de Estrategia Individualles
-            trained_models = self.trainer.train_all(data_collection)
+            # 2. Entrenar Modelos de Estrategia Individuales
+            trained_models = await self.trainer.train_all(data_collection, emit_callback=socket_callback)
             self.logger.info(f"Modelos de estrategia entrenados: {len(trained_models)}")
             
             # 3. Entrenar Meta-Modelo (Selector) - YA NO ES AUTOMÁTICO
@@ -60,20 +69,21 @@ class MLService:
             }
         except Exception as e:
             self.logger.error(f"Fallo crítico en el proceso de entrenamiento: {e}")
+            await socket_callback(f"❌ Critical Error: {e}", "error")
             return {"status": "error", "message": f"Error en motor ML: {str(e)}"}
 
-    async def train_selector_model(self, symbols: List[str], timeframe: str, days: int) -> Dict[str, Any]:
+    async def train_selector_model(self, symbols: List[str], timeframe: str, days: int, user_id: str = "default_user") -> Dict[str, Any]:
         """
         Entrena el Meta-Modelo (Selector) que aprende a elegir la mejor estrategia.
         Ahora es un proceso independiente que obtiene sus propios datos (randomizados).
         """
-        self.logger.info("Entrenando Modelo Selector (Meta-Learning)...")
+        self.logger.info(f"Entrenando Modelo Selector (User: {user_id})...")
         
         # 1. Obtener Datos Frescos (Randomizados)
         data_collection = {}
         for symbol in symbols:
             try:
-                df = await self.exchange.get_historical_data(symbol, timeframe, limit=2000, use_random_date=True)
+                df = await self.exchange.get_historical_data(symbol, timeframe, limit=2000, use_random_date=True, user_id=user_id)
                 if not df.empty:
                     data_collection[symbol] = df
             except Exception as e:

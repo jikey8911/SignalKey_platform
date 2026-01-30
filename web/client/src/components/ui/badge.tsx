@@ -2,13 +2,13 @@ import React from 'react';
 
 type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'success' | 'outline';
 
-interface BadgeProps {
+interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
   children: React.ReactNode;
   variant?: BadgeVariant;
   className?: string;
 }
 
-export const Badge: React.FC<BadgeProps> = ({ children, variant = 'default', className = '' }) => {
+export const Badge: React.FC<BadgeProps> = ({ children, variant = 'default', className = '', ...props }) => {
   const variants: Record<BadgeVariant, string> = {
     default: 'bg-blue-500/10 text-blue-500 border-blue-500/20',
     secondary: 'bg-slate-700 text-slate-300 border-white/5',
@@ -18,7 +18,7 @@ export const Badge: React.FC<BadgeProps> = ({ children, variant = 'default', cla
   };
 
   return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider ${variants[variant]} ${className}`}>
+    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold border uppercase tracking-wider ${variants[variant]} ${className}`} {...props}>
       {children}
     </span>
   );
