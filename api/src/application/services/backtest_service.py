@@ -216,21 +216,45 @@ class BacktestService:
                 df_processed.loc[valid_idx, 'ai_signal'] = model.predict(X)
                 df_processed['ai_signal'] = df_processed['ai_signal'].fillna(0)
 
+                previous_signal = None
+                active_trading = False
+
                 for timestamp, row in df_processed.iterrows():
                     price = row['close']
                     signal = row['ai_signal']
                     
+                    # --- Logic: Wait for First Flip ---
+                    if previous_signal is None:
+                        previous_signal = signal
+                        continue # Skip first candle to establish baseline
+
+                    if not active_trading:
+                        if signal != previous_signal:
+                            active_trading = True # Flip detected! Start trading.
+                        else:
+                            previous_signal = signal
+                            continue # Still same trend, ignore.
+                    
+                    # Update previous signal for next iteration if trading is active
+                    previous_signal = signal
+                    
+                    # --- Trading Logic ---
                     if signal == 1: # SIGNAL: BUY / LONG
                         # 1. Cerrar Cortos si existen
                         if short_amount > 0:
                             pnl = short_invested - (short_amount * price)
                             balance += short_invested + pnl
+                            avg_entry_price = short_invested / short_amount if short_amount > 0 else 0
+                            pnl_percent = (pnl / short_invested * 100) if short_invested > 0 else 0
+                            
                             trades.append({
                                 "time": timestamp.isoformat(),
-                                "type": "SELL", # En backtest lo mostramos como SELL para cerrar corto
+                                "type": "BUY", # Cerrar corto es COMPRAR (Buy to Cover)
                                 "price": price,
                                 "amount": short_amount,
                                 "pnl": round(pnl, 2),
+                                "pnl_percent": round(pnl_percent, 2),
+                                "avg_price": round(avg_entry_price, 2), # Mostrar promedio de entrada
                                 "label": "CLOSE_SHORT"
                             })
                             if pnl > 0: win_count += 1
@@ -240,6 +264,7 @@ class BacktestService:
                         
                         # 2. Abrir/Aumentar Largo (DCA)
                         if balance >= step_investment:
+                            is_dca = long_amount > 0
                             amount_to_buy = step_investment / price
                             long_amount += amount_to_buy
                             long_invested += step_investment
@@ -252,7 +277,7 @@ class BacktestService:
                                 "price": price,
                                 "amount": amount_to_buy,
                                 "avg_price": round(avg_entry, 2),
-                                "label": "OPEN_LONG_DCA"
+                                "label": "DCA_LONG" if is_dca else "OPEN_LONG"
                             })
                             
                     elif signal == 2: # SIGNAL: SELL / SHORT
@@ -260,12 +285,17 @@ class BacktestService:
                         if long_amount > 0:
                             pnl = (long_amount * price) - long_invested
                             balance += (long_amount * price)
+                            avg_entry_price = long_invested / long_amount if long_amount > 0 else 0
+                            pnl_percent = (pnl / long_invested * 100) if long_invested > 0 else 0
+                            
                             trades.append({
                                 "time": timestamp.isoformat(),
                                 "type": "SELL",
                                 "price": price,
                                 "amount": long_amount,
                                 "pnl": round(pnl, 2),
+                                "pnl_percent": round(pnl_percent, 2),
+                                "avg_price": round(avg_entry_price, 2), # Mostrar promedio de entrada
                                 "label": "CLOSE_LONG"
                             })
                             if pnl > 0: win_count += 1
@@ -275,6 +305,7 @@ class BacktestService:
                             
                         # 2. Abrir/Aumentar Corto (DCA)
                         if balance >= step_investment:
+                            is_dca = short_amount > 0
                             amount_to_short = step_investment / price
                             short_amount += amount_to_short
                             short_invested += step_investment
@@ -283,11 +314,11 @@ class BacktestService:
                             
                             trades.append({
                                 "time": timestamp.isoformat(),
-                                "type": "BUY", # En backtest lo mostramos como BUY para abrir corto
+                                "type": "SELL", # En backtest lo mostramos como SELL para abrir corto
                                 "price": price,
                                 "amount": amount_to_short,
                                 "avg_price": round(avg_entry, 2),
-                                "label": "OPEN_SHORT_DCA"
+                                "label": "DCA_SHORT" if is_dca else "OPEN_SHORT"
                             })
 
                 # Balance final total (valor de mercado de posiciones abiertas + cash)

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Play, BarChart3, TrendingUp, TrendingDown, Loader2, Trophy, BrainCircuit, ChevronRight } from 'lucide-react';
+import { Play, BarChart3, TrendingUp, TrendingDown, Loader2, Trophy, BrainCircuit, ChevronRight, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { Badge } from '@/components/ui/Badge';
@@ -21,6 +21,10 @@ interface Trade {
   price: number;
   side: 'BUY' | 'SELL';
   profit?: number;
+  amount?: number;
+  avg_price?: number;
+  label?: string;
+  pnl_percent?: number;
 }
 
 interface TournamentResult {
@@ -83,6 +87,9 @@ export default function Backtest() {
   const [results, setResults] = useState<BacktestResults | null>(null);
   const [initialBalance, setInitialBalance] = useState<number>(10000); // Default 10000
   const [tradeAmount, setTradeAmount] = useState<number>(1000); // Default 1000 for DCA step
+
+  // Symbol Search
+  const [symbolSearch, setSymbolSearch] = useState('');
 
   // Keep legacy virtual balance if needed but prioritize inputs for simulation
   const [virtualBalance, setVirtualBalance] = useState<number>(10000);
@@ -243,8 +250,29 @@ export default function Backtest() {
         time: (typeof t.time === 'string' ? new Date(t.time).getTime() : t.time * 1000),
         price: t.price,
         side: t.type as 'BUY' | 'SELL',
-        profit: t.pnl
+        profit: t.pnl,
+        amount: t.amount,
+        avg_price: t.avg_price,
+        label: t.label,
+        pnl_percent: t.pnl_percent
       })) || [];
+
+      // Sort trades: Newest first (Descending)
+      // Tie-breaker: OPEN/DCA events are "Newer" than CLOSE events in the same tick.
+      transformedTrades.sort((a, b) => {
+        if (b.time !== a.time) {
+          return b.time - a.time;
+        }
+        // Same time: Determine sequence
+        // We want [OPEN, CLOSE] order in the table (Top to Bottom)
+        // implying OPEN is newer than CLOSE.
+        const isCloseA = a.label?.includes('CLOSE') || false;
+        const isCloseB = b.label?.includes('CLOSE') || false;
+
+        if (isCloseA && !isCloseB) return 1; // A (Close) is Older -> Move down (Positive index)
+        if (!isCloseA && isCloseB) return -1; // B (Close) is Older -> Move down
+        return 0;
+      });
 
       const candles: Candle[] = data.chart_data?.map((c: any) => ({
         time: c.time * 1000,
@@ -490,7 +518,7 @@ export default function Backtest() {
               <select
                 value={selectedExchange}
                 onChange={(e) => setSelectedExchange(e.target.value)}
-                className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
               >
                 <option value="">Seleccionar exchange</option>
                 {exchanges.map((ex: Exchange) => (
@@ -516,7 +544,7 @@ export default function Backtest() {
                 value={selectedMarket}
                 onChange={(e) => setSelectedMarket(e.target.value)}
                 disabled={!selectedExchange || markets.length === 0}
-                className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
               >
                 {markets.map((market: string) => (
                   <option key={market} value={market}>
@@ -534,7 +562,7 @@ export default function Backtest() {
             <select
               value={timeframe}
               onChange={(e) => setTimeframe(e.target.value)}
-              className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+              className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
             >
               <option value="1m">1 minuto</option>
               <option value="5m">5 minutos</option>
@@ -549,9 +577,21 @@ export default function Backtest() {
         {/* Symbols List */}
         {selectedExchange && selectedMarket && (
           <div className="mb-6">
-            <label className="block text-sm font-semibold text-foreground mb-2">
-              Símbolos Disponibles
-            </label>
+            <div className="flex justify-between items-center mb-2">
+              <label className="block text-sm font-semibold text-foreground">
+                Símbolos Disponibles
+              </label>
+              <div className="flex items-center space-x-2">
+                <Search size={16} className="text-muted-foreground" />
+                <input
+                  type="text"
+                  placeholder="Buscar símbolo..."
+                  value={symbolSearch}
+                  onChange={(e) => setSymbolSearch(e.target.value)}
+                  className="px-3 py-1 text-sm border border-slate-700 rounded-md bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary w-40"
+                />
+              </div>
+            </div>
             {loadingSymbols ? (
               <div className="flex items-center justify-center gap-2 p-8 border border-border rounded-lg bg-background">
                 <Loader2 className="animate-spin" size={24} />
@@ -573,10 +613,10 @@ export default function Backtest() {
                     </tr>
                   </thead>
                   <tbody>
-                    {symbols.map((sym: Symbol) => (
+                    {symbols.filter(s => s.symbol.toLowerCase().includes(symbolSearch.toLowerCase())).map((sym: Symbol) => (
                       <tr
                         key={sym.symbol}
-                        className="border-b border-border hover:bg-muted/50 cursor-pointer"
+                        className="border-b border-border hover:bg-muted/50 cursor-pointer text-foreground"
                         onClick={() => {
                           setSelectedSymbol(sym.symbol);
                           setSymbol(sym.symbol);
@@ -615,7 +655,7 @@ export default function Backtest() {
             onChange={(e) => setDays(parseInt(e.target.value))}
             min="1"
             max="365"
-            className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+            className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
           />
         </div>
 
@@ -629,7 +669,7 @@ export default function Backtest() {
               type="number"
               value={initialBalance}
               onChange={(e) => setInitialBalance(parseFloat(e.target.value) || 0)}
-              className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+              className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
             />
           </div>
           <div>
@@ -640,7 +680,7 @@ export default function Backtest() {
               type="number"
               value={tradeAmount}
               onChange={(e) => setTradeAmount(parseFloat(e.target.value) || 0)}
-              className="w-full px-4 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+              className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
             />
           </div>
         </div>
@@ -835,9 +875,12 @@ export default function Backtest() {
                 <thead className="border-b border-border text-xs uppercase text-muted-foreground">
                   <tr>
                     <th className="text-left py-2 px-4 font-bold">Tipo</th>
-                    <th className="text-left py-2 px-4 font-bold">Precio</th>
-                    <th className="text-left py-2 px-4 font-bold">Hora</th>
-                    <th className="text-right py-2 px-4 font-bold">Profit %</th>
+                    <th className="text-left py-2 px-4 font-bold">Acción</th>
+                    <th className="text-right py-2 px-4 font-bold">Cantidad</th>
+                    <th className="text-right py-2 px-4 font-bold">Precio Ejecución</th>
+                    <th className="text-right py-2 px-4 font-bold">Precio Entrada</th>
+                    <th className="text-right py-2 px-4 font-bold">Hora</th>
+                    <th className="text-right py-2 px-4 font-bold">Profit</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -857,13 +900,25 @@ export default function Backtest() {
                           <span className="font-semibold">{trade.side}</span>
                         </div>
                       </td>
-                      <td className="py-3 px-4 font-mono font-medium">${trade.price.toFixed(2)}</td>
-                      <td className="py-3 px-4 text-muted-foreground">
+                      <td className="py-3 px-4 text-xs font-mono text-muted-foreground">{trade.label || '-'}</td>
+                      <td className="py-3 px-4 text-right font-mono">{trade.amount?.toFixed(4) || '-'}</td>
+                      <td className="py-3 px-4 text-right font-mono font-medium">${trade.price.toFixed(2)}</td>
+                      <td className="py-3 px-4 text-right font-mono text-muted-foreground">{trade.avg_price ? `$${trade.avg_price.toFixed(2)}` : '-'}</td>
+                      <td className="py-3 px-4 text-right text-muted-foreground">
                         {new Date(trade.time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         <span className="ml-2 text-[10px] opacity-70">{new Date(trade.time).toLocaleDateString()}</span>
                       </td>
                       <td className={`py-3 px-4 text-right font-bold ${trade.profit !== undefined ? (trade.profit >= 0 ? 'text-green-500' : 'text-red-500') : ''}`}>
-                        {trade.profit !== undefined ? `${trade.profit >= 0 ? '+' : ''}${trade.profit.toFixed(2)}%` : '-'}
+                        {trade.profit !== undefined ? (
+                          <div className="flex flex-col items-end">
+                            <span>{trade.profit >= 0 ? '+' : ''}${trade.profit.toFixed(2)}</span>
+                            {trade.pnl_percent !== undefined && (
+                              <span className="text-[10px] opacity-80">
+                                ({trade.pnl_percent >= 0 ? '+' : ''}{trade.pnl_percent.toFixed(2)}%)
+                              </span>
+                            )}
+                          </div>
+                        ) : '-'}
                       </td>
                     </tr>
                   ))}
