@@ -39,6 +39,12 @@ class ExecutionEngine:
         config = await self.db.db["app_configs"].find_one({"key": "investment_amount"})
         amount = config['value'] if config else 10.0
 
+        # --- TASK 6.1: PROFIT GUARD ---
+        # Bloqueo de seguridad para evitar cerrar en pérdidas
+        if not await self._apply_profit_guard(bot_instance, signal, price):
+            return {"status": "blocked", "reason": "profit_guard"}
+        # -----------------------------
+
         execution_result = None
         if mode == 'simulated':
             execution_result = await self.simulator.execute_trade(bot_instance, signal, price, amount)
@@ -89,3 +95,30 @@ class ExecutionEngine:
             await self.socket.emit("live_execution_signal", event_payload)
             
         return execution_result or {"status": "executed", "details": execution_result}
+
+    async def _apply_profit_guard(self, bot_instance, signal, current_price):
+        """
+        Tarea 6.1: Profit Guard (Filtro de Seguridad)
+        Bloquea órdenes de venta real si no hay beneficio tras el DCA.
+        """
+        # Si es señal de COMPRA, siempre permitimos (DCA o Apertura)
+        if signal == BaseStrategy.SIGNAL_BUY:
+            return True
+            
+        # Si es señal de VENTA, verificamos rentabilidad
+        pos = bot_instance.get('position', {'qty': 0, 'avg_price': 0})
+        
+        # Solo aplica si estamos 'dentro' del mercado (qty > 0)
+        if pos.get('qty', 0) > 0 and signal == BaseStrategy.SIGNAL_SELL:
+            # Recuperar precio promedio
+            avg_price = pos.get('avg_price', 0)
+            if avg_price <= 0: return True # Prevención error div/0
+            
+            # Solo permitir venta si el precio actual > promedio + 0.2% comisión (Safety buffer)
+            min_exit = avg_price * 1.002
+            
+            if current_price < min_exit:
+                self.logger.warning(f"🛡️ Profit Guard: Blocked SELL for {bot_instance['symbol']} at {current_price}. Min required: {min_exit}")
+                return False # BLOQUEAR EJECUCIÓN
+                
+        return True # Permitir ejecución

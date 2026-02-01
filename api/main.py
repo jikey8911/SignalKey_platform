@@ -33,6 +33,11 @@ async def lifespan(app: FastAPI):
     try:
         await bot_manager.restart_all_bots(message_handler=process_signal_task)
         logger.info(f"Telegram Bot Manager started with {bot_manager.get_active_bots_count()} active bots")
+        
+        # --- TASK 6.2: Autotrade Recovery ---
+        from api.core.boot import startup_recovery
+        await startup_recovery(db, bot_manager=bot_manager)
+        # -----------------------------------
     except Exception as e:
         logger.error(f"Error starting Telegram Bot Manager: {e}")
 

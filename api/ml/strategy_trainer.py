@@ -86,6 +86,11 @@ class StrategyTrainer:
             # Combinación de datos de todos los símbolos (Entrenamiento Agnóstico)
             full_dataset = pd.concat(datasets)
             
+            # --- TASK 5.1: Contexto de Posición ---
+            # En lugar de usar los datos crudos, inyectamos el estado simulado
+            full_dataset = self._apply_position_context(full_dataset)
+            # -------------------------------------
+            
             # Selección de características (Features) - Dynamic
             # Enforce strict contract: Strategy MUST implement get_features
             features = strategy.get_features()
@@ -145,3 +150,51 @@ class StrategyTrainer:
         print(f"🏁 [StrategyTrainer] Training complete. Results: {results}")
         if emit_callback: await emit_callback("🏁 Training complete", "success")
         return results
+
+    def _apply_position_context(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Tarea 5.1: Simula una trayectoria de posición para que la IA aprenda 
+        que si el PnL es negativo, debe buscar un DCA o esperar.
+        """
+        # Evitar SettingWithCopyWarning
+        df = df.copy().reset_index(drop=True)
+        
+        # Inicializar columnas de estado
+        df['in_position'] = 0
+        df['current_pnl'] = 0.0
+        df['dca_count'] = 0
+        
+        pos_avg = 0.0
+        is_open = False
+        count = 0
+        
+        # Recorrido para etiquetado de contexto
+        # Comenzamos desde el índice 1 para tener historial
+        for i in range(1, len(df)):
+            # Lógica simplificada: Si la estrategia base (o label previo) fue COMPRA (1)
+            # Asumimos que la columna 'signal' ya viene pre-calculada por strategy.apply()
+            # y contiene las señales ideales de la estrategia base.
+            
+            prev_signal = df.iloc[i-1]['signal']
+            
+            # Apertura / DCA
+            if prev_signal == 1: 
+                is_open = True
+                count += 1
+                # Promediar precio
+                new_price = df.iloc[i]['close']
+                pos_avg = ((pos_avg * (count-1)) + new_price) / count
+                
+            if is_open:
+                df.at[i, 'in_position'] = 1
+                df.at[i, 'dca_count'] = count
+                if pos_avg > 0:
+                    df.at[i, 'current_pnl'] = (df.iloc[i]['close'] - pos_avg) / pos_avg
+                
+                # Cierre (Venta simulada)
+                if prev_signal == 2:
+                    is_open = False
+                    pos_avg = 0.0
+                    count = 0
+                    
+        return df

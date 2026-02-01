@@ -115,7 +115,9 @@ class BacktestService:
         exchange_id: str = "binance",
         model_id: Optional[str] = None,
         initial_balance: float = 10000.0,
-        trade_amount: Optional[float] = None
+        trade_amount: Optional[float] = None,
+        tp: float = 0.03,
+        sl: float = 0.02
     ) -> Dict[str, Any]:
         """
         Ejecuta un Backtest Tournament: evalúa todas las estrategias y devuelve 
@@ -239,6 +241,107 @@ class BacktestService:
                     
                     # Update previous signal for next iteration if trading is active
                     previous_signal = signal
+                    
+                    # --- Task 5.2: Simulación de Fidelis (Intra-vela High/Low) ---
+                    # Verificar TP/SL ANTES de procesar señales de cierre/apertura
+                    
+                    # 1. Chequeo para LONGs
+                    if long_amount > 0:
+                        avg_price = long_invested / long_amount
+                        # Take Profit (Sell at High)
+                        if row['high'] >= avg_price * (1 + tp):
+                            exit_price = avg_price * (1 + tp)
+                            pnl = (long_amount * exit_price) - long_invested
+                            balance += (long_amount * exit_price)
+                            pnl_percent = (pnl / long_invested * 100)
+                            
+                            trades.append({
+                                "time": timestamp.isoformat(),
+                                "type": "SELL",
+                                "price": exit_price,
+                                "amount": long_amount,
+                                "pnl": round(pnl, 2),
+                                "pnl_percent": round(pnl_percent, 2),
+                                "avg_price": round(avg_price, 2),
+                                "label": "TP_HIT_LONG"
+                            })
+                            if pnl > 0: win_count += 1
+                            else: loss_count += 1
+                            long_amount = 0
+                            long_invested = 0
+                            continue # Trade cerrado, saltar resto de lógica para esta vela
+
+                        # Stop Loss (Sell at Low)
+                        if row['low'] <= avg_price * (1 - sl):
+                            exit_price = avg_price * (1 - sl)
+                            pnl = (long_amount * exit_price) - long_invested
+                            balance += (long_amount * exit_price)
+                            pnl_percent = (pnl / long_invested * 100)
+                            
+                            trades.append({
+                                "time": timestamp.isoformat(),
+                                "type": "SELL",
+                                "price": exit_price,
+                                "amount": long_amount,
+                                "pnl": round(pnl, 2),
+                                "pnl_percent": round(pnl_percent, 2),
+                                "avg_price": round(avg_price, 2),
+                                "label": "SL_HIT_LONG"
+                            })
+                            if pnl > 0: win_count += 1
+                            else: loss_count += 1
+                            long_amount = 0
+                            long_invested = 0
+                            continue # Trade cerrado
+
+                    # 2. Chequeo para SHORTS
+                    if short_amount > 0:
+                        avg_price = short_invested / short_amount
+                        # Take Profit (Buy at Low) - Short gana si baja
+                        if row['low'] <= avg_price * (1 - tp):
+                            exit_price = avg_price * (1 - tp)
+                            pnl = short_invested - (short_amount * exit_price)
+                            balance += short_invested + pnl
+                            pnl_percent = (pnl / short_invested * 100)
+                            
+                            trades.append({
+                                "time": timestamp.isoformat(),
+                                "type": "BUY",
+                                "price": exit_price,
+                                "amount": short_amount,
+                                "pnl": round(pnl, 2),
+                                "pnl_percent": round(pnl_percent, 2),
+                                "avg_price": round(avg_price, 2),
+                                "label": "TP_HIT_SHORT"
+                            })
+                            if pnl > 0: win_count += 1
+                            else: loss_count += 1
+                            short_amount = 0
+                            short_invested = 0
+                            continue
+
+                        # Stop Loss (Buy at High) - Short pierde si sube
+                        if row['high'] >= avg_price * (1 + sl):
+                            exit_price = avg_price * (1 + sl)
+                            pnl = short_invested - (short_amount * exit_price)
+                            balance += short_invested + pnl
+                            pnl_percent = (pnl / short_invested * 100)
+                            
+                            trades.append({
+                                "time": timestamp.isoformat(),
+                                "type": "BUY",
+                                "price": exit_price,
+                                "amount": short_amount,
+                                "pnl": round(pnl, 2),
+                                "pnl_percent": round(pnl_percent, 2),
+                                "avg_price": round(avg_price, 2),
+                                "label": "SL_HIT_SHORT"
+                            })
+                            if pnl > 0: win_count += 1
+                            else: loss_count += 1
+                            short_amount = 0
+                            short_invested = 0
+                            continue
                     
                     # --- Trading Logic ---
                     if signal == BaseStrategy.SIGNAL_BUY: # SIGNAL: BUY / LONG
