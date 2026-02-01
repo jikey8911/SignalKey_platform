@@ -328,10 +328,34 @@ class BacktestService:
             
             previous_signal = signal
             
-            # --- Task 6.1: Validación de Mechas (High/Low) ---
+            # --- Task 6.1: Validación de Mechas (High/Low) - Pessimistic Approach ---
             # 1. Chequeo para LONGs
             if long_amount > 0:
                 avg_price = long_invested / long_amount
+                
+                # Check Stop Loss FIRST (Pessimistic: Assume we hit SL before TP if both in range)
+                if row['low'] <= avg_price * (1 - sl):
+                    exit_price = avg_price * (1 - sl)
+                    pnl = (long_amount * exit_price) - long_invested
+                    balance += (long_amount * exit_price)
+                    pnl_percent = (pnl / long_invested * 100)
+                    
+                    trades.append({
+                        "time": timestamp.isoformat(),
+                        "type": "SELL",
+                        "price": exit_price,
+                        "amount": long_amount,
+                        "pnl": round(pnl, 2),
+                        "pnl_percent": round(pnl_percent, 2),
+                        "avg_price": round(avg_price, 2),
+                        "label": "SL_HIT_LONG"
+                    })
+                    if pnl > 0: win_count += 1
+                    else: loss_count += 1
+                    long_amount = 0
+                    long_invested = 0
+                    continue 
+
                 # Take Profit (Sell at High)
                 if row['high'] >= avg_price * (1 + tp):
                     exit_price = avg_price * (1 + tp)
@@ -354,33 +378,34 @@ class BacktestService:
                     long_amount = 0
                     long_invested = 0
                     continue 
-
-                # Stop Loss (Sell at Low)
-                if row['low'] <= avg_price * (1 - sl):
-                    exit_price = avg_price * (1 - sl)
-                    pnl = (long_amount * exit_price) - long_invested
-                    balance += (long_amount * exit_price)
-                    pnl_percent = (pnl / long_invested * 100)
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "SELL",
-                        "price": exit_price,
-                        "amount": long_amount,
-                        "pnl": round(pnl, 2),
-                        "pnl_percent": round(pnl_percent, 2),
-                        "avg_price": round(avg_price, 2),
-                        "label": "SL_HIT_LONG"
-                    })
-                    if pnl > 0: win_count += 1
-                    else: loss_count += 1
-                    long_amount = 0
-                    long_invested = 0
-                    continue 
             
             # 2. Chequeo para SHORTS
             if short_amount > 0:
                 avg_price = short_invested / short_amount
+                
+                # Check Stop Loss FIRST (Buy at High)
+                if row['high'] >= avg_price * (1 + sl):
+                    exit_price = avg_price * (1 + sl)
+                    pnl = short_invested - (short_amount * exit_price)
+                    balance += short_invested + pnl
+                    pnl_percent = (pnl / short_invested * 100)
+                    
+                    trades.append({
+                        "time": timestamp.isoformat(),
+                        "type": "BUY",
+                        "price": exit_price,
+                        "amount": short_amount,
+                        "pnl": round(pnl, 2),
+                        "pnl_percent": round(pnl_percent, 2),
+                        "avg_price": round(avg_price, 2),
+                        "label": "SL_HIT_SHORT"
+                    })
+                    if pnl > 0: win_count += 1
+                    else: loss_count += 1
+                    short_amount = 0
+                    short_invested = 0
+                    continue
+
                 # Take Profit (Buy at Low)
                 if row['low'] <= avg_price * (1 - tp):
                     exit_price = avg_price * (1 - tp)
@@ -397,29 +422,6 @@ class BacktestService:
                         "pnl_percent": round(pnl_percent, 2),
                         "avg_price": round(avg_price, 2),
                         "label": "TP_HIT_SHORT"
-                    })
-                    if pnl > 0: win_count += 1
-                    else: loss_count += 1
-                    short_amount = 0
-                    short_invested = 0
-                    continue
-
-                # Stop Loss (Buy at High)
-                if row['high'] >= avg_price * (1 + sl):
-                    exit_price = avg_price * (1 + sl)
-                    pnl = short_invested - (short_amount * exit_price)
-                    balance += short_invested + pnl
-                    pnl_percent = (pnl / short_invested * 100)
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "BUY",
-                        "price": exit_price,
-                        "amount": short_amount,
-                        "pnl": round(pnl, 2),
-                        "pnl_percent": round(pnl_percent, 2),
-                        "avg_price": round(avg_price, 2),
-                        "label": "SL_HIT_SHORT"
                     })
                     if pnl > 0: win_count += 1
                     else: loss_count += 1

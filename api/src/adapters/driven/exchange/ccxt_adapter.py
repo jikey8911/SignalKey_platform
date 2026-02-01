@@ -192,8 +192,9 @@ class CcxtAdapter(IExchangePort):
             # For now relying on client initialization success
             
             symbol = analysis.symbol
-            side = analysis.signal.lower() # 'buy' or 'sell'
-            amount = analysis.amount
+            # Fix: Use 'decision' instead of 'signal' and 'parameters.amount'
+            side = analysis.decision.lower() if hasattr(analysis.decision, 'lower') else str(analysis.decision).lower()
+            amount = analysis.parameters.amount
             
             if not amount:
                  return TradeResult(success=False, error="Amount is zero")

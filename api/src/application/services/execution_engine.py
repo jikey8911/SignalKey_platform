@@ -48,45 +48,91 @@ class ExecutionEngine:
         execution_result = None
         if mode == 'simulated':
             execution_result = await self.simulator.execute_trade(bot_instance, signal, price, amount)
+            if execution_result:
+                execution_result["is_simulated"] = True
         else:
             side = 'buy' if signal == BaseStrategy.SIGNAL_BUY else 'sell'
             
-            # Using real_exchange (CCXTService) to place order.
-            # Need instance.
-            # config defaults?
-            # Guide code used `self.real_executor.create_order`. 
-            # My CCXTService requires `get_private_instance`.
-            # I will assume `real_exchange` here has been adapted or I must do the instance dance.
-            # Since User provided `CcxtAdapter` class in guide code with `create_order`, 
-            # I will assume I need to use `ccxt_service` but manage the instance creation.
-            # However, for simplicity and adherence, I will use the logic I created before but add the Socket emit.
-            
-            # Re-using previous approach for Real Execution + Socket Emit
-            
-            # ... (Real execution logic from previous step, but simplified/merged) ...
-            # Actually, to follow guide code strictly, maybe I should wrap this. 
-            # But I'll stick to the "Process" flow.
-            
-            # Fetch creds from somewhere (or assume env/config).
-            # I will use a placeholder or config lookup for real execution to match previous implementation
-            # investment_amount = amount
-            
-            # ... (Logic to get instance and execute) ...
-            # For now, to keep it clean and working with guide code flow:
+            # --- TASK 6.1: REAL EXECUTION ---
             try:
-                 # Minimal real execution stub if no creds
-                 pass
-            except Exception:
-                 pass
-            execution_result = {"status": "real_execution_placeholder"} # Placeholder until creds logic is robust
+                # 1. Prepare SignalAnalysis object for the adapter
+                from api.src.domain.entities.signal import SignalAnalysis, Decision, MarketType, TradingParameters
+                analysis = SignalAnalysis(
+                    symbol=symbol,
+                    decision=Decision.BUY if side == 'buy' else Decision.SELL,
+                    market_type=MarketType.SPOT, # Defaulting to SPOT for now
+                    confidence=0.9,
+                    reasoning=f"Automated Bot Execution: {bot_instance.get('strategy_id', 'unknown')}",
+                    parameters=TradingParameters(amount=amount)
+                )
+                
+                # 2. Execute via CCXT Adapter
+                # We pass user_id to load specific API keys
+                user_id_obj = bot_instance.get('user_id')
+                # If user_id is ObjectId, convert to string (though adapter handles it typically as str for config lookup)
+                user_id = str(user_id_obj) if user_id_obj else "default_user"
+                
+                trade_result = await self.real_exchange.execute_trade(analysis, user_id)
+                
+                if trade_result.success:
+                    execution_result = {
+                        "status": "executed",
+                        "price": trade_result.price,
+                        "amount": trade_result.amount,
+                        "pnl": 0, # PnL is unknown at entry
+                        "side": side,
+                        "order_id": trade_result.order_id,
+                        "is_simulated": False
+                    }
+                else:
+                    self.logger.error(f"Real execution failed: {trade_result.error}")
+                    execution_result = {"status": "failed", "reason": trade_result.error}
+            
+            except Exception as e:
+                self.logger.error(f"Critical error in real execution: {e}")
+                execution_result = {"status": "error", "reason": str(e)}
 
-        # --- TAREA 4.3: NOTIFICACIÓN EN TIEMPO REAL ---
-        if self.socket and execution_result:
+        # --- TASK 6.3: NOTIFICACIONES TELEGRAM ---
+        # Call Telegram Adapter to send alert
+        if execution_result and execution_result.get('status') in ['executed', 'closed']:
+            try:
+                # Lazy import to avoid circular dep
+                from api.src.adapters.driven.notifications.telegram_adapter import TelegramAdapter
+                from api.bot.telegram_bot_manager import bot_manager
+                
+                # Resolve User ID
+                user_id_obj = bot_instance.get('user_id')
+                user_id = str(user_id_obj) if user_id_obj else None
+                
+                # Get active bot for user
+                user_bot = bot_manager.get_user_bot(user_id) if user_id else None
+                
+                if user_bot:
+                    tg_adapter = TelegramAdapter(bot=user_bot, user_id=user_id)
+                    
+                    # Prepare data for alert
+                    alert_data = {
+                        "symbol": symbol,
+                        "side": execution_result.get('side', 'unknown'),
+                        "price": execution_result.get('price', price),
+                        "amount": execution_result.get('amount', amount),
+                        "pnl": execution_result.get('pnl', 0),
+                        "is_simulated": execution_result.get('is_simulated', False),
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    }
+                    
+                    # Send (Fire & Forget)
+                    asyncio.create_task(tg_adapter.send_trade_alert(alert_data))
+            except Exception as e:
+                self.logger.error(f"Error sending Telegram alert: {e}")
+
+        # --- TAREA 4.3: NOTIFICACIÓN EN TIEMPO REAL (Socket) ---
+        if self.socket and execution_result and execution_result.get('status') == 'executed':
             event_payload = {
-                "bot_id": bot_instance['id'],
+                "bot_id": str(bot_instance.get('_id', 'unknown')), # Ensure ID is string
                 "symbol": symbol,
                 "type": "LONG" if signal == BaseStrategy.SIGNAL_BUY else "SHORT",
-                "price": price,
+                "price": execution_result.get('price', price),
                 "timestamp": datetime.now().isoformat(),
                 "mode": mode,
                 "pnl_impact": execution_result.get('pnl', 0) 

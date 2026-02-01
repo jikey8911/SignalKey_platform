@@ -113,3 +113,19 @@ class ConfigRepository:
             {'$set': set_updates}
         )
         return result.modified_count > 0
+
+    async def update_telegram_credentials(self, user_id: str, api_id: str, api_hash: str, phone: str, session: str = None) -> bool:
+        """
+        Tarea 6.1: Repositorio de Credenciales Dinámicas
+        Actualiza específicamente las credenciales de Telegram del usuario.
+        """
+        updates = {
+            "telegramApiId": api_id,
+            "telegramApiHash": api_hash,
+            "telegramPhoneNumber": phone,
+            "telegramIsConnected": True
+        }
+        if session:
+            updates["telegramSessionString"] = session
+            
+        return await self.update_config(user_id, updates)

@@ -168,33 +168,46 @@ class StrategyTrainer:
         is_open = False
         count = 0
         
-        # Recorrido para etiquetado de contexto
-        # Comenzamos desde el índice 1 para tener historial
+        # Mapping signals to internal codes if needed, or assuming:
+        # 1 = BUY, 2 = SELL, 0 = HOLD
+        
+        # Iterar para construir el contexto histórico
         for i in range(1, len(df)):
-            # Lógica simplificada: Si la estrategia base (o label previo) fue COMPRA (1)
-            # Asumimos que la columna 'signal' ya viene pre-calculada por strategy.apply()
-            # y contiene las señales ideales de la estrategia base.
-            
             prev_signal = df.iloc[i-1]['signal']
+            current_close = df.iloc[i]['close']
             
-            # Apertura / DCA
-            if prev_signal == 1: 
-                is_open = True
-                count += 1
-                # Promediar precio
-                new_price = df.iloc[i]['close']
-                pos_avg = ((pos_avg * (count-1)) + new_price) / count
-                
+            # Gestión de estado basado en la señal PREVIA (simulando ejecución al cierre/apertura siguiente)
+            if prev_signal == 1: # BUY signal
+                if not is_open:
+                     # New Position
+                     is_open = True
+                     pos_avg = current_close
+                     count = 1
+                else:
+                     # DCA / Add to position
+                     # Simple average update for simulation
+                     total_val = (pos_avg * count) + current_close
+                     count += 1
+                     pos_avg = total_val / count
+            
+            elif prev_signal == 2: # SELL signal
+                if is_open:
+                    # Close Position
+                    is_open = False
+                    pos_avg = 0.0
+                    count = 0
+            
+            # Asignar estado actual a la fila (Features para el modelo en este paso)
             if is_open:
                 df.at[i, 'in_position'] = 1
                 df.at[i, 'dca_count'] = count
                 if pos_avg > 0:
-                    df.at[i, 'current_pnl'] = (df.iloc[i]['close'] - pos_avg) / pos_avg
-                
-                # Cierre (Venta simulada)
-                if prev_signal == 2:
-                    is_open = False
-                    pos_avg = 0.0
-                    count = 0
+                    # Calcular PnL No Realizado
+                    pnl = (current_close - pos_avg) / pos_avg
+                    df.at[i, 'current_pnl'] = pnl
+            else:
+                df.at[i, 'in_position'] = 0
+                df.at[i, 'current_pnl'] = 0.0
+                df.at[i, 'dca_count'] = 0
                     
         return df
