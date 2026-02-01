@@ -179,10 +179,73 @@ class CcxtAdapter(IExchangePort):
         pass 
 
     async def execute_trade(self, analysis: SignalAnalysis, user_id: str) -> TradeResult:
-        pass # To be implemented via private instance logic
+        """
+        Ejecuta una operación en el exchange configurado para el usuario/bot.
+        Soporta Multi-Exchange (Binance, OKX) dinámicamente.
+        """
+        try:
+            # 1. Obtener instancia privada (con credenciales) para el usuario
+            # Nota: _get_client_for_user carga las credenciales desde DB config
+            client = await self._get_client_for_user(user_id)
+            
+            # TODO: Add specific checks for keys presence
+            # For now relying on client initialization success
+            
+            symbol = analysis.symbol
+            side = analysis.signal.lower() # 'buy' or 'sell'
+            amount = analysis.amount
+            
+            if not amount:
+                 return TradeResult(success=False, error="Amount is zero")
+
+            logger.info(f"🚀 Executing REAL trade: {side.upper()} {symbol} Amt:{amount} via {client.id}")
+            
+            # 2. Ejecutar Orden (Market Order por simplicidad)
+            # En producción se usaría create_order con params específicos
+            order = await client.create_order(
+                symbol=symbol,
+                type='market',
+                side=side,
+                amount=amount
+            )
+            
+            # 3. Formatear resultado
+            # Extraer precio promedio y fee si disponible
+            avg_price = order.get('average') or order.get('price')
+            if not avg_price and order.get('fills'):
+                # Calcular promedio ponderado de fills
+                total_cost = sum(f['price'] * f['amount'] for f in order['fills'])
+                total_qty = sum(f['amount'] for f in order['fills'])
+                avg_price = total_cost / total_qty if total_qty > 0 else 0
+                
+            return TradeResult(
+                success=True,
+                order_id=order['id'],
+                price=avg_price,
+                amount=order['amount'],
+                timestamp=datetime.utcnow()
+            )
+            
+        except Exception as e:
+            logger.error(f"Error executing trade on {analysis.symbol}: {e}")
+            return TradeResult(success=False, error=str(e))
 
     async def fetch_open_orders(self, user_id: str, symbol: Optional[str] = None) -> List[Order]:
-        pass # To be implemented
+        try:
+            client = await self._get_client_for_user(user_id)
+            orders = await client.fetch_open_orders(symbol)
+            return [Order(
+                id=o['id'],
+                symbol=o['symbol'],
+                type=o['type'],
+                side=o['side'],
+                amount=o['amount'],
+                price=o['price'],
+                status=o['status']
+            ) for o in orders]
+        except Exception as e:
+             logger.error(f"Error fetching open orders for {user_id}: {e}")
+             return []
 
     async def get_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False, user_id: str = "default_user") -> pd.DataFrame:
         """
