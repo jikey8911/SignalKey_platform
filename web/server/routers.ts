@@ -17,7 +17,7 @@ export const appRouter = router({
         // Call backend /auth/me endpoint
         const res = await fetch(`${INTERNAL_API_URL}/auth/me`, {
           headers: {
-            'Cookie': `manus.sid=${opts.ctx.req.cookies[COOKIE_NAME]}`
+            'Cookie': `manus.sid=${opts.ctx.req.cookies?.[COOKIE_NAME] || ''}`
           }
         });
 

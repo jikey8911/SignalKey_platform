@@ -126,30 +126,12 @@ class BacktestService:
         self.logger.info(f"🚀 Iniciando Backtest Tournament: {symbol} | {days}d | {timeframe}")
         
         # 1. Obtener datos históricos
-        from datetime import datetime, timedelta
-        
-        # Calculate limit based on days (approximate)
-        # Using 1h as default if not specified or for general calculation
-        limit = days * 24
-        if timeframe == '4h': limit = days * 6
-        elif timeframe == '1d': limit = days
-        elif timeframe == '15m': limit = days * 96
-        elif timeframe == '5m': limit = days * 288
-        elif timeframe == '1m': limit = days * 1440
-        
-        # Ensure we fetch enough data for indicators (buffer)
-        limit += 100 
-        
-        # Use public API for backtesting - it's faster and supports explicit exchange_id
-        df = await self.exchange.get_public_historical_data(
-            symbol=symbol,
-            timeframe=timeframe,
-            limit=limit,
-            exchange_id=exchange_id
-        )
-        
-        if df.empty:
-            raise ValueError(f"No se pudieron obtener datos históricos para {symbol} en {exchange_id}")
+        # 1. Obtener datos históricos (Tarea 5.1: Sourcing de Datos Reales)
+        try:
+            df = await self.get_market_data(symbol, timeframe, days, exchange_id)
+        except Exception as e:
+            self.logger.error(f"Error fetching data: {e}")
+            raise ValueError(f"No se pudieron obtener datos para {symbol}: {e}")
 
         # 2. Descubrir estrategias a evaluar
         strategies_to_test = self.trainer.discover_strategies()
@@ -185,16 +167,6 @@ class BacktestService:
                     self.logger.warning(f"⏩ Skipping {strat_name}: Missing features.")
                     continue
 
-                # Simulación de trading con DCA y Flipping (Long/Short)
-                balance = initial_balance
-                long_amount = 0
-                long_invested = 0
-                short_amount = 0
-                short_invested = 0
-                trades = []
-                win_count = 0
-                loss_count = 0
-                
                 # Determinar estep_investment (Monto por operación)
                 step_investment = initial_balance * 0.2 # Default 20%
                 
@@ -220,249 +192,35 @@ class BacktestService:
                 df_processed.loc[valid_idx, 'ai_signal'] = model.predict(X)
                 df_processed['ai_signal'] = df_processed['ai_signal'].fillna(0)
 
-                previous_signal = None
-                active_trading = False
-
-                for timestamp, row in df_processed.iterrows():
-                    price = row['close']
-                    signal = row['ai_signal']
-                    
-                    # --- Logic: Wait for First Flip ---
-                    if previous_signal is None:
-                        previous_signal = signal
-                        continue # Skip first candle to establish baseline
-
-                    if not active_trading:
-                        if signal != previous_signal:
-                            active_trading = True # Flip detected! Start trading.
-                        else:
-                            previous_signal = signal
-                            continue # Still same trend, ignore.
-                    
-                    # Update previous signal for next iteration if trading is active
-                    previous_signal = signal
-                    
-                    # --- Task 5.2: Simulación de Fidelis (Intra-vela High/Low) ---
-                    # Verificar TP/SL ANTES de procesar señales de cierre/apertura
-                    
-                    # 1. Chequeo para LONGs
-                    if long_amount > 0:
-                        avg_price = long_invested / long_amount
-                        # Take Profit (Sell at High)
-                        if row['high'] >= avg_price * (1 + tp):
-                            exit_price = avg_price * (1 + tp)
-                            pnl = (long_amount * exit_price) - long_invested
-                            balance += (long_amount * exit_price)
-                            pnl_percent = (pnl / long_invested * 100)
-                            
-                            trades.append({
-                                "time": timestamp.isoformat(),
-                                "type": "SELL",
-                                "price": exit_price,
-                                "amount": long_amount,
-                                "pnl": round(pnl, 2),
-                                "pnl_percent": round(pnl_percent, 2),
-                                "avg_price": round(avg_price, 2),
-                                "label": "TP_HIT_LONG"
-                            })
-                            if pnl > 0: win_count += 1
-                            else: loss_count += 1
-                            long_amount = 0
-                            long_invested = 0
-                            continue # Trade cerrado, saltar resto de lógica para esta vela
-
-                        # Stop Loss (Sell at Low)
-                        if row['low'] <= avg_price * (1 - sl):
-                            exit_price = avg_price * (1 - sl)
-                            pnl = (long_amount * exit_price) - long_invested
-                            balance += (long_amount * exit_price)
-                            pnl_percent = (pnl / long_invested * 100)
-                            
-                            trades.append({
-                                "time": timestamp.isoformat(),
-                                "type": "SELL",
-                                "price": exit_price,
-                                "amount": long_amount,
-                                "pnl": round(pnl, 2),
-                                "pnl_percent": round(pnl_percent, 2),
-                                "avg_price": round(avg_price, 2),
-                                "label": "SL_HIT_LONG"
-                            })
-                            if pnl > 0: win_count += 1
-                            else: loss_count += 1
-                            long_amount = 0
-                            long_invested = 0
-                            continue # Trade cerrado
-
-                    # 2. Chequeo para SHORTS
-                    if short_amount > 0:
-                        avg_price = short_invested / short_amount
-                        # Take Profit (Buy at Low) - Short gana si baja
-                        if row['low'] <= avg_price * (1 - tp):
-                            exit_price = avg_price * (1 - tp)
-                            pnl = short_invested - (short_amount * exit_price)
-                            balance += short_invested + pnl
-                            pnl_percent = (pnl / short_invested * 100)
-                            
-                            trades.append({
-                                "time": timestamp.isoformat(),
-                                "type": "BUY",
-                                "price": exit_price,
-                                "amount": short_amount,
-                                "pnl": round(pnl, 2),
-                                "pnl_percent": round(pnl_percent, 2),
-                                "avg_price": round(avg_price, 2),
-                                "label": "TP_HIT_SHORT"
-                            })
-                            if pnl > 0: win_count += 1
-                            else: loss_count += 1
-                            short_amount = 0
-                            short_invested = 0
-                            continue
-
-                        # Stop Loss (Buy at High) - Short pierde si sube
-                        if row['high'] >= avg_price * (1 + sl):
-                            exit_price = avg_price * (1 + sl)
-                            pnl = short_invested - (short_amount * exit_price)
-                            balance += short_invested + pnl
-                            pnl_percent = (pnl / short_invested * 100)
-                            
-                            trades.append({
-                                "time": timestamp.isoformat(),
-                                "type": "BUY",
-                                "price": exit_price,
-                                "amount": short_amount,
-                                "pnl": round(pnl, 2),
-                                "pnl_percent": round(pnl_percent, 2),
-                                "avg_price": round(avg_price, 2),
-                                "label": "SL_HIT_SHORT"
-                            })
-                            if pnl > 0: win_count += 1
-                            else: loss_count += 1
-                            short_amount = 0
-                            short_invested = 0
-                            continue
-                    
-                    # --- Trading Logic ---
-                    if signal == BaseStrategy.SIGNAL_BUY: # SIGNAL: BUY / LONG
-                        # 1. Cerrar Cortos si existen
-                        if short_amount > 0:
-                            pnl = short_invested - (short_amount * price)
-                            balance += short_invested + pnl
-                            avg_entry_price = short_invested / short_amount if short_amount > 0 else 0
-                            pnl_percent = (pnl / short_invested * 100) if short_invested > 0 else 0
-                            
-                            trades.append({
-                                "time": timestamp.isoformat(),
-                                "type": "BUY", # Cerrar corto es COMPRAR (Buy to Cover)
-                                "price": price,
-                                "amount": short_amount,
-                                "pnl": round(pnl, 2),
-                                "pnl_percent": round(pnl_percent, 2),
-                                "avg_price": round(avg_entry_price, 2), # Mostrar promedio de entrada
-                                "label": "CLOSE_SHORT"
-                            })
-                            if pnl > 0: win_count += 1
-                            else: loss_count += 1
-                            short_amount = 0
-                            short_invested = 0
-                        
-                        # 2. Abrir/Aumentar Largo (DCA)
-                        if balance >= step_investment:
-                            is_dca = long_amount > 0
-                            amount_to_buy = step_investment / price
-                            long_amount += amount_to_buy
-                            long_invested += step_investment
-                            balance -= step_investment
-                            avg_entry = long_invested / long_amount
-                            
-                            trades.append({
-                                "time": timestamp.isoformat(),
-                                "type": "BUY",
-                                "price": price,
-                                "amount": amount_to_buy,
-                                "avg_price": round(avg_entry, 2),
-                                "label": "DCA_LONG" if is_dca else "OPEN_LONG"
-                            })
-                            
-                            
-                    elif signal == BaseStrategy.SIGNAL_SELL: # SIGNAL: SELL / SHORT
-                        # 1. Cerrar Largos si existen
-                        if long_amount > 0:
-                            pnl = (long_amount * price) - long_invested
-                            balance += (long_amount * price)
-                            avg_entry_price = long_invested / long_amount if long_amount > 0 else 0
-                            pnl_percent = (pnl / long_invested * 100) if long_invested > 0 else 0
-                            
-                            trades.append({
-                                "time": timestamp.isoformat(),
-                                "type": "SELL",
-                                "price": price,
-                                "amount": long_amount,
-                                "pnl": round(pnl, 2),
-                                "pnl_percent": round(pnl_percent, 2),
-                                "avg_price": round(avg_entry_price, 2), # Mostrar promedio de entrada
-                                "label": "CLOSE_LONG"
-                            })
-                            if pnl > 0: win_count += 1
-                            else: loss_count += 1
-                            long_amount = 0
-                            long_invested = 0
-                            
-                        # 2. Abrir/Aumentar Corto (DCA)
-                        if balance >= step_investment:
-                            is_dca = short_amount > 0
-                            amount_to_short = step_investment / price
-                            short_amount += amount_to_short
-                            short_invested += step_investment
-                            balance -= step_investment
-                            avg_entry = short_invested / short_amount
-                            
-                            trades.append({
-                                "time": timestamp.isoformat(),
-                                "type": "SELL", # En backtest lo mostramos como SELL para abrir corto
-                                "price": price,
-                                "amount": amount_to_short,
-                                "avg_price": round(avg_entry, 2),
-                                "label": "DCA_SHORT" if is_dca else "OPEN_SHORT"
-                            })
-
-                # Balance final total (valor de mercado de posiciones abiertas + cash)
-                long_val = long_amount * df_processed.iloc[-1]['close']
-                short_val = short_invested + (short_invested - (short_amount * df_processed.iloc[-1]['close'])) if short_amount > 0 else 0
-                current_value = balance + long_val + (short_invested + (short_invested - (short_amount * df_processed.iloc[-1]['close'])) if short_amount > 0 else 0)
+                # Simulación de trading con DCA y Flipping (Long/Short)
+                # Tarea 5.2: Motor de Simulación DCA
+                simulation_result = self.simulate_dca_logic(
+                    df_processed, 
+                    initial_balance=initial_balance,
+                    trade_amount=step_investment,
+                    tp=tp,
+                    sl=sl
+                )
                 
-                # Simplificación balance final
-                final_balance = balance
-                if long_amount > 0:
-                     final_balance += (long_amount * df_processed.iloc[-1]['close'])
-                if short_amount > 0:
-                     pnl_short = short_invested - (short_amount * df_processed.iloc[-1]['close'])
-                     final_balance += short_invested + pnl_short
+                # Check if simulation failed or returned empty
+                if not simulation_result:
+                     continue
 
-                profit_pct = ((final_balance / initial_balance) - 1) * 100
-                total_trades = len(trades)
-                win_rate = (win_count / (win_count + loss_count) * 100) if (win_count + loss_count) > 0 else 0
-
-                res_summary = {
+                tournament_results.append({
                     "strategy": strat_name,
-                    "profit_pct": round(profit_pct, 2),
-                    "total_trades": total_trades,
-                    "win_rate": round(win_rate, 2),
-                    "final_balance": round(current_value, 2)
-                }
-                tournament_results.append(res_summary)
-
+                    "profit_pct": simulation_result['profit_pct'],
+                    "total_trades": simulation_result['total_trades'],
+                    "win_rate": simulation_result['win_rate'],
+                    "final_balance": simulation_result['final_balance']
+                })
+                
                 # Mantener datos detallados de la mejor
-                if profit_pct > highest_pnl:
-                    highest_pnl = profit_pct
+                if simulation_result['profit_pct'] > highest_pnl:
+                    highest_pnl = simulation_result['profit_pct']
                     best_strategy_data = {
                         "strategy_name": strat_name,
-                        "profit_pct": round(profit_pct, 2),
-                        "total_trades": total_trades,
-                        "win_rate": round(win_rate, 2),
-                        "trades": trades,
-                        "final_balance": round(current_value, 2)
+                        **simulation_result,
+                        "trades": simulation_result['trades']
                     }
 
             except Exception as e:
@@ -510,6 +268,266 @@ class BacktestService:
                 "model_id": f"{best_strategy_data['strategy_name']}.pkl",
                 "parameters": {"timeframe": timeframe, "symbol": symbol}
             }
+        }
+
+    async def get_market_data(self, symbol: str, timeframe: str, days: int = 30, exchange_id: str = 'binance'):
+        """
+        Tarea 5.1: Sourcing de Datos Reales para Backtest
+        Obtiene datos reales para el backtest.
+        """
+        limit = (24 * days)
+        if timeframe == '4h': limit = days * 6
+        elif timeframe == '1d': limit = days
+        elif timeframe == '15m': limit = days * 96
+        elif timeframe == '5m': limit = days * 288
+        elif timeframe == '1m': limit = days * 1440
+        limit += 100 # Buffer
+        
+        df = await self.exchange.get_public_historical_data(symbol, timeframe, limit=limit, exchange_id=exchange_id)
+        if df.empty:
+            raise ValueError(f"No se pudieron obtener datos para {symbol}")
+        return df
+
+    def simulate_dca_logic(self, df_processed, initial_balance=1000.0, trade_amount=None, tp=0.03, sl=0.02):
+        """
+        Tarea 5.2: Motor de Simulación DCA y Tarea 6.1 (Intra-candle)
+        Simula la lógica de trading con DCA y checks de mechas High/Low.
+        """
+        balance = initial_balance
+        step_investment = trade_amount or (initial_balance * 0.2)
+        
+        long_amount = 0
+        long_invested = 0
+        short_amount = 0
+        short_invested = 0
+        
+        trades = []
+        win_count = 0
+        loss_count = 0
+        
+        previous_signal = None
+        active_trading = False
+        
+        from api.strategies.base import BaseStrategy
+
+        for timestamp, row in df_processed.iterrows():
+            price = row['close']
+            signal = row['ai_signal']
+            
+            # --- Logic: Wait for First Flip ---
+            if previous_signal is None:
+                previous_signal = signal
+                continue 
+
+            if not active_trading:
+                if signal != previous_signal:
+                    active_trading = True 
+                else:
+                    previous_signal = signal
+                    continue 
+            
+            previous_signal = signal
+            
+            # --- Task 6.1: Validación de Mechas (High/Low) ---
+            # 1. Chequeo para LONGs
+            if long_amount > 0:
+                avg_price = long_invested / long_amount
+                # Take Profit (Sell at High)
+                if row['high'] >= avg_price * (1 + tp):
+                    exit_price = avg_price * (1 + tp)
+                    pnl = (long_amount * exit_price) - long_invested
+                    balance += (long_amount * exit_price)
+                    pnl_percent = (pnl / long_invested * 100)
+                    
+                    trades.append({
+                        "time": timestamp.isoformat(),
+                        "type": "SELL",
+                        "price": exit_price,
+                        "amount": long_amount,
+                        "pnl": round(pnl, 2),
+                        "pnl_percent": round(pnl_percent, 2),
+                        "avg_price": round(avg_price, 2),
+                        "label": "TP_HIT_LONG"
+                    })
+                    if pnl > 0: win_count += 1
+                    else: loss_count += 1
+                    long_amount = 0
+                    long_invested = 0
+                    continue 
+
+                # Stop Loss (Sell at Low)
+                if row['low'] <= avg_price * (1 - sl):
+                    exit_price = avg_price * (1 - sl)
+                    pnl = (long_amount * exit_price) - long_invested
+                    balance += (long_amount * exit_price)
+                    pnl_percent = (pnl / long_invested * 100)
+                    
+                    trades.append({
+                        "time": timestamp.isoformat(),
+                        "type": "SELL",
+                        "price": exit_price,
+                        "amount": long_amount,
+                        "pnl": round(pnl, 2),
+                        "pnl_percent": round(pnl_percent, 2),
+                        "avg_price": round(avg_price, 2),
+                        "label": "SL_HIT_LONG"
+                    })
+                    if pnl > 0: win_count += 1
+                    else: loss_count += 1
+                    long_amount = 0
+                    long_invested = 0
+                    continue 
+            
+            # 2. Chequeo para SHORTS
+            if short_amount > 0:
+                avg_price = short_invested / short_amount
+                # Take Profit (Buy at Low)
+                if row['low'] <= avg_price * (1 - tp):
+                    exit_price = avg_price * (1 - tp)
+                    pnl = short_invested - (short_amount * exit_price)
+                    balance += short_invested + pnl
+                    pnl_percent = (pnl / short_invested * 100)
+                    
+                    trades.append({
+                        "time": timestamp.isoformat(),
+                        "type": "BUY",
+                        "price": exit_price,
+                        "amount": short_amount,
+                        "pnl": round(pnl, 2),
+                        "pnl_percent": round(pnl_percent, 2),
+                        "avg_price": round(avg_price, 2),
+                        "label": "TP_HIT_SHORT"
+                    })
+                    if pnl > 0: win_count += 1
+                    else: loss_count += 1
+                    short_amount = 0
+                    short_invested = 0
+                    continue
+
+                # Stop Loss (Buy at High)
+                if row['high'] >= avg_price * (1 + sl):
+                    exit_price = avg_price * (1 + sl)
+                    pnl = short_invested - (short_amount * exit_price)
+                    balance += short_invested + pnl
+                    pnl_percent = (pnl / short_invested * 100)
+                    
+                    trades.append({
+                        "time": timestamp.isoformat(),
+                        "type": "BUY",
+                        "price": exit_price,
+                        "amount": short_amount,
+                        "pnl": round(pnl, 2),
+                        "pnl_percent": round(pnl_percent, 2),
+                        "avg_price": round(avg_price, 2),
+                        "label": "SL_HIT_SHORT"
+                    })
+                    if pnl > 0: win_count += 1
+                    else: loss_count += 1
+                    short_amount = 0
+                    short_invested = 0
+                    continue
+
+            # --- Trading Logic (DCA) ---
+            if signal == BaseStrategy.SIGNAL_BUY: 
+                # Close Shorts
+                if short_amount > 0:
+                    pnl = short_invested - (short_amount * price)
+                    balance += short_invested + pnl
+                    avg_entry_price = short_invested / short_amount if short_amount > 0 else 0
+                    pnl_percent = (pnl / short_invested * 100) if short_invested > 0 else 0
+                    
+                    trades.append({
+                        "time": timestamp.isoformat(),
+                        "type": "BUY",
+                        "price": price,
+                        "amount": short_amount,
+                        "pnl": round(pnl, 2),
+                        "pnl_percent": round(pnl_percent, 2),
+                        "avg_price": round(avg_entry_price, 2),
+                        "label": "CLOSE_SHORT"
+                    })
+                    if pnl > 0: win_count += 1
+                    else: loss_count += 1
+                    short_amount = 0
+                    short_invested = 0
+                
+                # Open/DCA Long
+                if balance >= step_investment:
+                    is_dca = long_amount > 0
+                    amount_to_buy = step_investment / price
+                    long_amount += amount_to_buy
+                    long_invested += step_investment
+                    balance -= step_investment
+                    avg_entry = long_invested / long_amount
+                    
+                    trades.append({
+                        "time": timestamp.isoformat(),
+                        "type": "BUY",
+                        "price": price,
+                        "amount": amount_to_buy,
+                        "avg_price": round(avg_entry, 2),
+                        "label": "DCA_LONG" if is_dca else "OPEN_LONG"
+                    })
+                    
+            elif signal == BaseStrategy.SIGNAL_SELL: 
+                # Close Longs
+                if long_amount > 0:
+                    pnl = (long_amount * price) - long_invested
+                    balance += (long_amount * price)
+                    avg_entry_price = long_invested / long_amount if long_amount > 0 else 0
+                    pnl_percent = (pnl / long_invested * 100) if long_invested > 0 else 0
+                    
+                    trades.append({
+                        "time": timestamp.isoformat(),
+                        "type": "SELL",
+                        "price": price,
+                        "amount": long_amount,
+                        "pnl": round(pnl, 2),
+                        "pnl_percent": round(pnl_percent, 2),
+                        "avg_price": round(avg_entry_price, 2),
+                        "label": "CLOSE_LONG"
+                    })
+                    if pnl > 0: win_count += 1
+                    else: loss_count += 1
+                    long_amount = 0
+                    long_invested = 0
+                    
+                # Open/DCA Short
+                if balance >= step_investment:
+                    is_dca = short_amount > 0
+                    amount_to_short = step_investment / price
+                    short_amount += amount_to_short
+                    short_invested += step_investment
+                    balance -= step_investment
+                    avg_entry = short_invested / short_amount
+                    
+                    trades.append({
+                        "time": timestamp.isoformat(),
+                        "type": "SELL",
+                        "price": price,
+                        "amount": amount_to_short,
+                        "avg_price": round(avg_entry, 2),
+                        "label": "DCA_SHORT" if is_dca else "OPEN_SHORT"
+                    })
+
+        # Calculate Final Stats
+        final_balance = balance
+        if long_amount > 0:
+             final_balance += (long_amount * df_processed.iloc[-1]['close'])
+        if short_amount > 0:
+             pnl_short = short_invested - (short_amount * df_processed.iloc[-1]['close'])
+             final_balance += short_invested + pnl_short
+
+        profit_pct = ((final_balance / initial_balance) - 1) * 100
+        total_trades = len(trades)
+        win_rate = (win_count / (win_count + loss_count) * 100) if (win_count + loss_count) > 0 else 0
+        
+        return {
+            "profit_pct": round(profit_pct, 2),
+            "total_trades": total_trades,
+            "win_rate": round(win_rate, 2),
+            "final_balance": round(final_balance, 2),
+            "trades": trades
         }
 
     def _calculate_accuracy(self, y_true: Any, y_pred: Any) -> float:

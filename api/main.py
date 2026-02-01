@@ -31,13 +31,17 @@ async def lifespan(app: FastAPI):
     bot_manager.signal_processor = process_signal_task
     
     try:
-        await bot_manager.restart_all_bots(message_handler=process_signal_task)
-        logger.info(f"Telegram Bot Manager started with {bot_manager.get_active_bots_count()} active bots")
+        # await bot_manager.restart_all_bots(message_handler=process_signal_task)
+        # logger.info(f"Telegram Bot Manager started with {bot_manager.get_active_bots_count()} active bots")
         
-        # --- TASK 6.2: Autotrade Recovery ---
-        from api.core.boot import startup_recovery
-        await startup_recovery(db, bot_manager=bot_manager)
-        # -----------------------------------
+        # --- TASK 7.2: Boot Manager Resilience ---
+        # Reemplaza la lógica anterior con el nuevo BootManager más robusto
+        from api.src.application.services.boot_manager import BootManager
+        # Pasamos None como socket_service por ahora si no está disponible en scope global fácil o lo inyectamos después
+        # Nota: main.py tiene imports en desorden, idealmente socket_service vendría de router o container
+        boot_manager = BootManager(db_adapter=db) 
+        await boot_manager.initialize_active_bots()
+        # ----------------------------------------
     except Exception as e:
         logger.error(f"Error starting Telegram Bot Manager: {e}")
 

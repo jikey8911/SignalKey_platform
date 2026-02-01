@@ -1,28 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { Line } from 'react-chartjs-2';
 import {
-    Chart as ChartJS,
-    CategoryScale,
-    LinearScale,
-    PointElement,
-    LineElement,
-    Title,
+    LineChart,
+    Line,
+    XAxis,
+    YAxis,
+    CartesianGrid,
     Tooltip,
     Legend,
-} from 'chart.js';
-
-ChartJS.register(
-    CategoryScale,
-    LinearScale,
-    PointElement,
-    LineElement,
-    Title,
-    Tooltip,
-    Legend
-);
+    ResponsiveContainer
+} from 'recharts';
 
 const Analytics = () => {
-    const [equityData, setEquityData] = useState<any>(null);
+    const [equityData, setEquityData] = useState<any[]>([]);
     const [stats, setStats] = useState({
         totalReturn: 0,
         maxDrawdown: 0,
@@ -34,31 +23,22 @@ const Analytics = () => {
     useEffect(() => {
         // Simulate fetching data
         const generateMockData = () => {
-            const labels = Array.from({ length: 30 }, (_, i) => `Day ${i + 1}`);
             const dataPoints = [];
             let balance = 10000;
             for (let i = 0; i < 30; i++) {
                 const change = (Math.random() - 0.45) * 200; // Slight uptrend bias
                 balance += change;
-                dataPoints.push(balance);
+                dataPoints.push({
+                    date: `Day ${i + 1}`,
+                    equity: balance
+                });
             }
 
-            setEquityData({
-                labels,
-                datasets: [
-                    {
-                        label: 'Equity Curve (Real + Sim)',
-                        data: dataPoints,
-                        borderColor: 'rgb(75, 192, 192)',
-                        backgroundColor: 'rgba(75, 192, 192, 0.5)',
-                        tension: 0.3
-                    }
-                ]
-            });
+            setEquityData(dataPoints);
 
             setStats({
                 totalReturn: ((balance - 10000) / 10000) * 100,
-                maxDrawdown: 5.2, // Mock
+                maxDrawdown: 5.2, // Mock calculated value
                 winRate: 58.5,
                 totalTrades: 42
             });
@@ -67,32 +47,6 @@ const Analytics = () => {
         generateMockData();
         // In real impl: fetch from /api/analytics/equity
     }, []);
-
-    const options = {
-        responsive: true,
-        plugins: {
-            legend: {
-                position: 'top' as const,
-                labels: { color: '#e5e7eb' }
-            },
-            title: {
-                display: true,
-                text: 'Account Growth (Equity)',
-                color: '#e5e7eb',
-                font: { size: 16 }
-            },
-        },
-        scales: {
-            x: {
-                grid: { color: 'rgba(255, 255, 255, 0.1)' },
-                ticks: { color: '#9ca3af' }
-            },
-            y: {
-                grid: { color: 'rgba(255, 255, 255, 0.1)' },
-                ticks: { color: '#9ca3af' }
-            }
-        }
-    };
 
     return (
         <div className="p-6 bg-slate-900 min-h-screen text-white">
@@ -128,7 +82,42 @@ const Analytics = () => {
             </div>
 
             <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg h-[500px]">
-                {equityData ? <Line options={options} data={equityData} /> : <p>Loading chart...</p>}
+                <h3 className="text-xl font-semibold mb-4 text-gray-200">Account Growth (Equity)</h3>
+                {equityData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                        <LineChart
+                            data={equityData}
+                            margin={{
+                                top: 5,
+                                right: 30,
+                                left: 20,
+                                bottom: 5,
+                            }}
+                        >
+                            <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                            <XAxis dataKey="date" stroke="#9ca3af" />
+                            <YAxis stroke="#9ca3af" />
+                            <Tooltip
+                                contentStyle={{ backgroundColor: '#1f2937', borderColor: '#374151', color: '#f3f4f6' }}
+                                itemStyle={{ color: '#f3f4f6' }}
+                            />
+                            <Legend />
+                            <Line
+                                type="monotone"
+                                dataKey="equity"
+                                stroke="#10b981"
+                                activeDot={{ r: 8 }}
+                                strokeWidth={2}
+                                dot={false}
+                                name="Equity Value ($)"
+                            />
+                        </LineChart>
+                    </ResponsiveContainer>
+                ) : (
+                    <div className="flex h-full items-center justify-center">
+                        <p className="text-gray-400">Loading chart data...</p>
+                    </div>
+                )}
             </div>
         </div>
     );

@@ -1,62 +1,67 @@
 import logging
 from typing import List, Dict, Tuple
 
-logger = logging.getLogger("RiskManager")
-
 class RiskManager:
     """
-    Tarea 7.1: Global Risk Manager (El "Kill Switch")
-    Valida el Drawdown máximo y la exposición total antes de permitir que cualquier bot abra una nueva posición.
+    PUERTO DE DOMINIO - Lógica de Riesgo (Tarea 7.1).
+    Valida si una nueva operación es permitida basándose en el estado global.
     """
-    def __init__(self, global_config: dict = None):
-        if global_config is None:
-            global_config = {}
-        
-        # Default 10% Max Drawdown, $1000 Max Exposure
-        self.max_drawdown = global_config.get('max_drawdown', 0.10) 
-        self.max_exposure = global_config.get('max_exposure_usd', 1000.0)
-        
-        logger.info(f"🛡️ Risk Manager initialized. Max DD: {self.max_drawdown*100}%, Max Exposure: ${self.max_exposure}")
+    def __init__(self, config: Dict = None):
+        if config is None:
+            config = {}
+        # Configuración de límites (pueden venir de app_configs en MongoDB)
+        self.max_drawdown = config.get('max_drawdown', 0.15) # 15% máximo
+        self.max_exposure_usd = config.get('max_exposure_usd', 2000.0)
+        self.max_bots_active = config.get('max_bots_active', 5)
+        self.logger = logging.getLogger("RiskManager")
+        self.logger.info(f"🛡️ Risk Manager domain service initialized. Max DD: {self.max_drawdown*100}%, Max Exposure: ${self.max_exposure_usd}")
 
-    async def can_open_position(self, current_balance: float, active_positions: List[Dict]) -> Tuple[bool, str]:
+    def validate_execution(self, 
+                           current_balance: float, 
+                           active_positions: List[Dict], 
+                           new_order_amount: float) -> Tuple[bool, str]:
         """
-        Verifica si el riesgo total permite una nueva operación.
+        Determina si es seguro ejecutar una nueva orden.
         
         Args:
-            current_balance: Balance total actual de la cuenta (Equity).
-            active_positions: Lista de posiciones activas. Cada una debe tener 'pnl' y 'cost'.
-            
+            current_balance: Balance disponible + valor de posiciones (Equity).
+            active_positions: Lista de posiciones activas.
+            new_order_amount: Monto en USD de la nueva orden invertida.
+        
         Returns:
             Tuple[bool, str]: (Allowed, Reason)
         """
         try:
-            # Calcular PnL No Realizado Total
-            total_unrealized_pnl = sum([p.get('pnl', 0.0) for p in active_positions])
+            # 1. Validar exposición total
+            # Sumamos el costo de posiciones activas
+            total_cost = sum([p.get('cost', 0.0) for p in active_positions])
             
-            # Calcular Drawdown Actual (% de pérdida florante sobre el balance)
-            # Evitar división por cero
-            if current_balance <= 0:
-                logger.warning("RiskManager: Current balance is 0 or negative.")
-                return False, "Balance insuficiente"
+            if (total_cost + new_order_amount) > self.max_exposure_usd:
+                self.logger.warning(f"⛔ risk_manager: Max USD Exposure Exceeded (${total_cost + new_order_amount} > ${self.max_exposure_usd})")
+                return False, "Exposición máxima excedida (Límite USD)"
 
-            current_drawdown = 0.0
-            if total_unrealized_pnl < 0:
-               current_drawdown = abs(total_unrealized_pnl) / current_balance
+            # 2. Validar Drawdown actual (PnL No Realizado)
+            # Calculamos PnL flotante sumado
+            total_unrealized_pnl = sum([p.get('unrealized_pnl', 0.0) for p in active_positions])
             
-            if current_drawdown > self.max_drawdown:
-                logger.warning(f"⛔ risk_manager: Max Drawdown reached ({current_drawdown*100:.2f}% > {self.max_drawdown*100:.2f}%)")
-                return False, f"Drawdown máximo alcanzado ({current_drawdown*100:.2f}%)"
-                
-            # Calcular Exposición Total (Dinero invertido)
-            total_invested = sum([p.get('cost', 0.0) for p in active_positions])
+            # Drawdown = abs(perida) / balance
+            current_dd = abs(total_unrealized_pnl) / current_balance if current_balance > 0 else 0
             
-            if total_invested >= self.max_exposure:
-                logger.warning(f"⛔ risk_manager: Max Exposure reached (${total_invested} >= ${self.max_exposure})")
-                return False, f"Exposición máxima alcanzada (${total_invested})"
-                
-            return True, "OK"
+            # Solo bloqueamos si tenemos pérdidas y superan el umbral
+            if total_unrealized_pnl < 0 and current_dd > self.max_drawdown:
+                self.logger.warning(f"⛔ risk_manager: Max Drawdown Exceeded ({current_dd:.2%} > {self.max_drawdown:.2%})")
+                return False, f"Drawdown crítico alcanzado: {current_dd:.2%}"
+
+            # 3. Validar cantidad de bots operando (si cada bot tiene 1 posición max)
+            # Esto asume que active_positions mapea 1:1 a bots, o es una lista de todas las posiciones.
+            # Según snippet usuario: 'len(active_positions) >= self.max_bots_active'
+            if len(active_positions) >= self.max_bots_active:
+                self.logger.warning(f"⛔ risk_manager: Max Active Bots Limit ({len(active_positions)} >= {self.max_bots_active})")
+                return False, "Máximo de hilos operativos alcanzado"
+
+            return True, "Validación de riesgo exitosa"
             
         except Exception as e:
-            logger.error(f"Error in RiskManager: {e}")
-            # En caso de error, por seguridad bloqueamos
-            return False, f"Error de verificación de riesgo: {str(e)}"
+            self.logger.error(f"Error in validate_execution: {e}")
+            # Fail-safe: Block on error
+            return False, f"Error interno de riesgo: {str(e)}"
