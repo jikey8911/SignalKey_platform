@@ -1,6 +1,7 @@
 import ccxt.async_support as ccxt
 import logging
 import aiohttp
+import asyncio
 import pandas as pd
 from aiohttp.resolver import ThreadedResolver
 from typing import Optional, Dict, Any, Tuple, List
@@ -315,27 +316,70 @@ class CcxtAdapter(IExchangePort):
                 public_instance.has['fetchCurrencies'] = False
             
             try:
-                # Calculate start time
+                # Basic Timeframe parsing (seconds)
+                tf_units = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400, 'w': 604800}
+                unit = timeframe[-1]
+                val = int(timeframe[:-1]) if timeframe[:-1].isdigit() else 1
+                duration_sec = val * tf_units.get(unit, 60)
+                duration_ms = duration_sec * 1000
+
+                # Calculate start time (since)
                 if use_random_date:
                     max_days_back = 730
                     min_days_back = 365
                     random_offset = random.randint(min_days_back, max_days_back)
                     end_date = datetime.utcnow() - timedelta(days=random_offset)
-                    since_dt = end_date - timedelta(hours=limit)
+                    since_dt = end_date - timedelta(seconds=limit * duration_sec)
                     logger.info(f"🎲 Public API: Random training period ending: {end_date.strftime('%Y-%m-%d')}")
-                    since_ts = int(since_dt.timestamp() * 1000)
+                    start_ts = int(since_dt.timestamp() * 1000)
                 else:
-                    since_ts = None  # Fetch most recent
+                    # Backwards capability: Calculate 'since' to get exactly 'limit' candles up to now
+                    now = datetime.utcnow()
+                    since_dt = now - timedelta(seconds=limit * duration_sec)
+                    start_ts = int(since_dt.timestamp() * 1000)
 
-                # Fetch OHLCV data
-                ohlcv = await public_instance.fetch_ohlcv(symbol, timeframe, since=since_ts, limit=limit)
+                all_ohlcv = []
+                current_since = start_ts
                 
+                # Pagination Loop
+                # We fetch in chunks (e.g. 1000 which is safe for most exchanges)
+                # until we have enough data or reach now
+                FETCH_LIMIT = 1000 
+                
+                while len(all_ohlcv) < limit:
+                    # Calculate how many needed
+                    remaining = limit - len(all_ohlcv)
+                    # Don't ask for more than safe limit
+                    batch_limit = min(remaining, FETCH_LIMIT)
+                    
+                    # Fetch
+                    ohlcv = await public_instance.fetch_ohlcv(symbol, timeframe, since=current_since, limit=batch_limit)
+                    
+                    if not ohlcv:
+                        break
+                        
+                    all_ohlcv.extend(ohlcv)
+                    
+                    # Update since for next batch: last candle time + duration
+                    last_time = ohlcv[-1][0]
+                    current_since = last_time + duration_ms
+                    
+                    # Safety break if we reached current time (approx)
+                    if current_since > datetime.utcnow().timestamp() * 1000:
+                        break
+                        
+                    # Standard exchange rate limit protection
+                    await asyncio.sleep(public_instance.rateLimit / 1000.0 if public_instance.rateLimit else 0.1)
+
                 # Convert to DataFrame
-                df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                df.set_index('timestamp', inplace=True)
+                df = pd.DataFrame(all_ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+                if not df.empty:
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+                    df.set_index('timestamp', inplace=True)
+                    # Remove duplicates just in case
+                    df = df[~df.index.duplicated(keep='first')]
                 
-                logger.info(f"✅ Public API: Fetched {len(df)} candles for {symbol} from {exchange_id}")
+                logger.info(f"✅ Public API: Fetched {len(df)} candles for {symbol} from {exchange_id} (Requested: {limit})")
                 return df
                 
             finally:

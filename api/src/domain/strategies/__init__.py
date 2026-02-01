@@ -30,7 +30,7 @@ def load_strategies():
             try:
                 # Import module
                 # Note: This assumes api.strategies package structure
-                full_module_name = f"api.strategies.{module_name}"
+                full_module_name = f"api.src.domain.strategies.{module_name}"
                 
                 if full_module_name in sys.modules:
                      module = sys.modules[full_module_name]

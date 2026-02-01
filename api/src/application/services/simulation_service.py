@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime
 from bson import ObjectId
-from api.strategies.base import BaseStrategy
+from api.src.domain.strategies.base import BaseStrategy
 
 class SimulationService:
     """

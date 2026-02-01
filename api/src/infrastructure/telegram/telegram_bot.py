@@ -279,6 +279,21 @@ class TelegramUserBot:
             return False, ""
 
 
+    async def send_trade_alert(self, message: str):
+        """
+        Tarea 6.2: Enviar alerta de trading a través del bot.
+        """
+        if not self.client or not self.client.is_connected():
+            logger.warning("Telegram client not connected. Cannot send alert.")
+            return
+
+        try:
+            # Enviar a "Saved Messages" (me)
+            await self.client.send_message('me', f"🚀 **SignalKey Alert**\n{message}")
+            logger.info(f"Trade alert sent to user {self.user_id}")
+        except Exception as e:
+            logger.error(f"Error sending trade alert for {self.user_id}: {e}")
+
 # Mantener compatibilidad con código legacy (bot global)
 # Este bot solo se usa si no hay bots de usuario configurados
 class LegacyTelegramBot:

@@ -153,7 +153,7 @@ class MonitorService:
     async def push_connection_status(self):
         """Envía el estado de conexión a todos los usuarios conectados vía WebSocket"""
         from api.src.adapters.driven.notifications.socket_service import socket_service
-        from api.bot.telegram_bot_manager import bot_manager
+        from api.src.infrastructure.telegram.telegram_bot_manager import bot_manager
         from api.src.adapters.driven.persistence.mongodb import get_app_config
 
         active_users = socket_service.active_connections.keys()

@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from typing import Optional
 import logging
-from api.bot.telegram_bot_manager import bot_manager
+from api.src.infrastructure.telegram.telegram_bot_manager import bot_manager
 from api.src.adapters.driven.persistence.mongodb import db
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ async def start_telegram_auth(request: TelegramAuthStartRequest, user_id: str):
         logger.info(f"Request data: phone={request.phone_number}, api_id={request.api_id}")
         
         # Importar aquí para evitar circular imports
-        from api.bot.telegram_bot import TelegramUserBot
+        from api.src.infrastructure.telegram.telegram_bot import TelegramUserBot
         
         # Crear bot temporal para autenticación (usar sesión en memoria para evitar conflictos)
         temp_bot = TelegramUserBot(

@@ -87,7 +87,7 @@ async def get_available_strategies():
     Útil para mostrar en el inventario .pkl del frontend.
     """
     try:
-        from api.strategies import load_strategies
+        from api.src.domain.strategies import load_strategies
         strategies_dict, strategies_list = load_strategies()
         
         # Return list of strategy names

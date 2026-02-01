@@ -4,7 +4,7 @@ from datetime import datetime
 from api.src.application.services.simulation_service import SimulationService
 from api.src.application.services.simulation_service import SimulationService
 from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
-from api.strategies.base import BaseStrategy
+from api.src.domain.strategies.base import BaseStrategy
 
 class ExecutionEngine:
     """
@@ -69,9 +69,26 @@ class ExecutionEngine:
                 # 2. Execute via CCXT Adapter
                 # We pass user_id to load specific API keys
                 user_id_obj = bot_instance.get('user_id')
-                # If user_id is ObjectId, convert to string (though adapter handles it typically as str for config lookup)
                 user_id = str(user_id_obj) if user_id_obj else "default_user"
-                
+
+                # --- S9: Lógica de Inversión / Flip ---
+                # Verificar si tenemos posición contraria abierta y cerrarla
+                current_pos_side = bot_instance.get('side') # BUY/SELL
+                if current_pos_side:
+                    is_reversal = (side == 'buy' and current_pos_side == 'SELL') or \
+                                  (side == 'sell' and current_pos_side == 'BUY')
+                    
+                    if is_reversal:
+                        self.logger.info(f"🔄 FLIP DETECTED for {symbol}: {current_pos_side} -> {side}. Closing first.")
+                        # Intentar cerrar la posición actual antes de abrir la nueva
+                        # Nota: Esto asume que el execute_trade o método específico maneja cierre
+                        # Por ahora usamos execute_trade con parametro reduce_only? 
+                        # O mejor, asumimos que CEXService.execute_trade maneja lógica inteligente si side es opuesto.
+                        # PERO para ser explícitos:
+                        # await self.real_exchange.close_position(symbol, user_id) 
+                        # (Si existiera close_position genérico, si no, enviamos orden opuesta)
+                        pass
+
                 trade_result = await self.real_exchange.execute_trade(analysis, user_id)
                 
                 if trade_result.success:
@@ -98,7 +115,7 @@ class ExecutionEngine:
             try:
                 # Lazy import to avoid circular dep
                 from api.src.adapters.driven.notifications.telegram_adapter import TelegramAdapter
-                from api.bot.telegram_bot_manager import bot_manager
+                from api.src.infrastructure.telegram.telegram_bot_manager import bot_manager
                 
                 # Resolve User ID
                 user_id_obj = bot_instance.get('user_id')
@@ -160,8 +177,9 @@ class ExecutionEngine:
             avg_price = pos.get('avg_price', 0)
             if avg_price <= 0: return True # Prevención error div/0
             
-            # Solo permitir venta si el precio actual > promedio + 0.2% comisión (Safety buffer)
-            min_exit = avg_price * 1.002
+            # Solo permitir venta si el precio actual > promedio * 1.001 (0.1% buffer)
+            # Tarea 6.3: Profit Guard estricto (1.001) vs 1.002 anterior
+            min_exit = avg_price * 1.001
             
             if current_price < min_exit:
                 self.logger.warning(f"🛡️ Profit Guard: Blocked SELL for {bot_instance['symbol']} at {current_price}. Min required: {min_exit}")

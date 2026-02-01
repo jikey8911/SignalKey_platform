@@ -17,8 +17,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 from contextlib import asynccontextmanager
-from api.bot.telegram_bot import start_userbot, bot_instance
-from api.bot.telegram_bot_manager import bot_manager
+from api.src.infrastructure.telegram.telegram_bot import start_userbot, bot_instance
+from api.src.infrastructure.telegram.telegram_bot_manager import bot_manager
 from api.src.application.services.monitor_service import MonitorService
 from fastapi.middleware.cors import CORSMiddleware
 from api.config import Config

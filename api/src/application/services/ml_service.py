@@ -5,9 +5,9 @@ import joblib
 import importlib
 from datetime import datetime
 from typing import List, Dict, Any
-from api.ml.strategy_trainer import StrategyTrainer
+from api.src.domain.services.strategy_trainer import StrategyTrainer
 from api.src.domain.services.exchange_port import ExchangePort
-from api.strategies.base import BaseStrategy
+from api.src.domain.strategies.base import BaseStrategy
 
 class MLService:
     """
@@ -200,7 +200,7 @@ class MLService:
                 if not os.path.exists(model_path): continue
                 model = joblib.load(model_path)
                 
-                module = importlib.import_module(f"api.strategies.{strat_name}")
+                module = importlib.import_module(f"api.src.domain.strategies.{strat_name}")
                 class_name = "".join(w.title() for w in strat_name.split("_"))
                 StrategyClass = getattr(module, class_name)
                 strategy = StrategyClass()

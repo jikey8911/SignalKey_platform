@@ -16,7 +16,7 @@ class StrategyTrainer:
     Motor de entrenamiento que carga estrategias dinámicamente y genera 
     modelos capaces de operar en cualquier símbolo (Agnósticos).
     """
-    def __init__(self, strategies_dir: str = "api/strategies", models_dir: str = "api/data/models"):
+    def __init__(self, strategies_dir: str = "api/src/domain/strategies", models_dir: str = "api/data/models"):
         # Adjust paths to be relative to project root if needed
         # Assuming running from project root e:\antigravity\signaalKei_platform
         self.strategies_dir = strategies_dir
@@ -35,7 +35,7 @@ class StrategyTrainer:
     def load_strategy_class(self, strategy_name: str):
         """Dynamic strategy class loading."""
         try:
-            module_path = f"api.strategies.{strategy_name}"
+            module_path = f"api.src.domain.strategies.{strategy_name}"
             module = importlib.import_module(module_path)
             
             # Try snake_case to PascalCase conversion first
@@ -88,7 +88,7 @@ class StrategyTrainer:
             
             # --- TASK 5.1: Contexto de Posición ---
             # En lugar de usar los datos crudos, inyectamos el estado simulado
-            full_dataset = self._apply_position_context(full_dataset)
+            full_dataset = self._inject_position_context(full_dataset)
             # -------------------------------------
             
             # Selección de características (Features) - Dynamic
@@ -151,63 +151,37 @@ class StrategyTrainer:
         if emit_callback: await emit_callback("🏁 Training complete", "success")
         return results
 
-    def _apply_position_context(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _inject_position_context(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Tarea 5.1: Simula una trayectoria de posición para que la IA aprenda 
-        que si el PnL es negativo, debe buscar un DCA o esperar.
+        Tarea 5.1: Inyección de Contexto en Entrenamiento.
+        Añade columnas de estado de cuenta para que la IA aprenda a gestionar DCA.
         """
-        # Evitar SettingWithCopyWarning
-        df = df.copy().reset_index(drop=True)
-        
-        # Inicializar columnas de estado
+        df = df.copy()
         df['in_position'] = 0
         df['current_pnl'] = 0.0
-        df['dca_count'] = 0
         
-        pos_avg = 0.0
-        is_open = False
-        count = 0
+        avg_price = 0.0
+        in_pos = False
         
-        # Mapping signals to internal codes if needed, or assuming:
-        # 1 = BUY, 2 = SELL, 0 = HOLD
-        
-        # Iterar para construir el contexto histórico
+        # Iteración explícita para simulación de estado
         for i in range(1, len(df)):
             prev_signal = df.iloc[i-1]['signal']
-            current_close = df.iloc[i]['close']
             
-            # Gestión de estado basado en la señal PREVIA (simulando ejecución al cierre/apertura siguiente)
-            if prev_signal == 1: # BUY signal
-                if not is_open:
-                     # New Position
-                     is_open = True
-                     pos_avg = current_close
-                     count = 1
-                else:
-                     # DCA / Add to position
-                     # Simple average update for simulation
-                     total_val = (pos_avg * count) + current_close
-                     count += 1
-                     pos_avg = total_val / count
-            
-            elif prev_signal == 2: # SELL signal
-                if is_open:
-                    # Close Position
-                    is_open = False
-                    pos_avg = 0.0
-                    count = 0
-            
-            # Asignar estado actual a la fila (Features para el modelo en este paso)
-            if is_open:
-                df.at[i, 'in_position'] = 1
-                df.at[i, 'dca_count'] = count
-                if pos_avg > 0:
-                    # Calcular PnL No Realizado
-                    pnl = (current_close - pos_avg) / pos_avg
-                    df.at[i, 'current_pnl'] = pnl
-            else:
-                df.at[i, 'in_position'] = 0
-                df.at[i, 'current_pnl'] = 0.0
-                df.at[i, 'dca_count'] = 0
+            # Si la estrategia base indica compra, iniciamos/aumentamos posición
+            if prev_signal == 1:
+                in_pos = True
+                # Lógica de promedio simplificada para entrenamiento:
+                # Asumimos que la señal 1 actualiza el precio de referencia (o es la entrada)
+                avg_price = df.iloc[i]['close'] 
+                
+            if in_pos:
+                df.at[df.index[i], 'in_position'] = 1
+                if avg_price > 0:
+                    df.at[df.index[i], 'current_pnl'] = (df.iloc[i]['close'] - avg_price) / avg_price
+                
+                # Si hay señal de venta, reseteamos para el siguiente ciclo
+                if prev_signal == 2:
+                    in_pos = False
+                    avg_price = 0.0
                     
         return df

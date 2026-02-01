@@ -4,10 +4,9 @@ import pandas as pd
 import logging
 import importlib
 from typing import Dict, Any, List, Optional
-from api.ml.strategy_trainer import StrategyTrainer
-from api.ml.strategy_trainer import StrategyTrainer
+from api.src.domain.services.strategy_trainer import StrategyTrainer
 from api.src.domain.services.exchange_port import IExchangePort
-from api.strategies.base import BaseStrategy
+from api.src.domain.strategies.base import BaseStrategy
 
 class BacktestService:
     """
@@ -54,7 +53,7 @@ class BacktestService:
                 model = joblib.load(model_path)
                 
                 # Importación dinámica del contrato de la estrategia
-                module = importlib.import_module(f"api.strategies.{strat_name}")
+                module = importlib.import_module(f"api.src.domain.strategies.{strat_name}")
                 class_name = "".join(w.title() for w in strat_name.split("_"))
                 StrategyClass = getattr(module, class_name)
                 strategy = StrategyClass()
@@ -154,7 +153,7 @@ class BacktestService:
                     continue
                 
                 model = joblib.load(model_path)
-                module = importlib.import_module(f"api.strategies.{strat_name}")
+                module = importlib.import_module(f"api.src.domain.strategies.{strat_name}")
                 class_name = "".join(w.title() for w in strat_name.split("_"))
                 StrategyClass = getattr(module, class_name)
                 strategy_obj = StrategyClass()
@@ -193,8 +192,8 @@ class BacktestService:
                 df_processed['ai_signal'] = df_processed['ai_signal'].fillna(0)
 
                 # Simulación de trading con DCA y Flipping (Long/Short)
-                # Tarea 5.2: Motor de Simulación DCA
-                simulation_result = self.simulate_dca_logic(
+                # Tarea 9.1: Lógica de Inversión / Flip (S9)
+                simulation_result = self._simulate_with_reversal(
                     df_processed, 
                     initial_balance=initial_balance,
                     trade_amount=step_investment,
@@ -283,15 +282,17 @@ class BacktestService:
         elif timeframe == '1m': limit = days * 1440
         limit += 100 # Buffer
         
+        self.logger.info(f"🌍 FETCHING REAL DATA via CCXT PubAPI for {symbol} (Limit: {limit} candles)")
         df = await self.exchange.get_public_historical_data(symbol, timeframe, limit=limit, exchange_id=exchange_id)
         if df.empty:
             raise ValueError(f"No se pudieron obtener datos para {symbol}")
         return df
 
-    def simulate_dca_logic(self, df_processed, initial_balance=1000.0, trade_amount=None, tp=0.03, sl=0.02):
+    def _simulate_with_reversal(self, df_processed, initial_balance=1000.0, trade_amount=None, tp=0.03, sl=0.02):
         """
-        Tarea 5.2: Motor de Simulación DCA y Tarea 6.1 (Intra-candle)
-        Simula la lógica de trading con DCA y checks de mechas High/Low.
+        Tarea 9.1: Lógica de Inversión / Flip (S9).
+        Anteriormente _simulate_event_driven.
+        Si la IA detecta cambio de tendencia, cierra y reversa.
         """
         balance = initial_balance
         step_investment = trade_amount or (initial_balance * 0.2)
@@ -308,7 +309,7 @@ class BacktestService:
         previous_signal = None
         active_trading = False
         
-        from api.strategies.base import BaseStrategy
+        from api.src.domain.strategies.base import BaseStrategy
 
         for timestamp, row in df_processed.iterrows():
             price = row['close']

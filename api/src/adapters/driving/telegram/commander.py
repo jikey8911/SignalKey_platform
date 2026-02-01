@@ -1,5 +1,5 @@
 import logging
-from api.bot.telegram_bot import TelegramUserBot
+from api.src.infrastructure.telegram.telegram_bot import TelegramUserBot
 
 logger = logging.getLogger("TelegramCommander")
 
