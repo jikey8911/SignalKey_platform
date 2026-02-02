@@ -154,7 +154,17 @@ class BacktestService:
                 
                 model = joblib.load(model_path)
                 module = importlib.import_module(f"api.src.domain.strategies.{strat_name}")
-                class_name = "".join(w.title() for w in strat_name.split("_"))
+                if "_" in strat_name:
+                    class_name = "".join(w.title() for w in strat_name.split("_"))
+                else:
+                    class_name = strat_name
+                
+                # Validation / Fallback
+                if not hasattr(module, class_name):
+                     fallback_name = "".join(w.title() for w in strat_name.split("_"))
+                     if hasattr(module, fallback_name):
+                         class_name = fallback_name
+
                 StrategyClass = getattr(module, class_name)
                 strategy_obj = StrategyClass()
                 features = strategy_obj.get_features()
@@ -234,10 +244,17 @@ class BacktestService:
         
         # 5. Preparar Chart Data
         chart_data = []
+        def sanitize(val):
+            if pd.isna(val) or val == float('inf') or val == float('-inf'): return None
+            return val
+
         for timestamp, row in df.iterrows():
             chart_data.append({
                 "time": int(timestamp.timestamp()),
-                "open": row['open'], "high": row['high'], "low": row['low'], "close": row['close']
+                "open": sanitize(row['open']), 
+                "high": sanitize(row['high']), 
+                "low": sanitize(row['low']), 
+                "close": sanitize(row['close'])
             })
 
         return {
@@ -430,14 +447,15 @@ class BacktestService:
                     short_invested = 0
                     continue
 
-            # --- Trading Logic (DCA) ---
+            # --- Trading Logic (DCA & Market Flip) ---
             if signal == BaseStrategy.SIGNAL_BUY: 
-                # Close Shorts
+                # Check for FLIP (Short -> Long)
                 if short_amount > 0:
+                    # 1. Close Short (Flip Side A)
                     pnl = short_invested - (short_amount * price)
                     balance += short_invested + pnl
-                    avg_entry_price = short_invested / short_amount if short_amount > 0 else 0
-                    pnl_percent = (pnl / short_invested * 100) if short_invested > 0 else 0
+                    avg_entry_price = short_invested / short_amount
+                    pnl_percent = (pnl / short_invested * 100)
                     
                     trades.append({
                         "time": timestamp.isoformat(),
@@ -447,15 +465,34 @@ class BacktestService:
                         "pnl": round(pnl, 2),
                         "pnl_percent": round(pnl_percent, 2),
                         "avg_price": round(avg_entry_price, 2),
-                        "label": "CLOSE_SHORT"
+                        "label": "FLIP_CLOSE_SHORT" # Etiqueta específica para Flip
                     })
                     if pnl > 0: win_count += 1
                     else: loss_count += 1
+                    
                     short_amount = 0
                     short_invested = 0
+                    
+                    # 2. Immediate Open Long (Flip Side B - Atomic Reversal)
+                    # El Flip implica estar posicionado en Long inmediatamente
+                    if balance >= step_investment:
+                        amount_to_buy = step_investment / price
+                        long_amount += amount_to_buy
+                        long_invested += step_investment
+                        balance -= step_investment
+                        
+                        trades.append({
+                            "time": timestamp.isoformat(),
+                            "type": "BUY",
+                            "price": price,
+                            "amount": amount_to_buy,
+                            "avg_price": round(price, 2),
+                            "label": "FLIP_OPEN_LONG" # Etiqueta específica para Flip
+                        })
                 
-                # Open/DCA Long
-                if balance >= step_investment:
+                # Normal Long (Open or DCA) if not a Flip (or if balance allowed flipping)
+                elif balance >= step_investment:
+                     # Si ya era Long, es DCA. Si no tenía nada, es Open Normal.
                     is_dca = long_amount > 0
                     amount_to_buy = step_investment / price
                     long_amount += amount_to_buy
@@ -473,12 +510,13 @@ class BacktestService:
                     })
                     
             elif signal == BaseStrategy.SIGNAL_SELL: 
-                # Close Longs
+                # Check for FLIP (Long -> Short)
                 if long_amount > 0:
+                    # 1. Close Long (Flip Side A)
                     pnl = (long_amount * price) - long_invested
                     balance += (long_amount * price)
-                    avg_entry_price = long_invested / long_amount if long_amount > 0 else 0
-                    pnl_percent = (pnl / long_invested * 100) if long_invested > 0 else 0
+                    avg_entry_price = long_invested / long_amount
+                    pnl_percent = (pnl / long_invested * 100)
                     
                     trades.append({
                         "time": timestamp.isoformat(),
@@ -488,15 +526,32 @@ class BacktestService:
                         "pnl": round(pnl, 2),
                         "pnl_percent": round(pnl_percent, 2),
                         "avg_price": round(avg_entry_price, 2),
-                        "label": "CLOSE_LONG"
+                        "label": "FLIP_CLOSE_LONG" # Etiqueta específica para Flip
                     })
                     if pnl > 0: win_count += 1
                     else: loss_count += 1
+                    
                     long_amount = 0
                     long_invested = 0
                     
-                # Open/DCA Short
-                if balance >= step_investment:
+                    # 2. Immediate Open Short (Flip Side B - Atomic Reversal)
+                    if balance >= step_investment:
+                        amount_to_short = step_investment / price
+                        short_amount += amount_to_short
+                        short_invested += step_investment
+                        balance -= step_investment
+                        
+                        trades.append({
+                            "time": timestamp.isoformat(),
+                            "type": "SELL",
+                            "price": price,
+                            "amount": amount_to_short,
+                            "avg_price": round(price, 2),
+                            "label": "FLIP_OPEN_SHORT" # Etiqueta específica para Flip
+                        })
+                        
+                # Normal Short (Open or DCA) if not a Flip
+                elif balance >= step_investment:
                     is_dca = short_amount > 0
                     amount_to_short = step_investment / price
                     short_amount += amount_to_short

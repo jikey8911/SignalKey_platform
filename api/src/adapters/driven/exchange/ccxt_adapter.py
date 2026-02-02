@@ -505,6 +505,41 @@ class CcxtAdapter(IExchangePort):
             logger.error(f"Error fetching markets temp for {exchange_id}: {e}")
             return {}
 
+    async def fetch_balance_private(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None) -> Dict[str, Any]:
+        """
+        Fetches balance using provided credentials directly (without persistent user referencing).
+        Useful for one-off checks or when CEXService manages the credentials.
+        """
+        exchange_id = exchange_id.lower()
+        client = None
+        try:
+            exchange_class = getattr(ccxt, exchange_id)
+            config = {
+                'apiKey': api_key,
+                'secret': secret,
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'}
+            }
+            if password:
+                config['password'] = password
+            if uid: 
+                 config['uid'] = uid
+            
+            client = exchange_class(config)
+            
+            # Windows DNS Fix
+            session = self._create_custom_session()
+            if session: client.session = session
+            
+            balance = await client.fetch_balance()
+            return balance
+        except Exception as e:
+            logger.error(f"Error fetching private balance for {exchange_id}: {e}")
+            return {}
+        finally:
+            if client:
+                await client.close()
+
     async def close_all(self):
         if self._exchange_instance:
             await self._exchange_instance.close()

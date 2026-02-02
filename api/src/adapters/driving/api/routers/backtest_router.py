@@ -1,17 +1,34 @@
 """
 Endpoints para backtesting - Exchanges, Markets y Symbols
 """
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional, List, Dict, Any
 import logging
 from datetime import datetime
 from api.src.adapters.driven.persistence.mongodb import db
 from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
 from api.src.application.services.ml_service import MLService
+from api.src.domain.entities.bot_instance import BotInstance
+from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
+from api.src.infrastructure.security.auth_deps import get_current_user
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/backtest", tags=["backtest"])
+
+
+@router.get("/exchanges/{user_id}")
+async def get_user_exchanges(user_id: str):
+    # ... (Keep existing GET endpoints for now or refactor them later if needed)
+    # Since the user specifically asked about the POST /run error, we focus there first.
+    pass 
+
+# ... (omitting GET endpoints implementation in replacement to save tokens, assuming target lines are specifically around run_backtest)
+# Wait, replace_file_content replaces the BLOCK. I should stick to replacing the Imports and the run_backtest function.
+# I will make two calls. One for imports, one for the function.
+
+# CALL 1: Imports
+
 
 
 @router.get("/exchanges/{user_id}")
@@ -113,39 +130,24 @@ async def get_exchange_symbols(
 
 @router.post("/run")
 async def run_backtest(
-    user_id: str,
     symbol: str,
     exchange_id: str = "binance",
     days: int = 7,
     timeframe: str = "1h",
-    use_ai: bool = True, # Default to True for ML backtest
-    strategy: str = "auto", # Default to auto/neural
-    model_id: Optional[str] = None, # Received from frontend
-    initial_balance: float = 10000.0, # User configured initial balance
-    trade_amount: Optional[float] = None # User configured trade amount (DCA step)
+    use_ai: bool = True,
+    strategy: str = "auto",
+    model_id: Optional[str] = None,
+    initial_balance: float = 10000.0,
+    trade_amount: Optional[float] = None,
+    current_user: dict = Depends(get_current_user)
 ):
     """
-    Ejecuta un backtest con estrategia SMA o con IA
-    
-    Args:
-        user_id: ID del usuario (openId)
-        symbol: Símbolo a analizar (ej: BTC/USDT)
-        exchange_id: ID del exchange (por defecto binance)
-        days: Número de días históricos
-        timeframe: Timeframe de las velas
-        use_ai: Si True, usa IA; si False, usa estrategia SMA
-        strategy: Estrategia de IA ("standard" o "sniper") si use_ai=True
-        initial_balance: Balance inicial del backtest
-        trade_amount: Monto por operación (override)
-    
-    Returns:
-        Resultados del backtest con métricas
+    Ejecuta un backtest (Auth via JWT).
     """
     try:
-        # Verificar que el usuario existe
-        user = await db.users.find_one({"openId": user_id})
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+        user = current_user
+        user_id = user["openId"]
+
         
         # Obtener configuración del usuario si se usa IA
         user_config = None
@@ -216,48 +218,49 @@ async def deploy_bot(
     leverage: int = 1
 ):
     """
-    Crea un bot simulado basado en una estrategia ganadora del backtest.
+    Crea un bot basado en una estrategia ganadora del backtest.
+    Hereda el modo (Real/Simulado) de la configuración del usuario.
     """
     try:
         # Verificar usuario
         user = await db.users.find_one({"openId": user_id})
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-
-        # Crear configuración del bot
-        # En el futuro esto podría usar un servicio dedicado
-        bot_config = {
-            "userId": user["_id"],
-            "symbol": symbol,
-            "strategy": strategy,
-            "status": "active",  # O "simulated"
-            "mode": "simulation", # Explicitamente simulado
-            "initialBalance": initial_balance,
-            "currentBalance": initial_balance,
-            "leverage": leverage,
-            "pnl": 0.0,
-            "trades": [],
-            "createdAt": datetime.utcnow(),
-            "lastCheck": datetime.utcnow()
-        }
         
-        # Insertar en colección 'bots' (o trades si no existe bots)
-        # Asumiremos 'trades' por ahora ya que es lo que vimos en el código
-        # pero con un flag especial o en una colección nueva si preferimos.
-        # El usuario pidió "crear el bot", así que lo guardamos.
+        # Obtener configuración para determinar Modo
+        config = await db.app_configs.find_one({"userId": user["_id"]}) or {}
+        # Por defecto "simulated" si no existe config o flag
+        current_mode = "real" if config.get("tradingMode") == "live" else "simulated"
         
-        # Como no vi modelo de Bot explícito, lo guardaré en 'active_bots' o similar si existe,
-        # si no, lo guardamos en 'trades' con status 'active_bot'.
+        # TODO: Si es FULL REAL, validar API Keys aquí antes de guardar
         
-        # Revisando db usage en otros archivos, parece que usan 'trades' para todo?
-        # Mejor creamos una colección 'bots' si no existe.
+        # Crear BotInstance
+        new_bot = BotInstance(
+            id=None,
+            user_id=user["openId"], # Usamos openId como identificador consistente en routers
+            name=f"{strategy} - {symbol} ({current_mode})",
+            symbol=symbol,
+            strategy_name=strategy,
+            timeframe="1h", # TODO: Pasar timeframe desde frontend
+            mode=current_mode,
+            status="active",
+            config={
+                "initial_balance": initial_balance,
+                "leverage": leverage,
+                "deployed_at": datetime.utcnow().isoformat()
+            }
+        )
         
-        result = await db.bots.insert_one(bot_config)
+        repo = MongoBotRepository()
+        bot_id = await repo.save(new_bot)
+        
+        logger.info(f"Bot deployed: {bot_id} (Mode: {current_mode}) for {user_id}")
         
         return {
             "status": "success", 
-            "message": f"Bot deployed for {symbol} with strategy {strategy}",
-            "bot_id": str(result.inserted_id)
+            "message": f"Bot deployed for {symbol} in {current_mode} mode.",
+            "bot_id": bot_id,
+            "mode": current_mode
         }
         
     except Exception as e:

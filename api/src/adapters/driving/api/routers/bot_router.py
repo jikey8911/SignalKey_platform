@@ -3,6 +3,8 @@ from pydantic import BaseModel
 from typing import List, Optional
 from api.src.domain.entities.bot_instance import BotInstance
 from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
+from api.src.adapters.driven.persistence.mongodb import db 
+
 
 router = APIRouter(prefix="/bots", tags=["Bot Management sp2"])
 repo = MongoBotRepository()
@@ -30,9 +32,37 @@ async def create_new_bot(data: CreateBotSchema):
     return {"id": bot_id, "status": "created"}
 
 @router.get("/")
-async def list_user_bots():
-    bots = await repo.get_all_by_user("default_user")
-    return [b.to_dict() for b in bots]
+async def list_user_bots(user_id: str = "default_user"): 
+    # TODO: In a real scenario, extract from Auth Token dependency.
+    # For now, we accept query param or default, but ideally the calling service passes it.
+    
+    bots = await repo.get_all_by_user(user_id)
+    result = []
+    
+    for bot in bots:
+        b_dict = bot.to_dict()
+        
+        # Enrich with active trade data if exists
+        # We assume one active trade per symbol/user context usually
+        active_trade = await db.trades.find_one({
+            "userId": user_id,
+            "symbol": bot.symbol,
+            "status": "active"
+        })
+        
+        if active_trade:
+            b_dict["active_trade_id"] = str(active_trade["_id"])
+            b_dict["pnl"] = active_trade.get("pnl", 0.0)
+            b_dict["current_price"] = active_trade.get("currentPrice", 0.0)
+            b_dict["status"] = "active" # Force active status if trade is running
+        else:
+            b_dict["active_trade_id"] = None
+            b_dict["pnl"] = 0.0
+            b_dict["current_price"] = 0.0
+            
+        result.append(b_dict)
+        
+    return result
 
 @router.patch("/{bot_id}/status")
 async def toggle_bot_status(bot_id: str, status: str):

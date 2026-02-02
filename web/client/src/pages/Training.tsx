@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/Badge';
+import { Badge } from '@/components/ui/badge';
 import { BrainCircuit, Database, Play, History, CheckCircle2, RotateCcw, Terminal, Plus, Trophy } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSocketContext } from '@/contexts/SocketContext';

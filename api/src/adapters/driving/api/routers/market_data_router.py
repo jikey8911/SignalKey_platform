@@ -38,3 +38,33 @@ async def list_symbols(exchange_id: str, market_type: str):
     """
     symbols = await ccxt_service.get_symbols(exchange_id, market_type)
     return symbols
+
+@router.get("/candles")
+async def get_candles(symbol: str, timeframe: str = "1h", limit: int = 100):
+    """
+    Get historical candles for charts.
+    """
+    try:
+        # We use the public data fetcher which is robust
+        df = await ccxt_service.get_public_historical_data(symbol, timeframe, limit=limit)
+        
+        if df.empty:
+             return []
+             
+        # Convert to list of dicts for frontend {time, open, high, low, close, volume}
+        # Timestamp in df index is datetime64, convert to int timestamp (seconds)
+        data = []
+        for timestamp, row in df.iterrows():
+            data.append({
+                "time": int(timestamp.timestamp()), # Frontend charts usually expect seconds
+                "open": row['open'],
+                "high": row['high'],
+                "low": row['low'],
+                "close": row['close'],
+                "volume": row['volume']
+            })
+        return data
+        
+    except Exception as e:
+        logger.error(f"Error fetching candles for {symbol}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

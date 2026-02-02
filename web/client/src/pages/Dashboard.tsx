@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Card } from '@/components/ui/Card';
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Switch } from '@/components/ui/switch';
 import { trpc } from '@/lib/trpc';
 import { useTrading } from '@/contexts/TradingContext';
@@ -8,7 +8,7 @@ import { TrendingUp, TrendingDown, DollarSign, Zap } from 'lucide-react';
 import { useSocket } from '@/_core/hooks/useSocket';
 import { useQueryClient } from '@tanstack/react-query';
 import { CONFIG } from '@/config';
-import { Badge } from '@/components/ui/Badge';
+import { Badge } from '@/components/ui/badge';
 
 const MetaSelectorWidget = ({ user }: { user: any }) => {
   const [symbol, setSymbol] = useState('BTC/USDT');

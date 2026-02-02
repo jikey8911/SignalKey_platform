@@ -71,22 +71,33 @@ class ExecutionEngine:
                 user_id_obj = bot_instance.get('user_id')
                 user_id = str(user_id_obj) if user_id_obj else "default_user"
 
-                # --- S9: Lógica de Inversión / Flip ---
-                # Verificar si tenemos posición contraria abierta y cerrarla
+                # --- S9: Lógica de Inversión / Flip (Live Execution) ---
+                # Verificar si tenemos posición contraria abierta
                 current_pos_side = bot_instance.get('side') # BUY/SELL
-                if current_pos_side:
+                current_qty = bot_instance.get('position', {}).get('qty', 0.0)
+
+                if current_pos_side and current_qty > 0:
                     is_reversal = (side == 'buy' and current_pos_side == 'SELL') or \
                                   (side == 'sell' and current_pos_side == 'BUY')
                     
                     if is_reversal:
-                        self.logger.info(f"🔄 FLIP DETECTED for {symbol}: {current_pos_side} -> {side}. Closing first.")
-                        # Intentar cerrar la posición actual antes de abrir la nueva
-                        # Nota: Esto asume que el execute_trade o método específico maneja cierre
-                        # Por ahora usamos execute_trade con parametro reduce_only? 
-                        # O mejor, asumimos que CEXService.execute_trade maneja lógica inteligente si side es opuesto.
-                        # PERO para ser explícitos:
-                        # await self.real_exchange.close_position(symbol, user_id) 
-                        # (Si existiera close_position genérico, si no, enviamos orden opuesta)
+                        # 💣 MARKET FLIP STRATEGY
+                        # En lugar de cerrar y abrir (2 órdenes), enviamos 1 orden gigante.
+                        # Cantidad = Lo que debo (current_qty) + Lo que quiero invertir (amount)
+                        
+                        flip_amount = current_qty + amount
+                        
+                        # Actualizamos el objeto de análisis para la ejecución
+                        analysis.parameters.amount = flip_amount
+                        analysis.reasoning += f" [MARKET FLIP: {current_qty} + {amount}]"
+                        
+                        self.logger.info(f"🔄 MARKET FLIP DETECTED for {symbol}: {current_pos_side} -> {side}")
+                        self.logger.info(f"🚀 EXECUTING ATOMIC FLIP: Order Size {flip_amount} (Cover {current_qty} + Open {amount})")
+
+                        # NOTA: No llamamos a close_position(). 
+                        # La orden de mercado 'buy' masiva cerrará el short y abrirá el long automáticamente 
+                        # (Netting mode o Hedge mode gestionado por el exchange/adapter).
+                        # En modo Hedge podría requerir lógica distinta, asumimos Netting o gestión inteligente del Adapter.
                         pass
 
                 trade_result = await self.real_exchange.execute_trade(analysis, user_id)
