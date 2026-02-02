@@ -8,18 +8,20 @@ export type TrpcContext = {
     req: CreateExpressContextOptions["req"];
     res: CreateExpressContextOptions["res"];
     user: any | null;
+    token?: string;
 };
 
 export async function createContext(
     opts: CreateExpressContextOptions
 ): Promise<TrpcContext> {
     let user: any | null = null;
+    let token: string | undefined;
 
     try {
         // Get cookie from request
         const cookieHeader = opts.req.headers.cookie;
         if (!cookieHeader) {
-            return { req: opts.req, res: opts.res, user: null };
+            return { req: opts.req, res: opts.res, user: null, token: undefined };
         }
 
         // Parse cookies
@@ -29,15 +31,15 @@ export async function createContext(
             return acc;
         }, {} as Record<string, string>);
 
-        const token = cookies[COOKIE_NAME];
+        token = cookies[COOKIE_NAME];
         if (!token) {
-            return { req: opts.req, res: opts.res, user: null };
+            return { req: opts.req, res: opts.res, user: null, token: undefined };
         }
 
         // Verify JWT token
         const session = verifySession(token);
         if (!session) {
-            return { req: opts.req, res: opts.res, user: null };
+            return { req: opts.req, res: opts.res, user: null, token: undefined };
         }
 
         // Get user from backend API instead of MongoDB
@@ -71,5 +73,6 @@ export async function createContext(
         req: opts.req,
         res: opts.res,
         user,
+        token,
     };
 }
