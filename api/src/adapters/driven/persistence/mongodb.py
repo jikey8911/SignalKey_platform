@@ -122,3 +122,17 @@ async def update_virtual_balance(user_id: str, market_type: str, asset: str, amo
         "amount": amount,
         "updatedAt": datetime.utcnow().isoformat()
     })
+
+async def init_db():
+    """
+    Inicializa la base de datos MongoDB con valores por defecto si es necesario.
+    """
+    logger.info("Initializing MongoDB collections and defaults...")
+    try:
+        collections = await db.list_collection_names()
+        for coll in ["virtual_balances", "trades", "trading_signals"]:
+            if coll not in collections:
+                await db.create_collection(coll)
+                logger.info(f"Created collection: {coll}")
+    except Exception as e:
+        logger.error(f"Error during MongoDB initialization: {e}")
