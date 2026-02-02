@@ -39,7 +39,7 @@ async def lifespan(app: FastAPI):
         from api.src.application.services.boot_manager import BootManager
         # Pasamos None como socket_service por ahora si no está disponible en scope global fácil o lo inyectamos después
         # Nota: main.py tiene imports en desorden, idealmente socket_service vendría de router o container
-        boot_manager = BootManager(db_adapter=db) 
+        boot_manager = BootManager(db_adapter_in=db) 
         await boot_manager.initialize_active_bots()
         # ----------------------------------------
     except Exception as e:
@@ -80,9 +80,13 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+        "http://localhost:3002",
+        "http://127.0.0.1:3002",
         "https://psychic-guide-g4wr4jp4r4x93p45w-3000.app.github.dev" # Specific user origin
     ],
-    allow_origin_regex=r"https://.*\.app\.github\.dev", # Match any Codespace URL
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?|https://.*\.app\.github\.dev",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

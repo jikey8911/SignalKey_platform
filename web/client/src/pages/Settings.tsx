@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { trpc } from '@/lib/trpc';
+
 import { Eye, EyeOff, Save, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { CCXT_EXCHANGES } from '@/constants/exchanges';
@@ -11,10 +11,14 @@ import { CONFIG } from '@/config';
 
 export default function Settings() {
   const { user: authUser } = useAuth({ redirectOnUnauthenticated: true });
-  const { data: config, isLoading } = trpc.trading.getConfig.useQuery();
-  const updateConfigMutation = trpc.trading.updateConfig.useMutation();
+
+  // const { data: config, isLoading } = trpc.trading.getConfig.useQuery(); // REMOVED TRPC
+  // const updateConfigMutation = trpc.trading.updateConfig.useMutation(); // REMOVED TRPC
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [showSecrets, setShowSecrets] = useState(false);
   const [availableChannels, setAvailableChannels] = useState<any[]>([]);
+  const [serverConfig, setServerConfig] = useState<any>(null);
 
   const [formData, setFormData] = useState<{
     demoMode: boolean;
@@ -98,51 +102,76 @@ export default function Settings() {
     }
   });
 
+  // Load Config from REST API
   React.useEffect(() => {
-    if (config) {
-      setFormData({
-        demoMode: config.demoMode ?? true,
-        isAutoEnabled: config.isAutoEnabled ?? true,
-        aiProvider: config.aiProvider || 'gemini',
-        aiApiKey: config.aiApiKey || '',
-        geminiApiKey: config.geminiApiKey || '',
-        openaiApiKey: config.openaiApiKey || '',
-        perplexityApiKey: config.perplexityApiKey || '',
-        grokApiKey: config.grokApiKey || '',
-        zeroExApiKey: config.zeroExApiKey || '',
-        telegramBotToken: config.telegramBotToken || '',
-        telegramChatId: config.telegramChatId || '',
-        telegramChannels: config.telegramChannels || { allow: [], deny: [] },
-        exchanges: config.exchanges?.length ? config.exchanges : [{
-          exchangeId: 'binance',
-          apiKey: '',
-          secret: '',
-          password: '',
-          uid: '',
-          isActive: true
-        }],
-        dexConfig: {
-          walletPrivateKey: config.dexConfig?.walletPrivateKey || '',
-          rpcUrl: config.dexConfig?.rpcUrl || 'https://api.mainnet-beta.solana.com'
-        },
-        investmentLimits: {
-          cexMaxAmount: config.investmentLimits?.cexMaxAmount ?? 100,
-          dexMaxAmount: config.investmentLimits?.dexMaxAmount ?? 1
-        },
-        virtualBalances: {
-          cex: config.virtualBalances?.cex ?? 10000,
-          dex: config.virtualBalances?.dex ?? 10
-        },
-        botStrategy: {
-          maxActiveBots: config.botStrategy?.maxActiveBots ?? 5,
-          tpLevels: config.botStrategy?.tpLevels ?? 3,
-          tpPercent: config.botStrategy?.tpPercent ?? 2.0,
-          slPercent: config.botStrategy?.slPercent ?? 1.5,
-          sellPercentPerTP: config.botStrategy?.sellPercentPerTP ?? 33.3
+    const fetchConfig = async () => {
+      try {
+        setIsLoading(true);
+        const res = await fetch(`${CONFIG.API_BASE_URL}/config/`, {
+          credentials: 'include' // Important for Cookie Auth
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          const config = data.config; // API returns { config: ... }
+
+          if (config) {
+            setServerConfig(config);
+            setFormData({
+              demoMode: config.demoMode ?? true,
+              isAutoEnabled: config.isAutoEnabled ?? true,
+              aiProvider: config.aiProvider || 'gemini',
+              aiApiKey: config.aiApiKey || '',
+              geminiApiKey: config.geminiApiKey || '',
+              openaiApiKey: config.openaiApiKey || '',
+              perplexityApiKey: config.perplexityApiKey || '',
+              grokApiKey: config.grokApiKey || '',
+              zeroExApiKey: config.zeroExApiKey || '',
+              telegramBotToken: config.telegramBotToken || '',
+              telegramChatId: config.telegramChatId || '',
+              telegramChannels: config.telegramChannels || { allow: [], deny: [] },
+              exchanges: config.exchanges?.length ? config.exchanges : [{
+                exchangeId: 'binance',
+                apiKey: '',
+                secret: '',
+                password: '',
+                uid: '',
+                isActive: true
+              }],
+              dexConfig: {
+                walletPrivateKey: config.dexConfig?.walletPrivateKey || '',
+                rpcUrl: config.dexConfig?.rpcUrl || 'https://api.mainnet-beta.solana.com'
+              },
+              investmentLimits: {
+                cexMaxAmount: config.investmentLimits?.cexMaxAmount ?? 100,
+                dexMaxAmount: config.investmentLimits?.dexMaxAmount ?? 1
+              },
+              virtualBalances: {
+                cex: config.virtualBalances?.cex ?? 10000,
+                dex: config.virtualBalances?.dex ?? 10
+              },
+              botStrategy: {
+                maxActiveBots: config.botStrategy?.maxActiveBots ?? 5,
+                tpLevels: config.botStrategy?.tpLevels ?? 3,
+                tpPercent: config.botStrategy?.tpPercent ?? 2.0,
+                slPercent: config.botStrategy?.slPercent ?? 1.5,
+                sellPercentPerTP: config.botStrategy?.sellPercentPerTP ?? 33.3
+              }
+            });
+          }
         }
-      });
+      } catch (e) {
+        console.error("Error loading config:", e);
+        toast.error("Error al cargar la configuración");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    if (authUser) {
+      fetchConfig();
     }
-  }, [config]);
+  }, [authUser]);
 
   const handleSave = async () => {
     try {
@@ -158,11 +187,26 @@ export default function Settings() {
         geminiApiKey: formData.geminiApiKey ? `${formData.geminiApiKey.substring(0, 10)}...` : 'vacío'
       });
 
-      await updateConfigMutation.mutateAsync(formData);
+      setIsSaving(true);
+      // await updateConfigMutation.mutateAsync(formData); // REMOVED TRPC
+
+      const res = await fetch(`${CONFIG.API_BASE_URL}/config/`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(formData),
+        credentials: 'include'
+      });
+
+      if (!res.ok) throw new Error("Error saving config");
+
       toast.success('Configuración guardada correctamente');
     } catch (error) {
       console.error('Error guardando configuración:', error);
       toast.error('Error al guardar la configuración');
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -224,9 +268,9 @@ export default function Settings() {
           <h2 className="text-3xl font-bold text-foreground mb-2">Configuración</h2>
           <p className="text-muted-foreground">Gestiona tus credenciales y límites de inversión</p>
         </div>
-        <Button onClick={handleSave} disabled={updateConfigMutation.isPending} className="flex items-center gap-2">
+        <Button onClick={handleSave} disabled={isSaving} className="flex items-center gap-2">
           <Save size={18} />
-          {updateConfigMutation.isPending ? 'Guardando...' : 'Guardar Todo'}
+          {isSaving ? 'Guardando...' : 'Guardar Todo'}
         </Button>
       </div>
 
@@ -298,9 +342,9 @@ export default function Settings() {
           {authUser?.openId && (
             <TelegramConfig
               userId={authUser.openId}
-              telegramApiId={config?.telegramApiId}
-              telegramApiHash={config?.telegramApiHash}
-              telegramPhoneNumber={config?.telegramPhoneNumber}
+              telegramApiId={serverConfig?.telegramApiId}
+              telegramApiHash={serverConfig?.telegramApiHash}
+              telegramPhoneNumber={serverConfig?.telegramPhoneNumber}
             />
           )}
 

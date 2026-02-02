@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useSocketContext } from '@/contexts/SocketContext';
 import { toast } from 'react-hot-toast';
+import { CONFIG } from '@/config';
 
 // --- MONITOR HÍBRIDO (Integrado con Socket Tarea 4.3 & 4.5) ---
 
@@ -140,7 +141,7 @@ const BotsPage = () => {
 
         try {
             // sp4: Pass dynamic user_id
-            const res = await fetch(`${CONFIG.API_BASE_URL}/bots/?user_id=${user.openId}`);
+            const res = await fetch(`${CONFIG.API_BASE_URL}/bots/`);
             if (res.ok) {
                 const data = await res.json();
                 setBots(data);

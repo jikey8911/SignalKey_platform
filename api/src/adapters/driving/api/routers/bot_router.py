@@ -1,10 +1,10 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 from api.src.domain.entities.bot_instance import BotInstance
 from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
 from api.src.adapters.driven.persistence.mongodb import db 
-
+from api.src.infrastructure.security.auth_deps import get_current_user
 
 router = APIRouter(prefix="/bots", tags=["Bot Management sp2"])
 repo = MongoBotRepository()
@@ -17,10 +17,11 @@ class CreateBotSchema(BaseModel):
     mode: str = "simulated"
 
 @router.post("/")
-async def create_new_bot(data: CreateBotSchema):
+async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["openId"]
     bot = BotInstance(
         id=None,
-        user_id="default_user", 
+        user_id=user_id, 
         name=data.name,
         symbol=data.symbol,
         strategy_name=data.strategy_name,
@@ -32,9 +33,8 @@ async def create_new_bot(data: CreateBotSchema):
     return {"id": bot_id, "status": "created"}
 
 @router.get("/")
-async def list_user_bots(user_id: str = "default_user"): 
-    # TODO: In a real scenario, extract from Auth Token dependency.
-    # For now, we accept query param or default, but ideally the calling service passes it.
+async def list_user_bots(current_user: dict = Depends(get_current_user)): 
+    user_id = current_user["openId"]
     
     bots = await repo.get_all_by_user(user_id)
     result = []

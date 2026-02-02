@@ -1,17 +1,13 @@
 from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-import jwt
 import os
 
 from api.src.adapters.driven.database.config_repository import ConfigRepository
 from api.src.adapters.driven.database.mongodb_connection import get_database
+from api.src.infrastructure.security.auth_deps import get_current_user
 
 router = APIRouter(prefix="/config", tags=["configuration"])
-
-# JWT Configuration
-SECRET_KEY = os.getenv("JWT_SECRET", "your-secret-key-change-in-production")
-ALGORITHM = "HS256"
 
 
 class ExchangeConfig(BaseModel):
@@ -48,36 +44,14 @@ async def get_config_repository() -> ConfigRepository:
     return ConfigRepository(db)
 
 
-async def get_current_user_id(request: Request) -> str:
-    """Extract user ID from JWT token"""
-    token = request.cookies.get("manus.sid")
-    if not token:
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        openid = payload.get("openId")
-        if not openid:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        return openid
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.JWTError:
-        raise HTTPException(status_code=401, detail="Invalid token")
-
-
-@router.get("/{user_id}")
+@router.get("/")
 async def get_config(
-    user_id: str,
-    request: Request,
+    current_user: dict = Depends(get_current_user),
     config_repo: ConfigRepository = Depends(get_config_repository)
 ):
     """Get user configuration"""
     try:
-        # Verify user is requesting their own config
-        current_user = await get_current_user_id(request)
-        if current_user != user_id:
-            raise HTTPException(status_code=403, detail="Forbidden")
+        user_id = current_user["openId"]
         
         # Get or create config
         config = await config_repo.get_or_create_config(user_id)
@@ -96,19 +70,15 @@ async def get_config(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.put("/{user_id}")
+@router.put("/")
 async def update_config(
-    user_id: str,
     updates: ConfigUpdate,
-    request: Request,
+    current_user: dict = Depends(get_current_user),
     config_repo: ConfigRepository = Depends(get_config_repository)
 ):
     """Update user configuration"""
     try:
-        # Verify user is updating their own config
-        current_user = await get_current_user_id(request)
-        if current_user != user_id:
-            raise HTTPException(status_code=403, detail="Forbidden")
+        user_id = current_user["openId"]
         
         # Filter out None values
         update_dict = {k: v for k, v in updates.dict().items() if v is not None}
@@ -139,18 +109,14 @@ async def update_config(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.get("/{user_id}/exchanges")
+@router.get("/exchanges")
 async def get_exchanges(
-    user_id: str,
-    request: Request,
+    current_user: dict = Depends(get_current_user),
     config_repo: ConfigRepository = Depends(get_config_repository)
 ):
     """Get user's configured exchanges"""
     try:
-        # Verify user is requesting their own exchanges
-        current_user = await get_current_user_id(request)
-        if current_user != user_id:
-            raise HTTPException(status_code=403, detail="Forbidden")
+        user_id = current_user["openId"]
         
         config = await config_repo.get_or_create_config(user_id)
         exchanges = config.get('exchanges', [])
@@ -163,19 +129,15 @@ async def get_exchanges(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.post("/{user_id}/exchanges")
+@router.post("/exchanges")
 async def add_exchange(
-    user_id: str,
     exchange: ExchangeConfig,
-    request: Request,
+    current_user: dict = Depends(get_current_user),
     config_repo: ConfigRepository = Depends(get_config_repository)
 ):
     """Add exchange to user configuration"""
     try:
-        # Verify user is adding to their own config
-        current_user = await get_current_user_id(request)
-        if current_user != user_id:
-            raise HTTPException(status_code=403, detail="Forbidden")
+        user_id = current_user["openId"]
         
         # Ensure config exists
         await config_repo.get_or_create_config(user_id)
@@ -194,19 +156,15 @@ async def add_exchange(
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 
-@router.delete("/{user_id}/exchanges/{exchange_id}")
+@router.delete("/exchanges/{exchange_id}")
 async def remove_exchange(
-    user_id: str,
     exchange_id: str,
-    request: Request,
+    current_user: dict = Depends(get_current_user),
     config_repo: ConfigRepository = Depends(get_config_repository)
 ):
     """Remove exchange from user configuration"""
     try:
-        # Verify user is removing from their own config
-        current_user = await get_current_user_id(request)
-        if current_user != user_id:
-            raise HTTPException(status_code=403, detail="Forbidden")
+        user_id = current_user["openId"]
         
         success = await config_repo.remove_exchange(user_id, exchange_id)
         

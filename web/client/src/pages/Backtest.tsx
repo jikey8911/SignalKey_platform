@@ -292,7 +292,7 @@ export default function Backtest() {
       setLoadingBalance(true);
       try {
         const res = await fetch(
-          `${CONFIG.API_BASE_URL}/backtest/virtual_balance/${user.openId}?market_type=CEX&asset=USDT`
+          `${CONFIG.API_BASE_URL}/backtest/virtual_balance?market_type=CEX&asset=USDT`
         );
         if (res.ok) {
           const data = await res.json();
@@ -896,7 +896,6 @@ export default function Backtest() {
                           const toastId = toast.loading("Desplegando bot inteligente...");
                           try {
                             const res = await fetch(`${CONFIG.API_BASE_URL}/backtest/deploy_bot?` + new URLSearchParams({
-                              user_id: user?.openId || '',
                               symbol: results.symbol,
                               strategy: results.strategy_name || '',
                               initial_balance: virtualBalance.toString()
@@ -1307,7 +1306,6 @@ export default function Backtest() {
                           const toastId = toast.loading(`Desplegando ${selectedResult.symbol}...`);
                           try {
                             const res = await fetch(`${CONFIG.API_BASE_URL}/backtest/deploy_bot?` + new URLSearchParams({
-                              user_id: user?.openId || '',
                               symbol: selectedResult.symbol,
                               strategy: selectedResult.strategy_name || '',
                               initial_balance: virtualBalance.toString()

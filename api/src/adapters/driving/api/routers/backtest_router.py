@@ -31,22 +31,14 @@ async def get_user_exchanges(user_id: str):
 
 
 
-@router.get("/exchanges/{user_id}")
-async def get_user_exchanges(user_id: str):
+@router.get("/exchanges")
+async def get_user_exchanges(current_user: dict = Depends(get_current_user)):
     """
     Obtiene los exchanges configurados del usuario
-    
-    Args:
-        user_id: ID del usuario (openId)
-    
-    Returns:
-        Lista de exchanges configurados con su estado
     """
     try:
-        # Buscar usuario
-        user = await db.users.find_one({"openId": user_id})
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+        user = current_user
+        user_id = user["openId"]
         
         # Obtener configuración
         config = await db.app_configs.find_one({"userId": user["_id"]})
@@ -70,7 +62,7 @@ async def get_user_exchanges(user_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching exchanges for user {user_id}: {e}")
+        logger.error(f"Error fetching exchanges for user {user.get('openId')}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -211,11 +203,11 @@ async def run_backtest(
 
 @router.post("/deploy_bot")
 async def deploy_bot(
-    user_id: str,
     symbol: str,
     strategy: str,
     initial_balance: float = 1000.0,
-    leverage: int = 1
+    leverage: int = 1,
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Crea un bot basado en una estrategia ganadora del backtest.
@@ -223,9 +215,8 @@ async def deploy_bot(
     """
     try:
         # Verificar usuario
-        user = await db.users.find_one({"openId": user_id})
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+        user = current_user
+        user_id = user["openId"]
         
         # Obtener configuración para determinar Modo
         config = await db.app_configs.find_one({"userId": user["_id"]}) or {}
@@ -237,7 +228,7 @@ async def deploy_bot(
         # Crear BotInstance
         new_bot = BotInstance(
             id=None,
-            user_id=user["openId"], # Usamos openId como identificador consistente en routers
+            user_id=user_id, # Usamos openId como identificador consistente en routers
             name=f"{strategy} - {symbol} ({current_mode})",
             symbol=symbol,
             strategy_name=strategy,
@@ -289,17 +280,16 @@ async def get_ml_models():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/virtual_balance/{user_id}")
+@router.get("/virtual_balance")
 async def get_virtual_balance(
-    user_id: str,
     market_type: str = "CEX",
-    asset: str = "USDT"
+    asset: str = "USDT",
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Obtiene el balance virtual del usuario para backtesting
     
     Args:
-        user_id: ID del usuario (openId)
         market_type: Tipo de mercado (CEX/DEX)
         asset: Asset del balance (USDT, BTC, etc.)
     
@@ -307,10 +297,9 @@ async def get_virtual_balance(
         Balance virtual del usuario
     """
     try:
-        # Buscar usuario
-        user = await db.users.find_one({"openId": user_id})
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+        # Usuario
+        user = current_user
+        user_id = user["openId"]
         
         # Buscar balance virtual
         balance_doc = await db.virtual_balances.find_one({
@@ -336,6 +325,6 @@ async def get_virtual_balance(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error fetching virtual balance: {e}")
+        logger.error(f"Error fetching virtual balance for {current_user.get('openId')}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
