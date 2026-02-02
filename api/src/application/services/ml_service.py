@@ -27,7 +27,7 @@ class MLService:
     async def _fetch_training_data(
         self, 
         symbols: List[str], 
-        timeframe: str, 
+        timeframe: str = "1h", 
         user_id: str = "default_user",
         socket_callback = None
     ) -> Dict[str, pd.DataFrame]:
@@ -131,12 +131,15 @@ class MLService:
             self.logger.error(f"Error backtesting {strategy_name}: {e}")
             return None
 
-    async def train_all_strategies(self, symbols: List[str], timeframe: str, days: int, user_id: str = "default_user") -> Dict[str, Any]:
+    async def train_all_strategies(self, symbols: List[str], timeframe: str = "1h", days: int = 360, user_id: str = "default_user") -> Dict[str, Any]:
         """
         Ciclo de entrenamiento masivo y agnóstico.
         Orquesta la obtención de datos + Entrenamiento de Modelos de Estategia + Entrenamiento del Selector.
         """
-        self.logger.info(f"Iniciando orquestación de entrenamiento para {len(symbols)} activos (User: {user_id}).")
+        # Task: Force 1h and 360 days for now as requested
+        timeframe = timeframe or "1h"
+        days = days or 360
+        self.logger.info(f"Iniciando orquestación de entrenamiento para {len(symbols)} activos (User: {user_id}) | {days}d | {timeframe}")
 
         # Callback para sockets
         async def socket_callback(msg: str, type: str = "info"):

@@ -258,15 +258,16 @@ class CcxtAdapter(IExchangePort):
         
         # Calculate start time
         if use_random_date:
+            # Task: Use 360 days and random period
             max_days_back = 730
-            min_days_back = 365
+            min_days_back = 360
             random_offset = random.randint(min_days_back, max_days_back)
             end_date = datetime.utcnow() - timedelta(days=random_offset)
-            # Fetch enough data for 'limit' candles (rough approx)
-            # Assuming timeframe 1h for now or using limit param directly
-            since_dt = end_date - timedelta(hours=limit) 
-            logger.info(f"🎲 Random training period ending: {end_date.strftime('%Y-%m-%d')}")
+            # Use 360 days of 1h candles = 8640 candles
+            since_dt = end_date - timedelta(days=360) 
+            logger.info(f"🎲 Random training period ending: {end_date.strftime('%Y-%m-%d')} (360 days back)")
             since_ts = int(since_dt.timestamp() * 1000)
+            limit = 8640 # Force limit to 360 days of 1h candles if random_date is used
         else:
             since_ts = None # Fetch most recent
 
@@ -316,13 +317,15 @@ class CcxtAdapter(IExchangePort):
             try:
                 # Calculate start time
                 if use_random_date:
+                    # Task: Use 360 days and random period
                     max_days_back = 730
-                    min_days_back = 365
+                    min_days_back = 360
                     random_offset = random.randint(min_days_back, max_days_back)
                     end_date = datetime.utcnow() - timedelta(days=random_offset)
-                    since_dt = end_date - timedelta(hours=limit)
-                    logger.info(f"🎲 Public API: Random training period ending: {end_date.strftime('%Y-%m-%d')}")
+                    since_dt = end_date - timedelta(days=360)
+                    logger.info(f"🎲 Public API: Random training period ending: {end_date.strftime('%Y-%m-%d')} (360 days back)")
                     since_ts = int(since_dt.timestamp() * 1000)
+                    limit = 8640 # Force limit to 360 days of 1h candles
                 else:
                     since_ts = None  # Fetch most recent
 

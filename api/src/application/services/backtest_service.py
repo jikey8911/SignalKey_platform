@@ -5,17 +5,12 @@ import logging
 import importlib
 from typing import Dict, Any, List, Optional
 from api.ml.strategy_trainer import StrategyTrainer
-from api.ml.strategy_trainer import StrategyTrainer
 from api.src.domain.services.exchange_port import IExchangePort
 from api.strategies.base import BaseStrategy
 
 class BacktestService:
     """
     Servicio de Backtest de la Capa de Aplicación (sp4).
-    
-    Se ha eliminado toda lógica de columnas hardcoded ('por si acaso').
-    Ahora confía al 100% en el contrato dinámico (get_features) de cada 
-    estrategia para preparar los datos de entrada del modelo .pkl.
     """
     def __init__(self, exchange_adapter: IExchangePort, trainer: StrategyTrainer = None, models_dir: str = "api/data/models"):
         self.exchange = exchange_adapter
@@ -27,81 +22,10 @@ class BacktestService:
         from api.src.application.services.ml_service import MLService
         self.ml_service = MLService(exchange_adapter=self.exchange)
 
-    async def select_best_model(self, symbol: str, timeframe: str) -> Dict[str, Any]:
-        """
-        Evalúa todos los modelos agnósticos y recomienda el mejor para un activo,
-        utilizando exclusivamente el contrato de features de la estrategia.
-        """
-        self.logger.info(f"Iniciando validación técnica para {symbol}...")
-        
-        # 1. Obtener datos históricos del exchange
-        df = await self.exchange.get_historical_data(symbol, timeframe, limit=1000)
-        if df.empty:
-            return {"error": "Fallo al obtener datos históricos para validación."}
-
-        strategies = self.trainer.discover_strategies()
-        best_score = -1
-        best_strat = None
-
-        results = []
-        for strat_name in strategies:
-            try:
-                model_path = os.path.join(self.models_dir, f"{strat_name}.pkl")
-                if not os.path.exists(model_path):
-                    continue
-                
-                # Cargar el modelo IA y la clase de estrategia correspondiente
-                model = joblib.load(model_path)
-                
-                # Importación dinámica del contrato de la estrategia
-                module = importlib.import_module(f"api.strategies.{strat_name}")
-                class_name = "".join(w.title() for w in strat_name.split("_"))
-                StrategyClass = getattr(module, class_name)
-                strategy = StrategyClass()
-                
-                # 2. Aplicar procesamiento (Cálculo de indicadores)
-                df_test = strategy.apply(df.copy()).dropna()
-                if df_test.empty:
-                    continue
-
-                # 3. SINCRONIZACIÓN TOTAL
-                features = strategy.get_features()
-                missing = [c for c in features if c not in df_test.columns]
-                if missing:
-                    self.logger.error(f"Contrato roto en {strat_name}: Faltan columnas {missing}")
-                    continue
-
-                X = df_test[features]
-                
-                # 4. Predicción y Cálculo de Precisión
-                predictions = model.predict(X)
-                score = self._calculate_accuracy(df_test['signal'].values, predictions)
-                
-                # Calcular métricas básicas
-                trades_count = (predictions != 0).sum()
-                
-                results.append({
-                    "strategy": strat_name,
-                    "accuracy": score,
-                    "trades": int(trades_count),
-                    "status": "active"
-                })
-                
-                if score > best_score:
-                    best_score = score
-                    best_strat = strat_name
-
-            except Exception as e:
-                self.logger.error(f"Error analizando modelo {strat_name}: {e}")
-                results.append({"strategy": strat_name, "error": str(e), "status": "failed"})
-
-        return {
-            "symbol": symbol,
-            "recommended_strategy": best_strat,
-            "accuracy_score": round(best_score, 4) if best_strat else 0,
-            "tournament_results": results,
-            "contract_status": "synced"
-        }
+    async def get_market_data(self, symbol: str, timeframe: str, days: int, exchange_id: str) -> pd.DataFrame:
+        """Helper to fetch market data"""
+        limit = days * 24 if timeframe == "1h" else 1000
+        return await self.exchange.get_public_historical_data(symbol, timeframe, limit=limit, exchange_id=exchange_id)
 
     async def run_backtest(
         self, 
@@ -119,21 +43,14 @@ class BacktestService:
         tp: float = 0.03,
         sl: float = 0.02
     ) -> Dict[str, Any]:
-        """
-        Ejecuta un Backtest Tournament: evalúa todas las estrategias y devuelve 
-        los resultados detallados de la mejor posicionada.
-        """
         self.logger.info(f"🚀 Iniciando Backtest Tournament: {symbol} | {days}d | {timeframe}")
         
-        # 1. Obtener datos históricos
-        # 1. Obtener datos históricos (Tarea 5.1: Sourcing de Datos Reales)
         try:
             df = await self.get_market_data(symbol, timeframe, days, exchange_id)
         except Exception as e:
             self.logger.error(f"Error fetching data: {e}")
             raise ValueError(f"No se pudieron obtener datos para {symbol}: {e}")
 
-        # 2. Descubrir estrategias a evaluar
         strategies_to_test = self.trainer.discover_strategies()
         if not strategies_to_test:
             raise ValueError("No hay estrategias disponibles para el backtest.")
@@ -142,15 +59,10 @@ class BacktestService:
         best_strategy_data = None
         highest_pnl = -float('inf')
 
-        # 3. Ejecutar simulación para cada estrategia
         for strat_name in strategies_to_test:
             try:
-                self.logger.info(f"🧪 Testing strategy: {strat_name}")
-                
-                # Cargar modelo y clase de estrategia una sola vez por estrategia
                 model_path = os.path.join(self.models_dir, f"{strat_name}.pkl")
                 if not os.path.exists(model_path):
-                    self.logger.warning(f"⏩ Skipping {strat_name}: No .pkl model found.")
                     continue
                 
                 model = joblib.load(model_path)
@@ -160,40 +72,17 @@ class BacktestService:
                 strategy_obj = StrategyClass()
                 features = strategy_obj.get_features()
 
-                # Preparar DataFrame con indicadores
                 df_processed = strategy_obj.apply(df.copy())
-                
                 if df_processed.empty or not all(c in df_processed.columns for c in features):
-                    self.logger.warning(f"⏩ Skipping {strat_name}: Missing features.")
                     continue
 
-                # Determinar estep_investment (Monto por operación)
-                step_investment = initial_balance * 0.2 # Default 20%
-                
-                if trade_amount and trade_amount > 0:
-                    step_investment = trade_amount
-                    self.logger.info(f"💰 Usando monto fijo por parámetro: ${step_investment}")
-                else:
-                    # Fallback to DB
-                    try:
-                        from api.src.adapters.driven.persistence.mongodb import get_app_config
-                        user_config = await get_app_config(user_id)
-                        if user_config and 'investmentLimits' in user_config:
-                            cex_limit = user_config['investmentLimits'].get('cexMaxAmount')
-                            if cex_limit and isinstance(cex_limit, (int, float)) and cex_limit > 0:
-                                step_investment = float(cex_limit)
-                                self.logger.info(f"💰 Usando monto de inversión configurado en DB: ${step_investment}")
-                    except Exception as e:
-                        self.logger.warning(f"⚠️ No se pudo cargar configuración de usuario, usando default: {e}")
+                step_investment = trade_amount if trade_amount and trade_amount > 0 else initial_balance * 0.2
 
-                # Predicciones
                 valid_idx = df_processed[features].dropna().index
                 X = df_processed.loc[valid_idx, features]
                 df_processed.loc[valid_idx, 'ai_signal'] = model.predict(X)
                 df_processed['ai_signal'] = df_processed['ai_signal'].fillna(0)
 
-                # Simulación de trading con DCA y Flipping (Long/Short)
-                # Tarea 5.2: Motor de Simulación DCA
                 simulation_result = self.simulate_dca_logic(
                     df_processed, 
                     initial_balance=initial_balance,
@@ -202,7 +91,6 @@ class BacktestService:
                     sl=sl
                 )
                 
-                # Check if simulation failed or returned empty
                 if not simulation_result:
                      continue
 
@@ -214,324 +102,142 @@ class BacktestService:
                     "final_balance": simulation_result['final_balance']
                 })
                 
-                # Mantener datos detallados de la mejor
                 if simulation_result['profit_pct'] > highest_pnl:
                     highest_pnl = simulation_result['profit_pct']
                     best_strategy_data = {
                         "strategy_name": strat_name,
-                        **simulation_result,
-                        "trades": simulation_result['trades']
+                        **simulation_result
                     }
 
             except Exception as e:
                 self.logger.error(f"Error testing {strat_name}: {e}")
 
         if not tournament_results:
-            raise ValueError(f"No se pudo completar el backtest para ninguna estrategia en {exchange_id}.")
+            raise ValueError(f"No se pudo completar el backtest para ninguna estrategia.")
 
-        # 4. Ordenar resultados
         tournament_results.sort(key=lambda x: x['profit_pct'], reverse=True)
         winner = tournament_results[0]
+        best_strat_name = winner['strategy']
         
-        # 5. Preparar Chart Data
         chart_data = []
-        for timestamp, row in df.iterrows():
-            chart_data.append({
-                "time": int(timestamp.timestamp()),
-                "open": row['open'], "high": row['high'], "low": row['low'], "close": row['close']
-            })
-
+        try:
+            module = importlib.import_module(f"api.strategies.{best_strat_name}")
+            class_name = "".join(w.title() for w in best_strat_name.split("_"))
+            StrategyClass = getattr(module, class_name)
+            best_strategy_obj = StrategyClass()
+            df_best = best_strategy_obj.apply(df.copy())
+            trades_map = {t['time']: t for t in best_strategy_data.get('trades', [])}
+            
+            for timestamp, row in df_best.iterrows():
+                iso_time = timestamp.isoformat()
+                trade_info = trades_map.get(iso_time)
+                point = {
+                    "time": int(timestamp.timestamp()),
+                    "open": row['open'], "high": row['high'], "low": row['low'], "close": row['close'], "volume": row['volume']
+                }
+                for col in df_best.columns:
+                    if col not in ['open', 'high', 'low', 'close', 'volume', 'signal', 'ai_signal']:
+                        point[col] = row[col]
+                if trade_info:
+                    point["trade"] = {
+                        "type": trade_info['type'], "price": trade_info['price'], "label": trade_info['label'],
+                        "pnl": trade_info.get('pnl'), "pnl_percent": trade_info.get('pnl_percent')
+                    }
+                chart_data.append(point)
+        except Exception as e:
+            self.logger.error(f"Error preparing chart: {e}")
+            for timestamp, row in df.iterrows():
+                chart_data.append({"time": int(timestamp.timestamp()), "open": row['open'], "close": row['close']})
+            
         return {
-            "symbol": symbol,
-            "timeframe": timeframe,
-            "days": days,
-            "winner": winner,
-            "tournament_results": tournament_results,
-            "strategy_name": best_strategy_data["strategy_name"],
-            "initial_balance": initial_balance,
-            "final_balance": best_strategy_data["final_balance"],
-            "profit_pct": best_strategy_data["profit_pct"],
-            "total_trades": best_strategy_data["total_trades"],
-            "win_rate": best_strategy_data["win_rate"],
-            "trades": best_strategy_data["trades"],
-            "chart_data": chart_data,
+            "symbol": symbol, "days": days, "timeframe": timeframe, "winner": winner,
+            "all_results": tournament_results, "best_strategy_details": best_strategy_data,
+            "chart_data": chart_data, "market_type": exchange_id,
             "metrics": {
                 "total_trades": best_strategy_data["total_trades"],
                 "win_rate": best_strategy_data["win_rate"],
-                "profit_pct": best_strategy_data["profit_pct"],
-                "profit_factor": 1.5,
-                "max_drawdown": 5.0,
-                "sharpe_ratio": 1.1
+                "profit_pct": best_strategy_data["profit_pct"]
             },
-            "bot_configuration": {
-                "strategy_type": best_strategy_data["strategy_name"],
-                "model_id": f"{best_strategy_data['strategy_name']}.pkl",
-                "parameters": {"timeframe": timeframe, "symbol": symbol}
-            }
+            "trades": best_strategy_data["trades"]
         }
 
-    async def get_market_data(self, symbol: str, timeframe: str, days: int = 30, exchange_id: str = 'binance'):
-        """
-        Tarea 5.1: Sourcing de Datos Reales para Backtest
-        Obtiene datos reales para el backtest.
-        """
-        limit = (24 * days)
-        if timeframe == '4h': limit = days * 6
-        elif timeframe == '1d': limit = days
-        elif timeframe == '15m': limit = days * 96
-        elif timeframe == '5m': limit = days * 288
-        elif timeframe == '1m': limit = days * 1440
-        limit += 100 # Buffer
-        
-        df = await self.exchange.get_public_historical_data(symbol, timeframe, limit=limit, exchange_id=exchange_id)
-        if df.empty:
-            raise ValueError(f"No se pudieron obtener datos para {symbol}")
-        return df
-
-    def simulate_dca_logic(self, df_processed, initial_balance=1000.0, trade_amount=None, tp=0.03, sl=0.02):
-        """
-        Tarea 5.2: Motor de Simulación DCA y Tarea 6.1 (Intra-candle)
-        Simula la lógica de trading con DCA y checks de mechas High/Low.
-        """
+    def simulate_dca_logic(self, df_processed, initial_balance, trade_amount, tp, sl):
         balance = initial_balance
-        step_investment = trade_amount or (initial_balance * 0.2)
-        
+        step_investment = trade_amount
         long_amount = 0
         long_invested = 0
         short_amount = 0
         short_invested = 0
-        
         trades = []
         win_count = 0
         loss_count = 0
-        
         previous_signal = None
         active_trading = False
-        
-        from api.strategies.base import BaseStrategy
 
         for timestamp, row in df_processed.iterrows():
             price = row['close']
             signal = row['ai_signal']
-            
-            # --- Logic: Wait for First Flip ---
             if previous_signal is None:
                 previous_signal = signal
                 continue 
-
             if not active_trading:
-                if signal != previous_signal:
-                    active_trading = True 
-                else:
-                    previous_signal = signal
-                    continue 
-            
+                if signal != previous_signal: active_trading = True 
+                else: previous_signal = signal; continue 
             previous_signal = signal
             
-            # --- Task 6.1: Validación de Mechas (High/Low) ---
-            # 1. Chequeo para LONGs
+            # Long Exit
             if long_amount > 0:
                 avg_price = long_invested / long_amount
-                # Take Profit (Sell at High)
-                if row['high'] >= avg_price * (1 + tp):
-                    exit_price = avg_price * (1 + tp)
+                if row['high'] >= avg_price * (1 + tp) or row['low'] <= avg_price * (1 - sl):
+                    exit_price = avg_price * (1 + tp) if row['high'] >= avg_price * (1 + tp) else avg_price * (1 - sl)
                     pnl = (long_amount * exit_price) - long_invested
                     balance += (long_amount * exit_price)
-                    pnl_percent = (pnl / long_invested * 100)
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "SELL",
-                        "price": exit_price,
-                        "amount": long_amount,
-                        "pnl": round(pnl, 2),
-                        "pnl_percent": round(pnl_percent, 2),
-                        "avg_price": round(avg_price, 2),
-                        "label": "TP_HIT_LONG"
-                    })
+                    trades.append({"time": timestamp.isoformat(), "type": "SELL", "price": exit_price, "amount": long_amount, "pnl": round(pnl, 2), "pnl_percent": round(pnl/long_invested*100, 2), "label": "TP_SL_LONG"})
                     if pnl > 0: win_count += 1
                     else: loss_count += 1
-                    long_amount = 0
-                    long_invested = 0
-                    continue 
+                    long_amount = 0; long_invested = 0; continue
 
-                # Stop Loss (Sell at Low)
-                if row['low'] <= avg_price * (1 - sl):
-                    exit_price = avg_price * (1 - sl)
-                    pnl = (long_amount * exit_price) - long_invested
-                    balance += (long_amount * exit_price)
-                    pnl_percent = (pnl / long_invested * 100)
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "SELL",
-                        "price": exit_price,
-                        "amount": long_amount,
-                        "pnl": round(pnl, 2),
-                        "pnl_percent": round(pnl_percent, 2),
-                        "avg_price": round(avg_price, 2),
-                        "label": "SL_HIT_LONG"
-                    })
-                    if pnl > 0: win_count += 1
-                    else: loss_count += 1
-                    long_amount = 0
-                    long_invested = 0
-                    continue 
-            
-            # 2. Chequeo para SHORTS
+            # Short Exit
             if short_amount > 0:
                 avg_price = short_invested / short_amount
-                # Take Profit (Buy at Low)
-                if row['low'] <= avg_price * (1 - tp):
-                    exit_price = avg_price * (1 - tp)
+                if row['low'] <= avg_price * (1 - tp) or row['high'] >= avg_price * (1 + sl):
+                    exit_price = avg_price * (1 - tp) if row['low'] <= avg_price * (1 - tp) else avg_price * (1 + sl)
                     pnl = short_invested - (short_amount * exit_price)
                     balance += short_invested + pnl
-                    pnl_percent = (pnl / short_invested * 100)
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "BUY",
-                        "price": exit_price,
-                        "amount": short_amount,
-                        "pnl": round(pnl, 2),
-                        "pnl_percent": round(pnl_percent, 2),
-                        "avg_price": round(avg_price, 2),
-                        "label": "TP_HIT_SHORT"
-                    })
+                    trades.append({"time": timestamp.isoformat(), "type": "BUY", "price": exit_price, "amount": short_amount, "pnl": round(pnl, 2), "pnl_percent": round(pnl/short_invested*100, 2), "label": "TP_SL_SHORT"})
                     if pnl > 0: win_count += 1
                     else: loss_count += 1
-                    short_amount = 0
-                    short_invested = 0
-                    continue
+                    short_amount = 0; short_invested = 0; continue
 
-                # Stop Loss (Buy at High)
-                if row['high'] >= avg_price * (1 + sl):
-                    exit_price = avg_price * (1 + sl)
-                    pnl = short_invested - (short_amount * exit_price)
-                    balance += short_invested + pnl
-                    pnl_percent = (pnl / short_invested * 100)
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "BUY",
-                        "price": exit_price,
-                        "amount": short_amount,
-                        "pnl": round(pnl, 2),
-                        "pnl_percent": round(pnl_percent, 2),
-                        "avg_price": round(avg_price, 2),
-                        "label": "SL_HIT_SHORT"
-                    })
-                    if pnl > 0: win_count += 1
-                    else: loss_count += 1
-                    short_amount = 0
-                    short_invested = 0
-                    continue
-
-            # --- Trading Logic (DCA) ---
-            if signal == BaseStrategy.SIGNAL_BUY: 
-                # Close Shorts
+            # Signals
+            if signal == BaseStrategy.SIGNAL_BUY:
                 if short_amount > 0:
                     pnl = short_invested - (short_amount * price)
                     balance += short_invested + pnl
-                    avg_entry_price = short_invested / short_amount if short_amount > 0 else 0
-                    pnl_percent = (pnl / short_invested * 100) if short_invested > 0 else 0
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "BUY",
-                        "price": price,
-                        "amount": short_amount,
-                        "pnl": round(pnl, 2),
-                        "pnl_percent": round(pnl_percent, 2),
-                        "avg_price": round(avg_entry_price, 2),
-                        "label": "CLOSE_SHORT"
-                    })
+                    trades.append({"time": timestamp.isoformat(), "type": "BUY", "price": price, "amount": short_amount, "pnl": round(pnl, 2), "label": "CLOSE_SHORT"})
                     if pnl > 0: win_count += 1
                     else: loss_count += 1
-                    short_amount = 0
-                    short_invested = 0
-                
-                # Open/DCA Long
+                    short_amount = 0; short_invested = 0
                 if balance >= step_investment:
-                    is_dca = long_amount > 0
-                    amount_to_buy = step_investment / price
-                    long_amount += amount_to_buy
-                    long_invested += step_investment
-                    balance -= step_investment
-                    avg_entry = long_invested / long_amount
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "BUY",
-                        "price": price,
-                        "amount": amount_to_buy,
-                        "avg_price": round(avg_entry, 2),
-                        "label": "DCA_LONG" if is_dca else "OPEN_LONG"
-                    })
-                    
-            elif signal == BaseStrategy.SIGNAL_SELL: 
-                # Close Longs
+                    qty = step_investment / price
+                    long_amount += qty; long_invested += step_investment; balance -= step_investment
+                    trades.append({"time": timestamp.isoformat(), "type": "BUY", "price": price, "amount": qty, "label": "OPEN_DCA_LONG"})
+            elif signal == BaseStrategy.SIGNAL_SELL:
                 if long_amount > 0:
                     pnl = (long_amount * price) - long_invested
                     balance += (long_amount * price)
-                    avg_entry_price = long_invested / long_amount if long_amount > 0 else 0
-                    pnl_percent = (pnl / long_invested * 100) if long_invested > 0 else 0
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "SELL",
-                        "price": price,
-                        "amount": long_amount,
-                        "pnl": round(pnl, 2),
-                        "pnl_percent": round(pnl_percent, 2),
-                        "avg_price": round(avg_entry_price, 2),
-                        "label": "CLOSE_LONG"
-                    })
+                    trades.append({"time": timestamp.isoformat(), "type": "SELL", "price": price, "amount": long_amount, "pnl": round(pnl, 2), "label": "CLOSE_LONG"})
                     if pnl > 0: win_count += 1
                     else: loss_count += 1
-                    long_amount = 0
-                    long_invested = 0
-                    
-                # Open/DCA Short
+                    long_amount = 0; long_invested = 0
                 if balance >= step_investment:
-                    is_dca = short_amount > 0
-                    amount_to_short = step_investment / price
-                    short_amount += amount_to_short
-                    short_invested += step_investment
-                    balance -= step_investment
-                    avg_entry = short_invested / short_amount
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "SELL",
-                        "price": price,
-                        "amount": amount_to_short,
-                        "avg_price": round(avg_entry, 2),
-                        "label": "DCA_SHORT" if is_dca else "OPEN_SHORT"
-                    })
+                    qty = step_investment / price
+                    short_amount += qty; short_invested += step_investment; balance -= step_investment
+                    trades.append({"time": timestamp.isoformat(), "type": "SELL", "price": price, "amount": qty, "label": "OPEN_DCA_SHORT"})
 
-        # Calculate Final Stats
-        final_balance = balance
-        if long_amount > 0:
-             final_balance += (long_amount * df_processed.iloc[-1]['close'])
-        if short_amount > 0:
-             pnl_short = short_invested - (short_amount * df_processed.iloc[-1]['close'])
-             final_balance += short_invested + pnl_short
-
-        profit_pct = ((final_balance / initial_balance) - 1) * 100
-        total_trades = len(trades)
-        win_rate = (win_count / (win_count + loss_count) * 100) if (win_count + loss_count) > 0 else 0
-        
+        final_val = balance + (long_amount * df_processed.iloc[-1]['close']) + (short_invested + (short_invested - (short_amount * df_processed.iloc[-1]['close'])) if short_amount > 0 else 0)
         return {
-            "profit_pct": round(profit_pct, 2),
-            "total_trades": total_trades,
-            "win_rate": round(win_rate, 2),
-            "final_balance": round(final_balance, 2),
-            "trades": trades
+            "profit_pct": round(((final_val/initial_balance)-1)*100, 2),
+            "total_trades": len(trades), "win_rate": round(win_count/(win_count+loss_count)*100, 2) if (win_count+loss_count)>0 else 0,
+            "final_balance": round(final_val, 2), "trades": trades
         }
-
-    def _calculate_accuracy(self, y_true: Any, y_pred: Any) -> float:
-        """Compara la señal ideal de la estrategia con la predicción de la IA."""
-        if len(y_true) == 0: return 0.0
-        matches = (y_true == y_pred).sum()
-        return float(matches / len(y_true))

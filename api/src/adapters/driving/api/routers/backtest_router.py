@@ -213,10 +213,12 @@ async def deploy_bot(
     symbol: str,
     strategy: str,
     initial_balance: float = 1000.0,
-    leverage: int = 1
+    leverage: int = 1,
+    market_type: str = "CEX"
 ):
     """
     Crea un bot simulado basado en una estrategia ganadora del backtest.
+    Utiliza el bot_service para asegurar consistencia con el sistema de trading.
     """
     try:
         # Verificar usuario
@@ -224,42 +226,40 @@ async def deploy_bot(
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
 
-        # Crear configuración del bot
-        # En el futuro esto podría usar un servicio dedicado
-        bot_config = {
-            "userId": user["_id"],
-            "symbol": symbol,
-            "strategy": strategy,
-            "status": "active",  # O "simulated"
-            "mode": "simulation", # Explicitamente simulado
-            "initialBalance": initial_balance,
-            "currentBalance": initial_balance,
-            "leverage": leverage,
-            "pnl": 0.0,
-            "trades": [],
-            "createdAt": datetime.utcnow(),
-            "lastCheck": datetime.utcnow()
-        }
+        # Obtener configuración del usuario
+        from api.src.adapters.driven.persistence.mongodb import get_app_config
+        config = await get_app_config(user_id)
         
-        # Insertar en colección 'bots' (o trades si no existe bots)
-        # Asumiremos 'trades' por ahora ya que es lo que vimos en el código
-        # pero con un flag especial o en una colección nueva si preferimos.
-        # El usuario pidió "crear el bot", así que lo guardamos.
+        # Preparar un AnalysisResult ficticio para activar el bot
+        from api.src.domain.models.schemas import AnalysisResult
+        analysis = AnalysisResult(
+            decision="BUY", # Iniciamos en BUY por defecto o según estrategia
+            symbol=symbol,
+            market_type=market_type,
+            confidence=1.0,
+            reasoning=f"Bot desplegado manualmente desde Backtest con estrategia: {strategy}",
+            parameters={
+                "amount": initial_balance * 0.1, # 10% del balance inicial por operación
+                "leverage": leverage,
+                "strategy_name": strategy
+            }
+        )
+
+        # Usar SignalBotService para activar el bot (maneja demoMode automáticamente)
+        from api.main import signal_bot_service
+        result = await signal_bot_service.activate_bot(analysis, user_id, config)
         
-        # Como no vi modelo de Bot explícito, lo guardaré en 'active_bots' o similar si existe,
-        # si no, lo guardamos en 'trades' con status 'active_bot'.
+        if result.success:
+            return {
+                "status": "success", 
+                "message": f"Bot deployed for {symbol} with strategy {strategy}",
+                "details": result.details
+            }
+        else:
+            raise HTTPException(status_code=400, detail=result.message)
         
-        # Revisando db usage en otros archivos, parece que usan 'trades' para todo?
-        # Mejor creamos una colección 'bots' si no existe.
-        
-        result = await db.bots.insert_one(bot_config)
-        
-        return {
-            "status": "success", 
-            "message": f"Bot deployed for {symbol} with strategy {strategy}",
-            "bot_id": str(result.inserted_id)
-        }
-        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error deploying bot: {e}")
         raise HTTPException(status_code=500, detail=str(e))

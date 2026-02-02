@@ -24,7 +24,7 @@ class TrainRequest(BaseModel):
 class BatchTrainRequest(BaseModel):
     symbols: list[str]
     timeframe: str = "1h"
-    days: int = 365
+    days: int = 360
     epochs: int = 20
     user_id: str = "default_user"
     exchange: str = "binance"

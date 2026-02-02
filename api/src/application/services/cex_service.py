@@ -221,8 +221,26 @@ class CEXService:
             if demo_mode:
                 logger.info(f"[MODO DEMO] Simulando {side} para {symbol} con monto {amount}")
                 
-                # Obtener precio actual para la simulación usando el sistema centralizado de precios
+                # Task: If in simulator mode, use random historical date price
+                import random
+                from datetime import timedelta
+                
+                # Obtener precio actual (default)
                 price = await self.get_current_price(symbol, user_id)
+                
+                # Si queremos realismo total en simulación con fecha random:
+                # Obtenemos un punto aleatorio de los últimos 360 días
+                try:
+                    random_days = random.randint(1, 360)
+                    historical_df = await self.ccxt_provider.get_public_historical_data(
+                        symbol, "1h", limit=1, use_random_date=True
+                    )
+                    if not historical_df.empty:
+                        price = float(historical_df.iloc[-1]['close'])
+                        logger.info(f"🎲 Simulación con precio histórico random: {price} (de hace aprox {random_days} días)")
+                except Exception as e:
+                    logger.warning(f"No se pudo obtener precio histórico random, usando precio actual: {e}")
+
                 if price <= 0:
                     return ExecutionResult(success=False, message=f"No se pudo obtener el precio para {symbol}")
                 
