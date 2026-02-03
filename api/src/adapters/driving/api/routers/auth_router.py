@@ -141,6 +141,30 @@ async def login(
         # Update last signed in
         await user_repo.update_last_signed_in(request.username)
         
+        # Start telegram bot if configured (background task)
+        try:
+            from api.src.infrastructure.telegram.telegram_bot_manager import bot_manager
+            import asyncio
+
+            async def start_bot_bg():
+                try:
+                    db = await get_database()
+                    config = await db.app_configs.find_one({"userId": user["_id"]})
+                    if config and config.get("telegramIsConnected") and config.get("telegramSessionString"):
+                        await bot_manager.start_user_bot(
+                            user_id=user['openId'],
+                            api_id=config.get("telegramApiId"),
+                            api_hash=config.get("telegramApiHash"),
+                            phone_number=config.get("telegramPhoneNumber", ""),
+                            session_string=config.get("telegramSessionString")
+                        )
+                except Exception as e:
+                    print(f"Error in start_bot_bg: {e}")
+
+            asyncio.create_task(start_bot_bg())
+        except Exception as e:
+            print(f"Error initiating telegram bot on login: {e}")
+
         return AuthResponse(
             success=True,
             user={'openId': user['openId'], 'name': user.get('name', request.username)},
@@ -194,6 +218,29 @@ async def get_current_user(
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
+        # Ensure telegram bot is running if configured
+        try:
+            from api.src.infrastructure.telegram.telegram_bot_manager import bot_manager
+            if not bot_manager.is_bot_active(openid):
+                import asyncio
+                async def start_bot_bg():
+                    try:
+                        db = await get_database()
+                        config = await db.app_configs.find_one({"userId": user["_id"]})
+                        if config and config.get("telegramIsConnected") and config.get("telegramSessionString"):
+                            await bot_manager.start_user_bot(
+                                user_id=openid,
+                                api_id=config.get("telegramApiId"),
+                                api_hash=config.get("telegramApiHash"),
+                                phone_number=config.get("telegramPhoneNumber", ""),
+                                session_string=config.get("telegramSessionString")
+                            )
+                    except Exception as e:
+                        print(f"Error in start_bot_bg (me): {e}")
+                asyncio.create_task(start_bot_bg())
+        except Exception as e:
+            print(f"Error checking telegram bot status on /me: {e}")
+
         return {
             'user': {
                 'openId': user['openId'],

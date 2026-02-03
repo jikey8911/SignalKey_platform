@@ -31,8 +31,8 @@ async def lifespan(app: FastAPI):
     bot_manager.signal_processor = process_signal_task
     
     try:
-        # await bot_manager.restart_all_bots(message_handler=process_signal_task)
-        # logger.info(f"Telegram Bot Manager started with {bot_manager.get_active_bots_count()} active bots")
+        await bot_manager.restart_all_bots(message_handler=process_signal_task)
+        logger.info(f"Telegram Bot Manager started with {bot_manager.get_active_bots_count()} active bots")
         
         # --- TASK 7.2: Boot Manager Resilience ---
         # Reemplaza la lógica anterior con el nuevo BootManager más robusto
