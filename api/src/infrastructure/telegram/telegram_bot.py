@@ -266,15 +266,8 @@ class TelegramUserBot:
                 return False, ""
                 
         except PhoneCodeExpiredError:
-            logger.warning(f"Phone code expired for user {self.user_id}. Requesting new code...")
-            try:
-                # Solicitar nuevo código (Telethon manejará SMS/App según disponibilidad)
-                await self.send_code_request(force_sms=True)
-                logger.info(f"New code requested successfully for {self.user_id}")
-                return False, "CODE_EXPIRED"
-            except Exception as resend_error:
-                logger.error(f"Error resending code for user {self.user_id}: {resend_error}")
-                return False, "RESEND_FAILED"
+            logger.warning(f"Phone code expired for user {self.user_id}")
+            return False, "CODE_EXPIRED"
         except Exception as e:
             logger.error(f"Error signing in user {self.user_id}: {e}")
             return False, ""

@@ -20,6 +20,7 @@ class TelegramAuthStartRequest(BaseModel):
     phone_number: str
     api_id: str
     api_hash: str
+    force_sms: Optional[bool] = False
 
 
 class TelegramAuthVerifyRequest(BaseModel):
@@ -69,8 +70,8 @@ async def start_telegram_auth(request: TelegramAuthStartRequest, current_user: d
         )
         
         # Solicitar código
-        logger.info(f"--- Telegram Auth Step 2: Requesting code from Telegram API ---")
-        success = await temp_bot.send_code_request()
+        logger.info(f"--- Telegram Auth Step 2: Requesting code from Telegram API (force_sms={request.force_sms}) ---")
+        success = await temp_bot.send_code_request(force_sms=request.force_sms)
         
         if not success:
             logger.error("Step 2 FAILED: Telegram API did not send the code. Check backend logs for errors.")
@@ -138,6 +139,8 @@ async def verify_telegram_code(request: TelegramAuthVerifyRequest, current_user:
         success, session_string = await temp_bot.sign_in(request.code)
         
         if not success:
+            if session_string == "CODE_EXPIRED":
+                raise HTTPException(status_code=400, detail="CODE_EXPIRED")
             raise HTTPException(status_code=400, detail="Invalid verification code")
         
         # Guardar sesión en BD
