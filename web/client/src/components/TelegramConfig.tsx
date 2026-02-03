@@ -136,12 +136,11 @@ export function TelegramConfig({ userId, telegramApiId: initialApiId, telegramAp
                 const error = await response.json();
                 // Manejo específico para código expirado
                 if (error.detail === "CODE_EXPIRED" || error.message === "CODE_EXPIRED") {
-                    toast.warning("El código ha expirado. Se ha enviado uno nuevo automáticamente.");
-                    setVerificationCode(''); // Limpiar para que el usuario ingrese el nuevo
-                    setTimeLeft(120); // Reiniciar timer
+                    setVerificationCode('');
+                    setTimeLeft(0); // Forzar que aparezca el botón de reenvío
                     setModalMessage({
                         type: 'error',
-                        text: 'El código expiró. Se ha enviado uno nuevo por SMS.'
+                        text: 'El código ha expirado. Por favor, solicita uno nuevo por SMS.'
                     });
                     return;
                 }
