@@ -54,9 +54,9 @@ export function TelegramConfig({ userId, telegramApiId: initialApiId, telegramAp
             // Mostrar mensaje cuando el tiempo se agota
             setModalMessage((prev) => {
                 if (prev?.type === 'error' || prev?.text?.includes('finalizado')) return prev;
-                return { 
-                    type: 'info', 
-                    text: 'El tiempo ha finalizado. Puedes solicitar un nuevo código.' 
+                return {
+                    type: 'info',
+                    text: 'El tiempo ha finalizado. Puedes solicitar un nuevo código.'
                 };
             });
         }
@@ -71,7 +71,7 @@ export function TelegramConfig({ userId, telegramApiId: initialApiId, telegramAp
 
     const fetchTelegramStatus = async () => {
         try {
-            const response = await fetch(`${CONFIG.API_BASE_URL}/telegram/status/${userId}`);
+            const response = await fetch(`${CONFIG.API_BASE_URL}/telegram/status`);
             const data = await response.json();
             setStatus(data);
         } catch (error) {
@@ -89,7 +89,7 @@ export function TelegramConfig({ userId, telegramApiId: initialApiId, telegramAp
 
         setLoading(true);
         try {
-            const response = await fetch(`${CONFIG.API_BASE_URL}/telegram/auth/start?user_id=${userId}`, {
+            const response = await fetch(`${CONFIG.API_BASE_URL}/telegram/auth/start`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -124,7 +124,7 @@ export function TelegramConfig({ userId, telegramApiId: initialApiId, telegramAp
 
         setLoading(true);
         try {
-            const response = await fetch(`${CONFIG.API_BASE_URL}/telegram/auth/verify?user_id=${userId}`, {
+            const response = await fetch(`${CONFIG.API_BASE_URL}/telegram/auth/verify`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -139,9 +139,9 @@ export function TelegramConfig({ userId, telegramApiId: initialApiId, telegramAp
                     toast.warning("El código ha expirado. Se ha enviado uno nuevo automáticamente.");
                     setVerificationCode(''); // Limpiar para que el usuario ingrese el nuevo
                     setTimeLeft(120); // Reiniciar timer
-                    setModalMessage({ 
-                        type: 'error', 
-                        text: 'El código expiró. Se ha enviado uno nuevo por SMS.' 
+                    setModalMessage({
+                        type: 'error',
+                        text: 'El código expiró. Se ha enviado uno nuevo por SMS.'
                     });
                     return;
                 }
@@ -166,7 +166,7 @@ export function TelegramConfig({ userId, telegramApiId: initialApiId, telegramAp
 
         setLoading(true);
         try {
-            const response = await fetch(`${CONFIG.API_BASE_URL}/telegram/disconnect?user_id=${userId}`, {
+            const response = await fetch(`${CONFIG.API_BASE_URL}/telegram/disconnect`, {
                 method: 'POST'
             });
 
@@ -306,13 +306,12 @@ export function TelegramConfig({ userId, telegramApiId: initialApiId, telegramAp
                                     {formatTime(timeLeft)}
                                 </span>
                             </div>
-                            
+
                             {modalMessage && (
-                                <div className={`p-3 rounded-md text-xs font-medium ${
-                                    modalMessage.type === 'error' 
-                                        ? 'bg-red-50 text-red-900 border border-red-200 dark:bg-red-900/20 dark:text-red-300' 
+                                <div className={`p-3 rounded-md text-xs font-medium ${modalMessage.type === 'error'
+                                        ? 'bg-red-50 text-red-900 border border-red-200 dark:bg-red-900/20 dark:text-red-300'
                                         : 'bg-blue-50 text-blue-900 border border-blue-200'
-                                }`}>
+                                    }`}>
                                     {modalMessage.text}
                                 </div>
                             )}

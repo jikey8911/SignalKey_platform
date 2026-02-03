@@ -36,7 +36,7 @@ export default function TelegramConsole() {
   const fetchStatus = async () => {
     if (!user?.openId) return;
     try {
-      const res = await fetch(`${CONFIG.API_BASE_URL}/telegram/status/${user.openId}`);
+      const res = await fetch(`${CONFIG.API_BASE_URL}/telegram/status`);
       const data = await res.json();
       setStatus(data);
     } catch (e) {
@@ -51,7 +51,7 @@ export default function TelegramConsole() {
     const toastId = toast.loading('Intentando restaurar sesión...');
 
     try {
-      const res = await fetch(`${CONFIG.API_BASE_URL}/telegram/auth/reconnect?user_id=${user.openId}`, {
+      const res = await fetch(`${CONFIG.API_BASE_URL}/telegram/auth/reconnect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
       });

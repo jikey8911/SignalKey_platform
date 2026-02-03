@@ -7,6 +7,8 @@ from typing import Optional
 import logging
 from api.src.infrastructure.telegram.telegram_bot_manager import bot_manager
 from api.src.adapters.driven.persistence.mongodb import db
+from api.src.infrastructure.security.auth_deps import get_current_user
+from fastapi import Depends
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,7 @@ class TelegramStatusResponse(BaseModel):
 
 
 @router.post("/auth/start")
-async def start_telegram_auth(request: TelegramAuthStartRequest, user_id: str):
+async def start_telegram_auth(request: TelegramAuthStartRequest, current_user: dict = Depends(get_current_user)):
     """
     Inicia el proceso de autenticación de Telegram
     
@@ -43,11 +45,12 @@ async def start_telegram_auth(request: TelegramAuthStartRequest, user_id: str):
     
     Args:
         request: Datos de autenticación (phone, api_id, api_hash)
-        user_id: ID del usuario (openId)
+        current_user: Usuario autenticado (JWT)
     
     Returns:
         {"status": "code_sent", "message": "..."}
     """
+    user_id = current_user["openId"]
     try:
         logger.info(f"Starting Telegram auth for user {user_id}")
         logger.info(f"Received Telegram auth request for user_id: {user_id}")
@@ -106,7 +109,7 @@ async def start_telegram_auth(request: TelegramAuthStartRequest, user_id: str):
 
 
 @router.post("/auth/verify")
-async def verify_telegram_code(request: TelegramAuthVerifyRequest, user_id: str):
+async def verify_telegram_code(request: TelegramAuthVerifyRequest, current_user: dict = Depends(get_current_user)):
     """
     Verifica el código de autenticación de Telegram
     
@@ -117,11 +120,12 @@ async def verify_telegram_code(request: TelegramAuthVerifyRequest, user_id: str)
     
     Args:
         request: Código de verificación
-        user_id: ID del usuario
+        current_user: Usuario autenticado
     
     Returns:
         {"status": "connected", "message": "..."}
     """
+    user_id = current_user["openId"]
     try:
         logger.info(f"Verifying Telegram code for user {user_id}")
         
@@ -182,16 +186,11 @@ async def verify_telegram_code(request: TelegramAuthVerifyRequest, user_id: str)
 
 
 @router.post("/disconnect")
-async def disconnect_telegram(user_id: str):
+async def disconnect_telegram(current_user: dict = Depends(get_current_user)):
     """
     Desconecta el bot de Telegram del usuario
-    
-    Args:
-        user_id: ID del usuario
-    
-    Returns:
-        {"status": "disconnected"}
     """
+    user_id = current_user["openId"]
     try:
         logger.info(f"Disconnecting Telegram for user {user_id}")
         
@@ -216,17 +215,12 @@ async def disconnect_telegram(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/status/{user_id}", response_model=TelegramStatusResponse)
-async def get_telegram_status(user_id: str):
+@router.get("/status", response_model=TelegramStatusResponse)
+async def get_telegram_status(current_user: dict = Depends(get_current_user)):
     """
     Obtiene el estado de conexión de Telegram del usuario
-    
-    Args:
-        user_id: ID del usuario
-    
-    Returns:
-        TelegramStatusResponse
     """
+    user_id = current_user["openId"]
     try:
         # Verificar si el bot está activo
         is_connected = bot_manager.is_bot_active(user_id)
@@ -251,17 +245,12 @@ async def get_telegram_status(user_id: str):
         return TelegramStatusResponse(connected=False)
 
 
-@router.get("/dialogs/{user_id}")
-async def get_telegram_dialogs(user_id: str):
+@router.get("/dialogs")
+async def get_telegram_dialogs(current_user: dict = Depends(get_current_user)):
     """
     Obtiene la lista de chats/canales del usuario
-    
-    Args:
-        user_id: ID del usuario
-    
-    Returns:
-        Lista de chats/canales
     """
+    user_id = current_user["openId"]
     try:
         bot = bot_manager.get_user_bot(user_id)
         if not bot:
@@ -278,10 +267,11 @@ async def get_telegram_dialogs(user_id: str):
 
 
 @router.post("/auth/reconnect")
-async def reconnect_telegram(user_id: str):
+async def reconnect_telegram(current_user: dict = Depends(get_current_user)):
     """
     Intenta reconectar la sesión de Telegram usando la session string guardada en DB.
     """
+    user_id = current_user["openId"]
     try:
         logger.info(f"Attempting to reconnect Telegram for user {user_id}")
         
@@ -341,14 +331,16 @@ async def reconnect_telegram(user_id: str):
     except Exception as e:
         logger.error(f"Error reconnecting Telegram: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-async def get_telegram_logs(limit: int = 100):
+@router.get("/logs")
+async def get_telegram_logs(limit: int = 100, current_user: dict = Depends(get_current_user)):
     """
-    Obtiene los logs de Telegram. 
+    Obtiene los logs de Telegram del usuario actual.
     Nota: La persistencia está deshabilitada, este endpoint puede devolver datos vacíos o históricos.
     """
+    user_id = current_user["openId"]
     try:
-        # Recuperar logs históricos si existen, ordenados por fecha descendente
-        cursor = db.telegram_logs.find().sort("timestamp", -1).limit(limit)
+        # Recuperar logs históricos solo del usuario actual
+        cursor = db.telegram_logs.find({"userId": user_id}).sort("timestamp", -1).limit(limit)
         logs = await cursor.to_list(length=limit)
         
         # Convertir ObjectId a string
