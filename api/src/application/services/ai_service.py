@@ -47,3 +47,7 @@ class AIService:
     async def close(self):
         """Cierra los recursos del adaptador"""
         await self.adapter.close()
+
+    async def test_connection(self, provider: str, config: dict) -> bool:
+        """Prueba la conexión con el proveedor de IA"""
+        return await self.adapter.test_connection(provider, config)

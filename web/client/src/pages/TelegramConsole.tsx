@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { SignalsKeiLayout } from '@/components/SignalsKeiLayout';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { RefreshCw, Search, MessageSquare, AlertCircle, CheckCircle } from 'lucide-react';
+import { RefreshCw, MessageSquare, AlertCircle, CheckCircle, Wifi, WifiOff } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { useAuth } from '@/_core/hooks/useAuth';
@@ -18,14 +17,59 @@ interface TelegramLog {
   status: 'received' | 'signal_detected' | 'processed' | 'ignored';
 }
 
+interface TelegramStatus {
+  connected: boolean;
+  phone_number?: string;
+  last_connected?: string;
+}
+
 export default function TelegramConsole() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
   const [logs, setLogs] = useState<TelegramLog[]>([]);
   const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState<TelegramStatus | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'received' | 'signal_detected' | 'processed' | 'ignored'>('all');
 
   const { lastMessage } = useSocket(user?.openId);
+
+  const fetchStatus = async () => {
+    if (!user?.openId) return;
+    try {
+      const res = await fetch(`${CONFIG.API_BASE_URL}/telegram/status/${user.openId}`);
+      const data = await res.json();
+      setStatus(data);
+    } catch (e) {
+      console.error("Error fetching status:", e);
+    }
+  };
+
+  const handleReconnect = async () => {
+    if (!user?.openId) return;
+
+    // Optimistic UI update
+    const toastId = toast.loading('Intentando restaurar sesión...');
+
+    try {
+      const res = await fetch(`${CONFIG.API_BASE_URL}/telegram/auth/reconnect?user_id=${user.openId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.detail || 'Failed to reconnect');
+      }
+
+      const data = await res.json();
+      toast.success(`Conexión restaurada: ${data.phone_number}`, { id: toastId });
+      fetchStatus();
+
+    } catch (e: any) {
+      console.error("Reconnect error", e);
+      toast.error(`Error: ${e.message}`, { id: toastId });
+    }
+  };
 
   const fetchLogs = async () => {
     setLoading(true);
@@ -43,8 +87,11 @@ export default function TelegramConsole() {
   };
 
   useEffect(() => {
-    fetchLogs();
-  }, []);
+    if (user?.openId) {
+      fetchStatus();
+      fetchLogs();
+    }
+  }, [user]);
 
   // Escuchar mensajes del socket
   useEffect(() => {
@@ -116,12 +163,35 @@ export default function TelegramConsole() {
   return (
     <div className="p-6 space-y-6">
       <div className="space-y-6 max-w-7xl">
-        {/* Header */}
+        {/* Header y Estado de Conexión */}
         <div className="flex justify-between items-start">
-          <div>
+          <div className="space-y-1">
             <h2 className="text-3xl font-bold text-foreground mb-2">Consola de Telegram</h2>
-            <p className="text-muted-foreground">Monitor de todos los mensajes entrantes en tiempo real (sin filtrar)</p>
+            <div className="flex items-center gap-3">
+              <p className="text-muted-foreground">Monitor en vivo</p>
+              {status && (
+                <div className={`flex items-center gap-2 px-3 py-1 rounded-full border ${status.connected ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                  {status.connected ? <Wifi size={14} /> : <WifiOff size={14} />}
+                  <span className="text-xs font-medium">
+                    {status.connected
+                      ? `Conectado: ${status.phone_number}`
+                      : 'Desconectado'}
+                  </span>
+                </div>
+              )}
+              {status && !status.connected && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleReconnect}
+                  className="text-xs h-7 px-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                >
+                  Restaurar Sesión
+                </Button>
+              )}
+            </div>
           </div>
+
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-2 px-3 py-1 bg-green-500/10 border border-green-500/20 rounded-full">
               <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
@@ -130,7 +200,7 @@ export default function TelegramConsole() {
             <Button
               variant="outline"
               size="icon"
-              onClick={fetchLogs}
+              onClick={() => { fetchStatus(); fetchLogs(); }}
               disabled={loading}
             >
               <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
@@ -141,7 +211,7 @@ export default function TelegramConsole() {
         {/* Estadísticas */}
         <div className="grid grid-cols-4 gap-4">
           <Card className="p-4 border-l-4 border-l-gray-500">
-            <div className="text-sm text-muted-foreground mb-1">Total Mensajes</div>
+            <div className="text-sm text-muted-foreground mb-1">Total Mensajes (Buffer)</div>
             <div className="text-2xl font-bold text-foreground">{stats.total}</div>
           </Card>
           <Card className="p-4 border-l-4 border-l-blue-500">
@@ -221,12 +291,12 @@ export default function TelegramConsole() {
           <div className="divide-y divide-border max-h-[70vh] overflow-y-auto bg-background">
             {filteredLogs.length === 0 ? (
               <div className="p-8 text-center text-muted-foreground col-span-12">
-                {logs.length === 0 ? "Esperando mensajes..." : "No hay mensajes que coincidan con los filtros"}
+                {logs.length === 0 ? "Esperando mensajes del socket..." : "No hay mensajes que coincidan con los filtros"}
               </div>
             ) : (
               filteredLogs.map((log) => (
                 <div
-                  key={log._id}
+                  key={log._id || Math.random().toString()}
                   className="p-4 grid grid-cols-12 gap-4 text-sm hover:bg-muted/30 transition-colors border-l-4"
                   style={{
                     borderLeftColor: log.status === 'signal_detected' ? '#2563eb' :
@@ -264,9 +334,8 @@ export default function TelegramConsole() {
           <div className="flex gap-3">
             <AlertCircle className="text-blue-600 flex-shrink-0 mt-0.5" size={18} />
             <div className="text-sm text-blue-900">
-              <strong>Nota:</strong> Esta consola muestra TODOS los mensajes recibidos sin filtrar.
-              Los mensajes marcados como "SEÑAL DETECTADA" son aquellos que provienen de chats seleccionados en la configuración
-              y serán procesados por la IA. Usa la página de "Señales" para ver solo las señales de trading procesadas.
+              <strong>Nota:</strong> Esta consola muestra mensajes en vivo recibidos a través del socket.
+              La persistencia está deshabilitada, por lo que los mensajes desaparecerán al recargar.
             </div>
           </div>
         </Card>

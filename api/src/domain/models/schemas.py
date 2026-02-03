@@ -68,9 +68,20 @@ class AppConfigSchema(BaseModel):
     zeroExApiKey: Optional[str] = None
     telegramBotToken: Optional[str] = None
     telegramChatId: Optional[str] = None
+    
+    # Telegram User Bot Config
+    telegramApiId: Optional[str] = None
+    telegramApiHash: Optional[str] = None
+    telegramPhoneNumber: Optional[str] = None
+    telegramSessionString: Optional[str] = None
+    telegramIsConnected: bool = False
+    telegramLastConnected: Optional[datetime] = None
+    telegramChannels: Dict[str, List[str]] = Field(default_factory=lambda: {"allow": [], "deny": []})
+
     exchanges: List[ExchangeConfig] = []
     dexConfig: DexConfig = Field(default_factory=DexConfig)
     investmentLimits: InvestmentLimits = Field(default_factory=InvestmentLimits)
+    virtualBalances: Dict[str, float] = Field(default_factory=lambda: {"cex": 10000.0, "dex": 10.0})
     botStrategy: BotStrategyConfig = Field(default_factory=BotStrategyConfig)
     createdAt: Optional[datetime] = None
     updatedAt: Optional[datetime] = None

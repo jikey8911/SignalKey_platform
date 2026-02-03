@@ -277,5 +277,89 @@ async def get_telegram_dialogs(user_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/auth/reconnect")
+async def reconnect_telegram(user_id: str):
+    """
+    Intenta reconectar la sesión de Telegram usando la session string guardada en DB.
+    """
+    try:
+        logger.info(f"Attempting to reconnect Telegram for user {user_id}")
+        
+        # Verificar si el usuario existe
+        user = await db.users.find_one({"openId": user_id})
+        if not user:
+             raise HTTPException(status_code=404, detail="User not found")
+        
+        config = await db.app_configs.find_one({"userId": user["_id"]})
+        if not config:
+             raise HTTPException(status_code=400, detail="Configuration not found")
+             
+        # Verificar credenciales necesarias
+        api_id = config.get("telegramApiId")
+        api_hash = config.get("telegramApiHash")
+        phone_number = config.get("telegramPhoneNumber")
+        session_string = config.get("telegramSessionString")
+        
+        if not all([api_id, api_hash, session_string]):
+             raise HTTPException(status_code=400, detail="Missing Telegram credentials in config. Please authenticate first.")
+             
+        # Intentar iniciar el bot
+        try:
+             await bot_manager.start_user_bot(
+                user_id=user_id,
+                api_id=api_id,
+                api_hash=api_hash,
+                phone_number=phone_number,
+                session_string=session_string
+            )
+        except Exception as bot_error:
+             # Si falla (ej: sesión inválida), limpiar sesión y notificar
+             logger.error(f"Failed to restore session for {user_id}: {bot_error}")
+             await db.app_configs.update_one(
+                {"userId": user["_id"]},
+                {"$set": {"telegramIsConnected": False}}
+             )
+             raise HTTPException(status_code=401, detail="Saved session is invalid or expired. Please re-authenticate.")
+
+        # Si tiene éxito, asegurar status en DB
+        await db.app_configs.update_one(
+             {"userId": user["_id"]},
+             {"$set": {
+                 "telegramIsConnected": True,
+                 "telegramLastConnected": datetime.utcnow()
+             }}
+        )
+        
+        return {
+            "status": "connected", 
+            "message": "Session restored successfully",
+            "phone_number": phone_number
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reconnecting Telegram: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+async def get_telegram_logs(limit: int = 100):
+    """
+    Obtiene los logs de Telegram. 
+    Nota: La persistencia está deshabilitada, este endpoint puede devolver datos vacíos o históricos.
+    """
+    try:
+        # Recuperar logs históricos si existen, ordenados por fecha descendente
+        cursor = db.telegram_logs.find().sort("timestamp", -1).limit(limit)
+        logs = await cursor.to_list(length=limit)
+        
+        # Convertir ObjectId a string
+        for log in logs:
+            if "_id" in log:
+                log["_id"] = str(log["_id"])
+                
+        return logs
+    except Exception as e:
+        logger.error(f"Error fetching telegram logs: {e}")
+        return []
+
 # Importar datetime aquí para evitar circular imports
 from datetime import datetime

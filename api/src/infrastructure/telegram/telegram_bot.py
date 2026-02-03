@@ -113,7 +113,7 @@ class TelegramUserBot:
                     }
                     
                     # Guardar y emitir para visualización en tiempo real
-                    await db.telegram_logs.insert_one(log_entry)
+                    # await db.telegram_logs.insert_one(log_entry) # Deshabilitado por solicitud del usuario
                     from api.src.adapters.driven.notifications.socket_service import socket_service
                     await socket_service.emit_to_user(self.user_id, "telegram_log", log_entry)
 
@@ -137,10 +137,11 @@ class TelegramUserBot:
                     logger.info(f"Signal authorized for AI processing from chat {chat_id} ({chat_title})")
                     
                     # Actualizar status en log
-                    await db.telegram_logs.update_one(
-                        {"chatId": chat_id, "message": text, "timestamp": {"$gte": log_entry["timestamp"]}},
-                        {"$set": {"status": "signal_detected"}}
-                    )
+                    # Actualizar status en log
+                    # await db.telegram_logs.update_one(
+                    #     {"chatId": chat_id, "message": text, "timestamp": {"$gte": log_entry["timestamp"]}},
+                    #     {"$set": {"status": "signal_detected"}}
+                    # )
 
                     if self.message_handler:
                         signal_obj = TradingSignal(

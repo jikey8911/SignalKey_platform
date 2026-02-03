@@ -26,6 +26,32 @@ class AIAdapter(IAIPort):
         if self._pplx_client:
             await self._pplx_client.close() # El SDK de PPLX usa .close()
 
+    async def test_connection(self, provider: str, config: dict) -> bool:
+        """Prueba una conexión simple con el proveedor especificado"""
+        api_key = self._get_api_key(provider, config)
+        if not api_key:
+            return False
+            
+        try:
+            # Prompt mínimo para verificar conectividad
+            prompt = "hello"
+            
+            if provider == "gemini":
+                await self._call_gemini(prompt, api_key)
+            elif provider == "openai":
+                await self._call_openai(prompt, api_key)
+            elif provider == "perplexity":
+                await self._call_perplexity(prompt, api_key)
+            elif provider == "grok":
+                await self._call_grok(prompt, api_key)
+            else:
+                return False
+                
+            return True
+        except Exception as e:
+            logger.error(f"Test connection failed for {provider}: {e}")
+            return False
+
     async def analyze_signal(self, signal: RawSignal, config: dict = None) -> List[SignalAnalysis]:
         # Lista de proveedores en orden de prioridad para el failover
         all_providers = ["gemini", "openai", "perplexity", "grok"]
