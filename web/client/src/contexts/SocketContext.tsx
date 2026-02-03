@@ -33,7 +33,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         // Determinar la URL del WebSocket
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsBase = CONFIG.WS_BASE_URL.replace(/^ws(s)?:/, protocol);
-        const wsUrl = `${wsBase}/ws/${user.openId}`;
+
+        // Evitar duplicar /ws si ya está en la base
+        const cleanWsBase = wsBase.endsWith('/ws') ? wsBase : `${wsBase}/ws`;
+        const wsUrl = `${cleanWsBase}/${user.openId}`;
 
         console.log(`[WebSocket] Intentando conectar: ${wsUrl}`);
         const socket = new WebSocket(wsUrl);
