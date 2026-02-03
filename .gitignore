@@ -2,7 +2,7 @@
 .env
 .env.local
 .env.*.local
-backup/
+backups/
 # Python
 __pycache__/
 *.py[cod]
