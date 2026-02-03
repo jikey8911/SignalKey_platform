@@ -78,11 +78,13 @@ async def register(
         })
         
         # Set cookie
+        is_prod = os.getenv('NODE_ENV') == 'production'
         response.set_cookie(
             key="manus.sid",
             value=token,
             httponly=True,
-            secure=os.getenv('NODE_ENV') == 'production',
+            secure=is_prod,
+            samesite="none" if is_prod else "lax",
             max_age=365 * 24 * 60 * 60,  # 1 year in seconds
             path="/"
         )
@@ -125,11 +127,13 @@ async def login(
         })
         
         # Set cookie
+        is_prod = os.getenv('NODE_ENV') == 'production'
         response.set_cookie(
             key="manus.sid",
             value=token,
             httponly=True,
-            secure=os.getenv('NODE_ENV') == 'production',
+            secure=is_prod,
+            samesite="none" if is_prod else "lax",
             max_age=365 * 24 * 60 * 60,
             path="/"
         )
@@ -150,9 +154,15 @@ async def login(
 
 
 @router.post("/logout")
-async def logout(response: Response):
+async def logout(response: Response, request: Request):
     """Logout user"""
-    response.delete_cookie(key="manus.sid", path="/")
+    is_prod = os.getenv('NODE_ENV') == 'production'
+    response.delete_cookie(
+        key="manus.sid",
+        path="/",
+        secure=is_prod,
+        samesite="none" if is_prod else "lax"
+    )
     return {"success": True}
 
 

@@ -31,8 +31,21 @@ export const appRouter = router({
 
       return opts.ctx.user;
     }),
-    logout: publicProcedure.mutation(({ ctx }) => {
+    logout: publicProcedure.mutation(async ({ ctx }) => {
       const cookieOptions = getSessionCookieOptions(ctx.req);
+
+      try {
+        // Also call backend logout to ensure consistency
+        await fetch(`${INTERNAL_API_URL}/auth/logout`, {
+          method: 'POST',
+          headers: {
+            'Cookie': ctx.req.headers.cookie || ''
+          }
+        });
+      } catch (e) {
+        console.error("Error fetching logout from backend:", e);
+      }
+
       ctx.res.clearCookie(COOKIE_NAME, { ...cookieOptions, maxAge: -1 });
       return { success: true } as const;
     }),
