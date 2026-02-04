@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from .base import BaseStrategy
+from api.src.domain.strategies.base import BaseStrategy
 
 class SpotIntraExchangeArbitrage(BaseStrategy):
     """

@@ -77,21 +77,21 @@ async def train_all_strategies_endpoint(request: BatchTrainRequest, background_t
         return {"status": "started (fallback)", "message": f"Training started (fallback)"}
 
 @router.get("/models")
-async def get_models():
+async def get_models(market: str = "spot"):
     """Retorna la lista de estrategias/modelos disponibles"""
     # Use generic service for models list
-    models = await MLService(exchange_adapter=CEXService()).get_available_models()
+    models = await MLService(exchange_adapter=CEXService()).get_available_models(market_type=market)
     return [{"id": m, "status": "Ready", "type": "RandomForest"} for m in models]
 
 @router.get("/strategies")
-async def get_available_strategies():
+async def get_available_strategies(market: str = "spot"):
     """
     Retorna la lista de estrategias disponibles desde api/strategies.
     Útil para mostrar en el inventario .pkl del frontend.
     """
     try:
         from api.src.domain.strategies import load_strategies
-        strategies_dict, strategies_list = load_strategies()
+        strategies_dict, strategies_list = load_strategies(market_type=market)
         
         # Return list of strategy names
         strategy_names = [s.__class__.__name__ for s in strategies_list]

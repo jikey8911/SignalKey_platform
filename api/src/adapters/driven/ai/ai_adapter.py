@@ -10,7 +10,7 @@ from perplexity import AsyncPerplexity
 from api.src.domain.ports.output.ai_port import IAIPort
 from api.src.domain.models.signal import RawSignal, SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
 from api.config import Config
-from api.src.domain.strategies.sniper import SniperStrategy
+import importlib
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +121,19 @@ class AIAdapter(IAIPort):
         # Instanciar estrategia si es necesario
         strategy = None
         if strategy_name == "sniper":
-            strategy = SniperStrategy()
+            market_type = (config.get("market") or "spot").lower() if config else "spot"
+            try:
+                # Try market-specific first
+                module_path = f"api.src.domain.strategies.{market_type}.sniper"
+                try:
+                    module = importlib.import_module(module_path)
+                except ImportError:
+                    # Fallback to root
+                    module = importlib.import_module("api.src.domain.strategies.sniper")
+
+                strategy = module.SniperStrategy()
+            except Exception as e:
+                logger.error(f"Failed to load SniperStrategy dynamically (market: {market_type}): {e}")
         
         # Procesar en ventanas deslizantes
         for i in range(window_size, total_candles, step_size):

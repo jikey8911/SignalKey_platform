@@ -27,25 +27,26 @@ class StrategyTrainer:
         """Busca archivos de estrategia válidos en el directorio raíz y subdirectorios de mercado."""
         strategies = set()
         
-        # 1. Search in root strategies directory
-        if os.path.exists(self.strategies_dir):
-            root_files = [f[:-3] for f in os.listdir(self.strategies_dir) 
-                          if f.endswith(".py") and f != "base.py" and not f.startswith("__")]
-            strategies.update(root_files)
-            
-        # 2. Search in market specific subdirectory if provided
+        # 1. Search in market specific subdirectory if provided (Priority)
         if market_type:
             market_dir = os.path.join(self.strategies_dir, market_type.lower())
             if os.path.exists(market_dir):
                 market_files = [f[:-3] for f in os.listdir(market_dir) 
                                 if f.endswith(".py") and f != "base.py" and not f.startswith("__")]
                 strategies.update(market_files)
-        
+
+        # 2. Search in root strategies directory
+        if os.path.exists(self.strategies_dir):
+            root_files = [f[:-3] for f in os.listdir(self.strategies_dir)
+                          if f.endswith(".py") and f != "base.py" and not f.startswith("__")
+                          and not os.path.isdir(os.path.join(self.strategies_dir, f))]
+            strategies.update(root_files)
+
         if not strategies:
              logger.warning(f"No strategies found in {self.strategies_dir} (market: {market_type})")
              return []
              
-        return list(strategies)
+        return sorted(list(strategies))
 
     def load_strategy_class(self, strategy_name: str, market_type: str = None):
         """Dynamic strategy class loading."""

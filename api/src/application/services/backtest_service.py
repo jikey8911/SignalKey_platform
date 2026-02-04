@@ -38,7 +38,7 @@ class BacktestService:
         if df.empty:
             return {"error": "Fallo al obtener datos históricos para validación."}
 
-        strategies = self.trainer.discover_strategies()
+        strategies = self.trainer.discover_strategies(market_type)
         best_score = -1
         best_strat = None
 
@@ -46,17 +46,24 @@ class BacktestService:
 
         for strat_name in strategies:
             try:
-                model_path = os.path.join(self.models_dir, market_type, f"{strat_name}.pkl")
+                model_dir_specific = os.path.join(self.models_dir, market_type.lower())
+                model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl")
+
                 if not os.path.exists(model_path):
-                    continue
+                    # Fallback: Check root models dir
+                    model_path_root = os.path.join(self.models_dir, f"{strat_name}.pkl")
+                    if os.path.exists(model_path_root):
+                        model_path = model_path_root
+                    else:
+                        continue
                 
                 # Cargar el modelo IA y la clase de estrategia correspondiente
                 model = joblib.load(model_path)
                 
                 # Importación dinámica del contrato de la estrategia
-                module = importlib.import_module(f"api.src.domain.strategies.{strat_name}")
-                class_name = "".join(w.title() for w in strat_name.split("_"))
-                StrategyClass = getattr(module, class_name)
+                StrategyClass = self.trainer.load_strategy_class(strat_name, market_type)
+                if not StrategyClass:
+                    continue
                 strategy = StrategyClass()
                 
                 # 2. Aplicar procesamiento (Cálculo de indicadores y contexto S9)
@@ -137,9 +144,9 @@ class BacktestService:
             raise ValueError(f"No se pudieron obtener datos para {symbol}: {e}")
 
         # 2. Descubrir estrategias a evaluar
-        strategies_to_test = self.trainer.discover_strategies()
+        strategies_to_test = self.trainer.discover_strategies(market_type)
         if not strategies_to_test:
-            raise ValueError("No hay estrategias disponibles para el backtest.")
+            raise ValueError(f"No hay estrategias disponibles para el mercado {market_type}.")
 
         tournament_results = []
         best_strategy_data = None
@@ -150,9 +157,8 @@ class BacktestService:
             try:
                 self.logger.info(f"🧪 Testing strategy: {strat_name} ({market_type})")
                 
-                # Cargar modelo segmentado
                 # Cargar modelo segmentado (o fallback a root)
-                model_dir_specific = os.path.join(self.models_dir, market_type)
+                model_dir_specific = os.path.join(self.models_dir, market_type.lower())
                 model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl")
                 
                 if not os.path.exists(model_path):
@@ -166,19 +172,13 @@ class BacktestService:
                         continue
                 
                 model = joblib.load(model_path)
-                module = importlib.import_module(f"api.src.domain.strategies.{strat_name}")
-                if "_" in strat_name:
-                    class_name = "".join(w.title() for w in strat_name.split("_"))
-                else:
-                    class_name = strat_name
                 
-                # Validation / Fallback
-                if not hasattr(module, class_name):
-                     fallback_name = "".join(w.title() for w in strat_name.split("_"))
-                     if hasattr(module, fallback_name):
-                         class_name = fallback_name
+                # Carga dinámica de la clase de estrategia
+                StrategyClass = self.trainer.load_strategy_class(strat_name, market_type)
+                if not StrategyClass:
+                     self.logger.warning(f"⏩ Skipping {strat_name}: Could not load strategy class.")
+                     continue
 
-                StrategyClass = getattr(module, class_name)
                 strategy_obj = StrategyClass()
                 features = strategy_obj.get_features()
 

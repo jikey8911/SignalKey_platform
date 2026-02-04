@@ -6,6 +6,7 @@ import { BrainCircuit, Database, Play, History, CheckCircle2, RotateCcw, Termina
 import { toast } from 'sonner';
 import { useSocketContext } from '@/contexts/SocketContext';
 import { useAuth } from '@/_core/hooks/useAuth';
+import { CONFIG } from '@/config';
 
 export default function Training() {
     const { user } = useAuth(); // Get authenticated user
@@ -53,7 +54,7 @@ export default function Training() {
     useEffect(() => {
         const fetchStrategies = async () => {
             try {
-                const res = await fetch('http://localhost:8000/ml/strategies');
+                const res = await fetch(`${CONFIG.API_BASE_URL}/ml/strategies?market=${selectedMarket}`);
                 if (res.ok) {
                     const data = await res.json();
                     setModels(data.strategies || []);
@@ -68,13 +69,13 @@ export default function Training() {
             }
         };
         fetchStrategies();
-    }, []);
+    }, [selectedMarket]);
 
     // 1. Fetch Exchanges on Mount
     useEffect(() => {
         const fetchExchanges = async () => {
             try {
-                const res = await fetch(`${window.location.origin}/api/market/exchanges`);
+                const res = await fetch(`${CONFIG.API_BASE_URL}/market/exchanges`);
                 if (res.ok) {
                     const data = await res.json();
                     setExchanges(data);
@@ -91,7 +92,7 @@ export default function Training() {
         const fetchMarkets = async () => {
             if (!selectedExchange) return;
             try {
-                const res = await fetch(`${window.location.origin}/api/market/exchanges/${selectedExchange}/markets`);
+                const res = await fetch(`${CONFIG.API_BASE_URL}/market/exchanges/${selectedExchange}/markets`);
                 if (res.ok) {
                     const data = await res.json();
                     setMarkets(data);
@@ -111,7 +112,7 @@ export default function Training() {
         const fetchSymbols = async () => {
             if (!selectedExchange || !selectedMarket) return;
             try {
-                const res = await fetch(`${window.location.origin}/api/market/exchanges/${selectedExchange}/markets/${selectedMarket}/symbols`);
+                const res = await fetch(`${CONFIG.API_BASE_URL}/market/exchanges/${selectedExchange}/markets/${selectedMarket}/symbols`);
                 if (res.ok) {
                     const data = await res.json();
                     setAvailableSymbols(data);
@@ -148,7 +149,7 @@ export default function Training() {
         console.log("🚀 [Training] Triggered by user:", user.openId);
 
         try {
-            const url = `${window.location.origin}/api/ml/train-strategies`;
+            const url = `${CONFIG.API_BASE_URL}/ml/train-strategies`;
             const payload = {
                 exchange: selectedExchange,
                 market: selectedMarket,

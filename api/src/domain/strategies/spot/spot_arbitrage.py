@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from typing import List
-from .base import BaseStrategy
+from api.src.domain.strategies.base import BaseStrategy
 
 class SpotArbitrage(BaseStrategy):
     """
