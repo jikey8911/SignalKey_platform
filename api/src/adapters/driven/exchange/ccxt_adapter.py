@@ -370,7 +370,7 @@ class CcxtAdapter(IExchangePort):
         df.set_index('timestamp', inplace=True)
         return df
 
-    async def get_public_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False, exchange_id: str = "binance") -> pd.DataFrame:
+    async def get_public_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False, exchange_id: str = None, user_id: str = None) -> pd.DataFrame:
         """
         Fetch historical data using PUBLIC API (no credentials required).
         This method creates a temporary public-only connection for fetching OHLCV data.
@@ -381,12 +381,33 @@ class CcxtAdapter(IExchangePort):
             timeframe: Candle timeframe (e.g., '1h', '4h', '1d')
             limit: Number of candles to fetch
             use_random_date: If True, fetches data from a random historical period
-            exchange_id: Exchange to use (default: 'binance')
+            exchange_id: Exchange to use (optional, overrides user config)
+            user_id: User ID to resolve active exchange from (optional)
         
         Returns:
             DataFrame with OHLCV data
         """
         try:
+            # Resolve Exchange ID
+            if not exchange_id:
+                if user_id:
+                    # Attempt to resolve from user config
+                    try:
+                        config = await get_app_config(user_id)
+                        if config:
+                            if 'activeExchange' in config:
+                                exchange_id = config['activeExchange']
+                            elif 'exchanges' in config:
+                                active_ex = next((e for e in config['exchanges'] if e.get('isActive')), None)
+                                if active_ex:
+                                    exchange_id = active_ex['exchangeId']
+                    except Exception as e:
+                        logger.warning(f"Could not resolve exchange for user {user_id}: {e}")
+                
+                # Default fallback if still None
+                if not exchange_id:
+                    exchange_id = "okx"
+
             # Create temporary public instance
             exchange_class = getattr(ccxt, exchange_id.lower())
             public_instance = exchange_class({

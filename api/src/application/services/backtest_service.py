@@ -151,10 +151,19 @@ class BacktestService:
                 self.logger.info(f"🧪 Testing strategy: {strat_name} ({market_type})")
                 
                 # Cargar modelo segmentado
-                model_path = os.path.join(self.models_dir, market_type, f"{strat_name}.pkl")
+                # Cargar modelo segmentado (o fallback a root)
+                model_dir_specific = os.path.join(self.models_dir, market_type)
+                model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl")
+                
                 if not os.path.exists(model_path):
-                    self.logger.warning(f"⏩ Skipping {strat_name}: No .pkl model found.")
-                    continue
+                    # Fallback: Check root models dir
+                    model_path_root = os.path.join(self.models_dir, f"{strat_name}.pkl")
+                    if os.path.exists(model_path_root):
+                        model_path = model_path_root
+                        self.logger.info(f"Using root model for {strat_name}")
+                    else:
+                        self.logger.warning(f"⏩ Skipping {strat_name}: No .pkl model found in {model_dir_specific} or root.")
+                        continue
                 
                 model = joblib.load(model_path)
                 module = importlib.import_module(f"api.src.domain.strategies.{strat_name}")

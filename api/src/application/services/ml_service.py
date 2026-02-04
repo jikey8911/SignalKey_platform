@@ -54,7 +54,7 @@ class MLService:
                     timeframe, 
                     limit=2000, 
                     use_random_date=True, 
-                    exchange_id="binance"
+                    user_id=user_id
                 )
                 
                 if not df.empty:
@@ -185,18 +185,26 @@ class MLService:
         df = pd.DataFrame(candles)
         
         # Inferencia para estrategias específicas
-        strategies = self.trainer.discover_strategies(market_type)
-        if strategy_name != "auto" and strategy_name in strategies:
+        if strategy_name != "auto":
             target_strategies = [strategy_name]
         else:
-            target_strategies = strategies
+            target_strategies = self.trainer.discover_strategies(market_type)
             
         final_results = {}
         
         for strat_name in target_strategies:
             try:
-                model_path = os.path.join(self.models_dir, market_type.lower(), f"{strat_name}.pkl")
-                if not os.path.exists(model_path): continue
+                # Fallback path logic
+                model_dir_specific = os.path.join(self.models_dir, market_type.lower())
+                model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl")
+                
+                if not os.path.exists(model_path):
+                     # Check root
+                     model_path_root = os.path.join(self.models_dir, f"{strat_name}.pkl")
+                     if os.path.exists(model_path_root):
+                         model_path = model_path_root
+                     else:
+                         continue
                 model = joblib.load(model_path)
                 
                 StrategyClass = self.trainer.load_strategy_class(strat_name, market_type)
@@ -254,8 +262,16 @@ class MLService:
         models_status = []
         
         for strat in strategies:
-            model_path = os.path.join(self.models_dir, market_type.lower(), f"{strat}.pkl")
+            # Check specific then root
+            model_path_specific = os.path.join(self.models_dir, market_type.lower(), f"{strat}.pkl")
+            model_path_root = os.path.join(self.models_dir, f"{strat}.pkl")
+            
+            model_path = model_path_specific
             is_trained = os.path.exists(model_path)
+            
+            if not is_trained and os.path.exists(model_path_root):
+                model_path = model_path_root
+                is_trained = True
             
             last_trained = None
             if is_trained:

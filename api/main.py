@@ -56,6 +56,24 @@ async def lifespan(app: FastAPI):
 
     bot_monitor_task = asyncio.create_task(signal_bot_service.monitor_bots())
     
+    # --- TASK 5.2: Strategy Runner Service (Auto-Trading Loop) ---
+    from api.src.application.services.strategy_runner_service import StrategyRunnerService
+    # Note: ML Service needs a trainer passed or uses default. Assuming default is fine for runner.
+    # We reuse global ai_service/ml_router service if available or instantiate fresh.
+    # Since we need access to 'ml_service', let's instantiate one or find where it is.
+    # It seems 'ml_service' is not instantiated globally in main explicitly for dependency injection 
+    # except probably inside 'ml_router' (not ideal) or we can create one here.
+    
+    from api.src.application.services.ml_service import MLService
+    from api.src.domain.services.strategy_trainer import StrategyTrainer
+    
+    # Instantiate ML Service for Runner
+    ml_service_runner = MLService(exchange_adapter=ccxt_adapter, trainer=StrategyTrainer())
+    
+    global strategy_runner
+    strategy_runner = StrategyRunnerService(ml_service=ml_service_runner, bot_service=signal_bot_service)
+    runner_task = asyncio.create_task(strategy_runner.start())
+
     logger.info("=== All services are running in background ===")
     
     yield
@@ -66,6 +84,8 @@ async def lifespan(app: FastAPI):
     await monitor_service.stop_monitoring()
     monitor_task.cancel()
     bot_monitor_task.cancel()
+    await strategy_runner.stop()
+    runner_task.cancel()
     await cex_service.close_all()
     await dex_service.close_all()
     await ai_service.close()

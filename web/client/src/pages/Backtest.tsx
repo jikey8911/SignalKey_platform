@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
 import { CONFIG } from '@/config';
+import { TradingViewChart } from '@/components/ui/TradingViewChart';
 
 interface Candle {
   time: number;
@@ -498,137 +499,19 @@ export default function Backtest() {
     }
   };
 
-  const CandleChart = ({ candles, trades }: { candles: Candle[]; trades: Trade[] }) => {
-    const visibleCount = Math.floor(candles.length / zoom);
-    // Ensure panIndex is valid
-    const safePanIndex = Math.max(0, Math.min(panIndex, candles.length - visibleCount));
-
-    const visibleCandles = candles.slice(safePanIndex, safePanIndex + visibleCount);
-
-    if (visibleCandles.length === 0) return <div>No data to display</div>;
-
-    const minPrice = Math.min(...visibleCandles.map(c => c.low)) * 0.99;
-    const maxPrice = Math.max(...visibleCandles.map(c => c.high)) * 1.01;
-    const priceRange = maxPrice - minPrice || 1;
-
-    const width = 1000;
-    const height = 400;
-    const candleWidth = width / visibleCandles.length;
-    const padding = 40;
-
-    const priceToY = (price: number) => {
-      return height - ((price - minPrice) / priceRange) * (height - padding * 2) - padding;
-    };
-
-    const indexToX = (i: number) => {
-      return (i / visibleCandles.length) * (width - padding * 2) + padding;
-    };
-
-    return (
-      <div className="relative border border-border rounded-lg bg-background overflow-hidden">
-        {/* Controls Overlay */}
-        <div className="absolute top-2 right-2 flex gap-2 z-10">
-          <Button variant="secondary" size="sm" onClick={() => setZoom(z => Math.max(1, z - 1))}>-</Button>
-          <span className="bg-background/80 px-2 py-1 rounded text-xs flex items-center">x{zoom}</span>
-          <Button variant="secondary" size="sm" onClick={() => setZoom(z => Math.min(20, z + 1))}>+</Button>
-        </div>
-
-        {/* Pan Slider */}
-        {zoom > 1 && (
-          <div className="absolute bottom-2 left-10 right-10 z-10">
-            <input
-              type="range"
-              min={0}
-              max={candles.length - visibleCount}
-              value={safePanIndex}
-              onChange={(e) => setPanIndex(parseInt(e.target.value))}
-              className="w-full opacity-50 hover:opacity-100 transition-opacity"
-            />
-          </div>
-        )}
-
-        <svg width="100%" viewBox={`0 0 ${width} ${height}`} className="w-full h-auto">
-          {/* Grid */}
-          {[0, 0.25, 0.5, 0.75, 1].map((ratio) => {
-            const y = height - (ratio * (height - padding * 2)) - padding;
-            const price = minPrice + ratio * priceRange;
-            return (
-              <g key={`grid-${ratio}`}>
-                <line x1={padding} y1={y} x2={width - padding} y2={y} stroke="currentColor" strokeOpacity="0.1" strokeDasharray="5,5" strokeWidth="1" />
-                <text x={5} y={y + 4} fontSize="10" fill="currentColor" className="text-muted-foreground">
-                  ${price.toFixed(price < 1 ? 4 : 2)}
-                </text>
-              </g>
-            );
-          })}
-
-          {/* Candles */}
-          {visibleCandles.map((candle, i) => {
-            const x = indexToX(i) + candleWidth / 2;
-            const openY = priceToY(candle.open);
-            const closeY = priceToY(candle.close);
-            const highY = priceToY(candle.high);
-            const lowY = priceToY(candle.low);
-            const isGreen = candle.close >= candle.open;
-            const color = isGreen ? '#10b981' : '#ef4444';
-
-            return (
-              <g key={`candle-${i}`}>
-                <line x1={x} y1={highY} x2={x} y2={lowY} stroke={color} strokeWidth="1" />
-                <rect
-                  x={x - (candleWidth * 0.4)}
-                  y={Math.min(openY, closeY)}
-                  width={candleWidth * 0.8}
-                  height={Math.abs(closeY - openY) || 1}
-                  fill={color}
-                  stroke={color}
-                  strokeWidth="1"
-                />
-              </g>
-            );
-          })}
-
-          {/* Trade Markers (Filtered for visible range) */}
-          {trades.map((trade, idx) => {
-            // Find index in FULL array
-            const realIndex = candles.findIndex(c => c.time === trade.time);
-            if (realIndex === -1) return null;
-
-            // Check if visible
-            if (realIndex < safePanIndex || realIndex >= safePanIndex + visibleCount) return null;
-
-            // Map to visible index
-            const visibleIndex = realIndex - safePanIndex;
-
-            const x = indexToX(visibleIndex) + candleWidth / 2;
-            const y = priceToY(trade.price);
-            const isBuy = trade.side === 'BUY';
-            const markerColor = isBuy ? '#3b82f6' : '#f59e0b';
-            const isSelected = selectedTrade === trade;
-
-            return (
-              <g
-                key={`trade-${idx}`}
-                onClick={() => setSelectedTrade(trade)}
-                className="cursor-pointer hover:opacity-80"
-                style={{ transition: 'all 0.2s' }}
-              >
-                {isSelected && (
-                  <circle cx={x} cy={y} r={12} fill="none" stroke="currentColor" strokeWidth="2" strokeDasharray="2,2" className="animate-pulse text-white" />
-                )}
-                <circle cx={x} cy={y} r={isBuy ? 6 : 6} fill={markerColor} stroke="white" strokeWidth="1" />
-
-                {/* Simplified Label on Chart to avoid clutter */}
-                <text x={x} y={y - 12} fontSize="10" textAnchor="middle" fill={markerColor} fontWeight="bold">
-                  {isBuy ? 'B' : 'S'}
-                </text>
-              </g>
-            );
-          })}
-        </svg>
-      </div>
-    );
-  };
+  // TradingView Chart Wrapper for Backtest
+  const BacktestChart = ({ candles, trades }: { candles: Candle[]; trades: Trade[] }) => (
+    <TradingViewChart
+      data={candles}
+      trades={trades.map(t => ({
+        time: t.time,
+        price: t.price,
+        side: t.side,
+        label: t.label
+      }))}
+      height={400}
+    />
+  );
 
   return (
     <div className="p-6 space-y-6">
@@ -995,7 +878,7 @@ export default function Backtest() {
               <Card className="p-6 mb-6">
                 <h3 className="text-lg font-semibold text-foreground mb-4">Gráfico de Velas con Señales</h3>
                 <div className="overflow-x-auto">
-                  <CandleChart candles={results.candles} trades={results.trades} />
+                  <BacktestChart candles={results.candles} trades={results.trades} />
                 </div>
 
                 <div className="flex flex-wrap gap-6 mt-4 text-sm">
@@ -1341,7 +1224,7 @@ export default function Backtest() {
 
                   {/* Chart */}
                   <div className="h-64 md:h-80 w-full">
-                    <CandleChart candles={selectedResult.candles} trades={selectedResult.trades} />
+                    <BacktestChart candles={selectedResult.candles} trades={selectedResult.trades} />
                   </div>
 
                   {/* Deploy Action */}
