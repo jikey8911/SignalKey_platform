@@ -28,7 +28,7 @@ const ExecutionMonitor = ({ bot }: any) => {
         const fetchCandles = async () => {
             setLoading(true);
             try {
-                const res = await fetch(`http://localhost:8000/api/market/candles?symbol=${encodeURIComponent(bot.symbol)}&timeframe=${bot.timeframe || '1h'}&limit=50`);
+                const res = await fetch(`${CONFIG.API_BASE_URL}/market/candles?symbol=${encodeURIComponent(bot.symbol)}&timeframe=${bot.timeframe || '1h'}&limit=50`);
                 if (res.ok) {
                     const data = await res.json();
                     setCandles(data);
