@@ -19,6 +19,7 @@ class BotInstance:
     config: Dict = field(default_factory=dict) # Parametros especificos de la estrategia
     created_at: datetime = field(default_factory=datetime.now)
     last_signal_at: Optional[datetime] = None
+    last_execution: Optional[datetime] = None
     
     def to_dict(self):
         return {
@@ -32,5 +33,6 @@ class BotInstance:
             "status": self.status,
             "config": self.config,
             "created_at": self.created_at.isoformat(),
-            "last_signal_at": self.last_signal_at.isoformat() if self.last_signal_at else None
+            "last_signal_at": self.last_signal_at.isoformat() if self.last_signal_at else None,
+            "last_execution": self.last_execution.isoformat() if self.last_execution else None
         }
