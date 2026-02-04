@@ -12,7 +12,7 @@ import { Button } from '@/components/ui/button';
 import { useSocketContext } from '@/contexts/SocketContext';
 import { toast } from 'react-hot-toast';
 import { CONFIG } from '@/config';
-import { CandlestickChart } from '@/components/ui/candlestick-chart';
+import { TradingViewChart } from '@/components/ui/TradingViewChart';
 
 // --- MONITOR HÍBRIDO (Integrado con Socket Tarea 4.3 & 4.5) ---
 
@@ -92,10 +92,15 @@ const ExecutionMonitor = ({ bot }: any) => {
                             Cargando datos del mercado...
                         </div>
                     ) : (
-                        <CandlestickChart
-                            candles={candles}
-                            signals={combinedSignals}
-                            height={280}
+                        <TradingViewChart
+                            data={candles}
+                            trades={combinedSignals.map(s => ({
+                                time: new Date(s.createdAt || Date.now()).getTime(),
+                                price: s.price,
+                                side: (s.decision?.includes('BUY') || s.type === 'LONG' || s.side === 'buy') ? 'BUY' : 'SELL',
+                                label: s.decision || s.type || s.side
+                            }))}
+                            height={320}
                         />
                     )}
                 </div>
@@ -157,7 +162,8 @@ const BotsPage = () => {
     useEffect(() => {
         if (user?.openId) {
             fetchBots();
-            const interval = setInterval(fetchBots, 5000); // Poll every 5s for PnL updates
+            // Polling reducido a 60s para confiar más en los WebSockets (sp4 opt)
+            const interval = setInterval(fetchBots, 60000);
             return () => clearInterval(interval);
         }
     }, [user?.openId]);

@@ -122,19 +122,19 @@ class CcxtAdapter(IExchangePort):
     async def _get_system_client_for_exchange(self, exchange_id: str):
         """
         Retrieves a system-wide client for a specific exchange.
+        Uses a separate cache for system instances.
         """
         exchange_id = exchange_id.lower()
-        if self._exchange_instance and self._current_exchange_id == exchange_id:
-            return self._exchange_instance
 
-        # Initialize new system-wide client for this exchange
-        logger.info(f"🔄 Switching System Exchange Adapter to: {exchange_id.upper()}")
+        # 1. Check if we already have a public/system instance for this exchange
+        if exchange_id in self.public_instances:
+            return self.public_instances[exchange_id]
 
-        if self._exchange_instance:
-            await self._exchange_instance.close()
+        # 2. Initialize new system-wide client for this exchange
+        logger.info(f"🔄 Initializing System Exchange Adapter for: {exchange_id.upper()}")
 
         exchange_class = getattr(ccxt, exchange_id)
-        self._exchange_instance = exchange_class({
+        instance = exchange_class({
             'enableRateLimit': True,
             'options': {
                 'defaultType': 'spot',
@@ -144,13 +144,14 @@ class CcxtAdapter(IExchangePort):
 
         session = self._create_custom_session()
         if session:
-            self._exchange_instance.session = session
+            instance.session = session
 
         if exchange_id == 'okx':
-            self._exchange_instance.has['fetchCurrencies'] = False
+            instance.has['fetchCurrencies'] = False
 
-        self._current_exchange_id = exchange_id
-        return self._exchange_instance
+        # Update Cache
+        self.public_instances[exchange_id] = instance
+        return instance
 
     async def _get_system_client(self):
         """
@@ -210,10 +211,48 @@ class CcxtAdapter(IExchangePort):
     # --- IExchangePort Implementation ---
 
     async def get_current_price(self, symbol: str, user_id: str) -> float:
-        """Get the current price of a symbol using the system's active exchange."""
-        client = await self._get_system_client()
+        """Get the current price of a symbol using the user's configured exchange."""
+        # Fix: Use user specific client to respect active exchange
+        client = await self._get_client_for_user(user_id)
         ticker = await client.fetch_ticker(symbol)
         return ticker['last']
+
+    async def create_public_instance(self, exchange_id: str):
+        """Create a public instance for CEXService support"""
+        try:
+            exchange_class = getattr(ccxt, exchange_id.lower())
+            instance = exchange_class({
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot', 'fetchCurrencies': False}
+            })
+            session = self._create_custom_session()
+            if session: instance.session = session
+            if exchange_id.lower() == 'okx': instance.has['fetchCurrencies'] = False
+            return instance
+        except Exception as e:
+            logger.error(f"Error creating public instance {exchange_id}: {e}")
+            return None
+
+    async def get_private_instance(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None):
+        """Create a private instance matching CEXService expectations"""
+        try:
+            exchange_class = getattr(ccxt, exchange_id.lower())
+            config = {
+                'apiKey': api_key,
+                'secret': secret,
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'}
+            }
+            if password: config['password'] = password
+            if uid: config['uid'] = uid
+            
+            instance = exchange_class(config)
+            session = self._create_custom_session()
+            if session: instance.session = session
+            return instance
+        except Exception as e:
+             logger.error(f"Error creating private instance {exchange_id}: {e}")
+             return None
 
     async def fetch_balance(self, user_id: str, exchange_id: Optional[str] = None) -> List[Balance]:
         """
@@ -331,7 +370,7 @@ class CcxtAdapter(IExchangePort):
         df.set_index('timestamp', inplace=True)
         return df
 
-    async def get_public_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False, exchange_id: str = "binance") -> pd.DataFrame:
+    async def get_public_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False, exchange_id: str = None, user_id: str = None) -> pd.DataFrame:
         """
         Fetch historical data using PUBLIC API (no credentials required).
         This method creates a temporary public-only connection for fetching OHLCV data.
@@ -342,12 +381,33 @@ class CcxtAdapter(IExchangePort):
             timeframe: Candle timeframe (e.g., '1h', '4h', '1d')
             limit: Number of candles to fetch
             use_random_date: If True, fetches data from a random historical period
-            exchange_id: Exchange to use (default: 'binance')
+            exchange_id: Exchange to use (optional, overrides user config)
+            user_id: User ID to resolve active exchange from (optional)
         
         Returns:
             DataFrame with OHLCV data
         """
         try:
+            # Resolve Exchange ID
+            if not exchange_id:
+                if user_id:
+                    # Attempt to resolve from user config
+                    try:
+                        config = await get_app_config(user_id)
+                        if config:
+                            if 'activeExchange' in config:
+                                exchange_id = config['activeExchange']
+                            elif 'exchanges' in config:
+                                active_ex = next((e for e in config['exchanges'] if e.get('isActive')), None)
+                                if active_ex:
+                                    exchange_id = active_ex['exchangeId']
+                    except Exception as e:
+                        logger.warning(f"Could not resolve exchange for user {user_id}: {e}")
+                
+                # Default fallback if still None
+                if not exchange_id:
+                    exchange_id = "okx"
+
             # Create temporary public instance
             exchange_class = getattr(ccxt, exchange_id.lower())
             public_instance = exchange_class({

@@ -457,6 +457,24 @@ class SignalBotService:
 
     async def _close_bot(self, bot: Dict[str, Any], exit_price: float, status: str, reason: str):
         pnl = ((exit_price - bot["entryPrice"]) / bot["entryPrice"]) * 100
+        
+        # Update Virtual Balance if Demo
+        if bot.get("isDemo", True) or bot.get("mode") == "simulated":
+            try:
+                user_id_obj = bot.get("userId")
+                user = await db.users.find_one({"_id": user_id_obj})
+                if user:
+                    amount = bot.get("amount", 0)
+                    revenue = amount * (1 + (pnl/100))
+                    
+                    market_type = bot.get("marketType", "CEX")
+                    asset = "USDT" # Default for now, ideally strictly typed in bot doc
+                    
+                    await update_virtual_balance(user["openId"], market_type, asset, revenue, is_relative=True)
+                    logger.info(f"💰 Balance updated for {user['openId']}: +{revenue:.2f} (PnL: {pnl:.2f}%)")
+            except Exception as e:
+                logger.error(f"Error updating balance on close_bot: {e}")
+
         await db.trades.update_one(
             {"_id": bot["_id"]},
             {

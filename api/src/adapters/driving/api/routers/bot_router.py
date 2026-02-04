@@ -14,6 +14,7 @@ class CreateBotSchema(BaseModel):
     symbol: str
     strategy_name: str
     timeframe: str
+    market_type: str = "spot"
     mode: str = "simulated"
 
 @router.post("/")
@@ -26,6 +27,7 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
         symbol=data.symbol,
         strategy_name=data.strategy_name,
         timeframe=data.timeframe,
+        market_type=data.market_type,
         mode=data.mode,
         status="active" # Se crea activo para iniciar monitoreo
     )
@@ -78,7 +80,19 @@ async def list_user_bots(current_user: dict = Depends(get_current_user)):
             
         result.append(b_dict)
         
-    return result
+    return _serialize_mongo(result)
+
+def _serialize_mongo(obj):
+    """
+    Recursively convert ObjectId to string to make data JSON serializable.
+    """
+    if isinstance(obj, list):
+        return [_serialize_mongo(i) for i in obj]
+    if isinstance(obj, dict):
+        return {k: _serialize_mongo(v) for k, v in obj.items()}
+    if isinstance(obj, ObjectId):
+        return str(obj)
+    return obj
 
 @router.patch("/{bot_id}/status")
 async def toggle_bot_status(bot_id: str, status: str):
@@ -113,28 +127,7 @@ async def receive_external_signal(data: SignalWebhook):
 
     bot['id'] = str(bot['_id'])
 
-    # Persistir la señal en el historial (S9)
-    try:
-        from api.src.domain.models.signal import Signal, SignalStatus, Decision
-        from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
-        signal_repo = MongoDBSignalRepository(db)
-
-        new_sig = Signal(
-            id=None,
-            userId=bot['user_id'],
-            source="BOT_STRATEGY",
-            rawText=f"Signal {data.signal} at {data.price} for bot {data.bot_id}",
-            status=SignalStatus.EXECUTING,
-            createdAt=datetime.utcnow(),
-            symbol=bot['symbol'],
-            decision=Decision.BUY if data.signal == 1 else Decision.SELL,
-            botId=data.bot_id
-        )
-        await signal_repo.save(new_sig)
-    except Exception as e:
-        logger.error(f"Error persisting signal for bot {data.bot_id}: {e}")
-    
-    # 2. Procesar a través del motor dual
+    # 2. Procesar a través del motor dual (La persistencia se maneja en el engine)
     result = await engine.process_signal(bot, {"signal": data.signal, "price": data.price})
     
     return {"status": "processed", "execution": result}

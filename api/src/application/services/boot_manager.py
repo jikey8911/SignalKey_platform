@@ -48,24 +48,74 @@ class BootManager:
 
     async def monitor_loop(self, bot_data):
         """
-        Bucle de monitoreo persistente para cada bot recuperado.
-        SIMULACIÓN: En producción real, esto conectaría con WebSockets o polling de precios.
+        Bucle de monitoreo autónomo (Autotrading).
+        Realiza análisis técnico periódico y ejecuta señales vía IA.
         """
         bot_id = bot_data.get('id')
-        logger.info(f"🟢 Monitor loop started for {bot_id}")
+        symbol = bot_data.get('symbol')
+        timeframe = bot_data.get('timeframe', '1h')
+        market_type = bot_data.get('market_type', 'spot')
+        user_id = bot_data.get('user_id')
         
+        logger.info(f"🟢 Bucle Autotrade iniciado para {bot_id} ({symbol} | {timeframe})")
+
+        from api.src.application.services.ml_service import MLService
+        from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+        ml_service = MLService(ccxt_service)
+
         try:
             while True:
-                # Verificar si sigue activo en DB (Heartbeat)
-                # En una implementación real, aquí procesaríamos señales o precios
-                # Por ahora, mantenemos vivo el proceso y logueamos ocasionalmente
-                await asyncio.sleep(60) # Revisar cada minuto
+                # 1. Verificar si el autotrading sigue activo para el usuario
+                from api.src.adapters.driven.persistence.mongodb import get_app_config
+                config = await get_app_config(user_id)
+                if not config or not config.get('isAutoEnabled', True):
+                    logger.info(f"⏸️ Autotrade desactivado globalmente para usuario {user_id}. Bot {bot_id} pausado.")
+                    break
                 
-                # Opcional: Validar si el usuario lo detuvo externamente
-                # current_status = await self.repo.get_status(bot_id)
-                # if current_status != 'active': break
+                # 2. Obtener datos recientes
+                try:
+                    # Obtenemos las últimas 100 velas
+                    candles_df = await ccxt_service.get_historical_data(symbol, timeframe, limit=100)
+                    if not candles_df.empty:
+                        candles_list = []
+                        for ts, row in candles_df.iterrows():
+                            candles_list.append({
+                                "time": ts.timestamp(),
+                                "open": row['open'], "high": row['high'],
+                                "low": row['low'], "close": row['close']
+                            })
+
+                        # 3. Predecir señal
+                        # S9: Pasar posición actual para contexto
+                        current_bot = await self.repo.collection.find_one({"_id": ObjectId(bot_id)})
+                        prediction = ml_service.predict(
+                            symbol=symbol,
+                            timeframe=timeframe,
+                            candles=candles_list,
+                            market_type=market_type,
+                            strategy_name=bot_data.get('strategy_name'),
+                            current_position=current_bot.get('position')
+                        )
+
+                        decision = prediction.get('decision')
+                        if decision in ["BUY", "SELL"]:
+                            logger.info(f"🤖 IA decidió {decision} para {symbol}")
+                            signal_val = 1 if decision == "BUY" else 2
+
+                            # 4. Procesar señal a través del motor
+                            await self.engine.process_signal(current_bot, {
+                                "signal": signal_val,
+                                "price": candles_list[-1]['close'],
+                                "is_alert": False # Permitir Profit Guard normal
+                            })
+
+                except Exception as e:
+                    logger.error(f"⚠️ Error analizando mercado para bot {bot_id}: {e}")
+
+                # Esperar al siguiente intervalo (ej: 1 minuto)
+                await asyncio.sleep(60)
                 
         except asyncio.CancelledError:
-            logger.info(f"🔴 Monitor loop cancelled for {bot_id}")
+            logger.info(f"🔴 Bucle Autotrade cancelado para {bot_id}")
         except Exception as e:
-            logger.error(f"Error in monitor loop for {bot_id}: {e}")
+            logger.error(f"Error crítico en bucle Autotrade {bot_id}: {e}")

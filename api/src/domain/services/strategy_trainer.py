@@ -23,20 +23,47 @@ class StrategyTrainer:
         self.models_dir = models_dir
         os.makedirs(self.models_dir, exist_ok=True)
 
-    def discover_strategies(self) -> List[str]:
-        """Busca archivos de estrategia válidos en el directorio."""
-        if not os.path.exists(self.strategies_dir):
-            logger.warning(f"Strategies directory {self.strategies_dir} does not exist.")
-            return []
+    def discover_strategies(self, market_type: str = None) -> List[str]:
+        """Busca archivos de estrategia válidos en el directorio raíz y subdirectorios de mercado."""
+        strategies = set()
+        
+        # 1. Search in root strategies directory
+        if os.path.exists(self.strategies_dir):
+            root_files = [f[:-3] for f in os.listdir(self.strategies_dir) 
+                          if f.endswith(".py") and f != "base.py" and not f.startswith("__")]
+            strategies.update(root_files)
             
-        return [file_name[:-3] for file_name in os.listdir(self.strategies_dir) 
-                if file_name.endswith(".py") and file_name != "base.py" and not file_name.startswith("__")]
+        # 2. Search in market specific subdirectory if provided
+        if market_type:
+            market_dir = os.path.join(self.strategies_dir, market_type.lower())
+            if os.path.exists(market_dir):
+                market_files = [f[:-3] for f in os.listdir(market_dir) 
+                                if f.endswith(".py") and f != "base.py" and not f.startswith("__")]
+                strategies.update(market_files)
+        
+        if not strategies:
+             logger.warning(f"No strategies found in {self.strategies_dir} (market: {market_type})")
+             return []
+             
+        return list(strategies)
 
-    def load_strategy_class(self, strategy_name: str):
+    def load_strategy_class(self, strategy_name: str, market_type: str = None):
         """Dynamic strategy class loading."""
         try:
-            module_path = f"api.src.domain.strategies.{strategy_name}"
-            module = importlib.import_module(module_path)
+            if market_type:
+                module_path = f"api.src.domain.strategies.{market_type.lower()}.{strategy_name}"
+            else:
+                module_path = f"api.src.domain.strategies.{strategy_name}"
+
+            try:
+                module = importlib.import_module(module_path)
+            except ImportError:
+                # Fallback to root strategies if market-specific not found
+                if market_type:
+                    module_path = f"api.src.domain.strategies.{strategy_name}"
+                    module = importlib.import_module(module_path)
+                else:
+                    raise
             
             # Try snake_case to PascalCase conversion first
             class_name_pascal = "".join(w.title() for w in strategy_name.split("_"))
@@ -52,13 +79,14 @@ class StrategyTrainer:
             logger.error(f"Error loading strategy {strategy_name}: {e}")
             return None
 
-    async def train_agnostic_model(self, strategy_name: str, symbols_data: Dict[str, pd.DataFrame], emit_callback=None):
+    async def train_agnostic_model(self, strategy_name: str, symbols_data: Dict[str, pd.DataFrame], market_type: str = "spot", emit_callback=None):
         """
         Entrena un modelo global para una estrategia usando datos de múltiples activos.
+        Segmentado por market_type.
         """
         try:
             # Importación dinámica del módulo de estrategia
-            StrategyClass = self.load_strategy_class(strategy_name)
+            StrategyClass = self.load_strategy_class(strategy_name, market_type)
             if not StrategyClass: return False
             
             strategy = StrategyClass()
@@ -124,8 +152,11 @@ class StrategyTrainer:
             model = RandomForestClassifier(n_estimators=150, max_depth=10, random_state=42)
             model.fit(X, y)
 
-            # Persistencia: Un solo modelo por estrategia
-            model_file = os.path.join(self.models_dir, f"{strategy_name}.pkl")
+            # Persistencia segmentada por mercado
+            market_dir = os.path.join(self.models_dir, market_type.lower())
+            os.makedirs(market_dir, exist_ok=True)
+
+            model_file = os.path.join(market_dir, f"{strategy_name}.pkl")
             joblib.dump(model, model_file)
             
             logger.info(f"Modelo {strategy_name}.pkl generado exitosamente.")
@@ -140,15 +171,15 @@ class StrategyTrainer:
             if emit_callback: await emit_callback(f"Error training {strategy_name}: {e}", "error")
             return False
 
-    async def train_all(self, symbols_data: Dict[str, pd.DataFrame], emit_callback=None):
+    async def train_all(self, symbols_data: Dict[str, pd.DataFrame], market_type: str = "spot", emit_callback=None):
         """Entrena todas las estrategias disponibles."""
-        strategies = self.discover_strategies()
-        print(f"📋 [StrategyTrainer] Found {len(strategies)} strategies to train: {strategies}")
-        if emit_callback: await emit_callback(f"📋 Found {len(strategies)} strategies", "info")
+        strategies = self.discover_strategies(market_type)
+        print(f"📋 [StrategyTrainer] Found {len(strategies)} strategies to train for {market_type}: {strategies}")
+        if emit_callback: await emit_callback(f"📋 Found {len(strategies)} strategies for {market_type}", "info")
         
         results = {}
         for strat in strategies:
-            success = await self.train_agnostic_model(strat, symbols_data, emit_callback)
+            success = await self.train_agnostic_model(strat, symbols_data, market_type, emit_callback)
             results[strat] = "Success" if success else "Failed"
         print(f"🏁 [StrategyTrainer] Training complete. Results: {results}")
         if emit_callback: await emit_callback("🏁 Training complete", "success")
@@ -156,8 +187,8 @@ class StrategyTrainer:
 
     def _inject_position_context(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Tarea 5.1 Mejorada: Inyección de Contexto para SPOT.
-        Enseña a la IA que si hay pérdida, no debe cerrar (Flip), debe promediar.
+        Inyección de Contexto (Long/Short flipping).
+        Enseña a la IA que si hay pérdida, no debe flippear (Profit Guard), debe esperar o promediar.
         """
         df = df.copy()
         df['in_position'] = 0
@@ -165,6 +196,7 @@ class StrategyTrainer:
         
         avg_price = 0.0
         in_pos = False
+        current_side = None
         
         for i in range(1, len(df)):
             current_close = df.iloc[i]['close']
@@ -173,22 +205,38 @@ class StrategyTrainer:
             
             if in_pos:
                 df.at[df.index[i], 'in_position'] = 1
-                pnl = (current_close - avg_price) / avg_price
-                df.at[df.index[i], 'current_pnl'] = pnl
                 
-                # REGLA SPOT: Si la señal es SELL pero el PnL es negativo, 
-                # forzamos a la IA a aprender que la señal correcta es WAIT (0) o BUY (DCA)
-                if original_signal == 2 and pnl < -0.01: # -1% de margen
-                    # Cambiamos la 'etiqueta' que el modelo intentará predecir
-                    df.at[df.index[i], 'signal'] = 0 # WAIT: No vendas en pérdida
+                # Calcular PnL según dirección
+                if current_side == "BUY":
+                    pnl = (current_close - avg_price) / avg_price
+                else:
+                    pnl = (avg_price - current_close) / avg_price
                     
-                # Si la señal de venta ocurre en ganancia, reseteamos posición
-                if original_signal == 2 and pnl > 0:
-                    in_pos = False
-                    avg_price = 0.0
+                df.at[df.index[i], 'current_pnl'] = pnl
+
+                # PROFIT GUARD TRAINING:
+                # Si la señal es contraria pero el PnL es negativo, enseñamos a ESPERAR (0)
+                is_reversal = (current_side == "BUY" and original_signal == 2) or \
+                              (current_side == "SELL" and original_signal == 1)
+
+                if is_reversal and pnl < -0.005: # -0.5% margen
+                    df.at[df.index[i], 'signal'] = 0 # WAIT
+
+                # Actualizar estado si hubo flip exitoso (o entrada inicial)
+                if original_signal == 1:
+                    current_side = "BUY"
+                    avg_price = current_close
+                elif original_signal == 2:
+                    current_side = "SELL"
+                    avg_price = current_close
             else:
-                if original_signal == 1: # Entrada
+                if original_signal == 1:
                     in_pos = True
+                    current_side = "BUY"
+                    avg_price = current_close
+                elif original_signal == 2:
+                    in_pos = True
+                    current_side = "SELL"
                     avg_price = current_close
                     
         return df
