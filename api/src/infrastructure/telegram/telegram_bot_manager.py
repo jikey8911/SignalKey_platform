@@ -127,12 +127,11 @@ class TelegramBotManager:
         logger.info("Restarting all bots from database...")
         
         try:
-            # Buscar todas las configuraciones con Telegram conectado
+            # Buscar todas las configuraciones con credenciales de Telegram configuradas
+            # Iniciamos el bot para recibir mensajes siempre, independientemente de si está marcado como conectado
             configs = await db.app_configs.find({
-                "telegramIsConnected": True,
                 "telegramApiId": {"$exists": True, "$ne": ""},
-                "telegramApiHash": {"$exists": True, "$ne": ""},
-                "telegramSessionString": {"$exists": True, "$ne": ""}
+                "telegramApiHash": {"$exists": True, "$ne": ""}
             }).to_list(length=100)
             
             logger.info(f"Found {len(configs)} users with Telegram configured")
@@ -146,6 +145,16 @@ class TelegramBotManager:
                         continue
                     
                     user_id = user.get("openId")
+
+                    # Si es una fuente global, podemos configurar el handler para broadcast
+                    handler = message_handler
+                    if config.get("isGlobalSource"):
+                        logger.info(f"User {user_id} is marked as Global Source. Setting ALL broadcast.")
+                        # Envolvemos el handler para que siempre use user_id="ALL"
+                        async def broadcast_handler(signal, user_id="ALL"):
+                            if message_handler:
+                                await message_handler(signal, user_id="ALL")
+                        handler = broadcast_handler
                     
                     # Iniciar el bot con el handler
                     await self.start_user_bot(
@@ -154,7 +163,7 @@ class TelegramBotManager:
                         api_hash=config.get("telegramApiHash"),
                         phone_number=config.get("telegramPhoneNumber", ""),
                         session_string=config.get("telegramSessionString"),
-                        message_handler=message_handler
+                        message_handler=handler
                     )
                     
                     logger.info(f"Restarted bot for user {user_id}")

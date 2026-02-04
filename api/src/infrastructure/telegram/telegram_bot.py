@@ -114,8 +114,14 @@ class TelegramUserBot:
                     
                     # Guardar y emitir para visualización en tiempo real
                     # await db.telegram_logs.insert_one(log_entry) # Deshabilitado por solicitud del usuario
+
+                    # REQUISITO: Mostrar todos los mensajes por consola (API logs)
+                    print(f"\n[TELEGRAM {self.user_id}] From: {chat_title} ({chat_id}) | Content: {display_text}\n")
+
                     from api.src.adapters.driven.notifications.socket_service import socket_service
                     await socket_service.emit_to_user(self.user_id, "telegram_log", log_entry)
+                    # También emitir al broadcast global para monitoreo general
+                    await socket_service.broadcast("telegram_log", {**log_entry, "source": f"user_{self.user_id}"})
 
                     # 2. VALIDACIÓN PARA IA: Solo si tiene texto y el procesamiento está habilitado
                     if not text:
@@ -160,6 +166,7 @@ class TelegramUserBot:
 
             # Configurar autostart y reconexión automática
             # El cliente de Telethon reconecta por defecto, pero start() asegura que esté activo
+            # Usamos start() sin parámetros si ya hay sesión, o con phone si es nuevo
             await self.client.start(phone=self.phone_number if self.phone_number else None)
             
             if not await self.client.is_user_authorized():
@@ -167,6 +174,23 @@ class TelegramUserBot:
                 await self.client.disconnect()
                 return
             
+            # Tarea: Guardar la sesión en la base de datos para persistencia centralizada
+            try:
+                session_string = self.client.session.save()
+                user = await db.users.find_one({"openId": self.user_id})
+                if user:
+                    await db.app_configs.update_one(
+                        {"userId": user["_id"]},
+                        {"$set": {
+                            "telegramSessionString": session_string,
+                            "telegramIsConnected": True,
+                            "telegramLastConnected": datetime.utcnow()
+                        }}
+                    )
+                    logger.info(f"Session string automatically saved/updated in DB for user {self.user_id}")
+            except Exception as e:
+                logger.error(f"Error auto-saving session to DB for {self.user_id}: {e}")
+
             logger.info(f"Telegram bot started and LISTENING for user {self.user_id}")
 
         except Exception as e:
@@ -288,117 +312,3 @@ class TelegramUserBot:
         except Exception as e:
             logger.error(f"Error sending trade alert for {self.user_id}: {e}")
 
-# Mantener compatibilidad con código legacy (bot global)
-# Este bot solo se usa si no hay bots de usuario configurados
-class LegacyTelegramBot:
-    """Bot global legacy - solo para compatibilidad temporal"""
-    
-    def __init__(self):
-        self.api_id = Config.TELEGRAM_API_ID
-        self.api_hash = Config.TELEGRAM_API_HASH
-        # Ruta al archivo .session proporcionado por el usuario
-        self.session_file = 'api/src/infrastructure/telegram/userbot_session'
-        self.client = None
-        self.api_url = f"{Config.API_BASE_URL}/webhook/signal"
-        self.message_handler = None
-
-        if not self.api_id or not self.api_hash:
-            logger.warning("TELEGRAM_API_ID or TELEGRAM_API_HASH not set. Legacy bot will not start.")
-    
-    async def start(self, message_handler=None):
-        """Inicia el bot legacy"""
-        if message_handler:
-            self.message_handler = message_handler
-
-        if not self.api_id or not self.api_hash:
-            logger.error("Legacy Bot: Missing API credentials (ID/HASH)")
-            return
-
-        logger.info(f"Starting LEGACY Telegram bot using session: {self.session_file}")
-
-        try:
-            # Asegurar que api_id sea int
-            api_id_int = int(self.api_id)
-
-            # Verificar si el archivo existe (Telethon añade .session)
-            actual_file = f"{self.session_file}.session"
-            if not os.path.exists(actual_file):
-                # Intentar en el directorio raíz como respaldo
-                backup_file = "userbot_session.session"
-                if os.path.exists(backup_file):
-                    logger.info(f"Session file not found at {actual_file}, using backup at {backup_file}")
-                    self.session_file = "userbot_session"
-                else:
-                    logger.error(f"Telegram session file NOT FOUND. Expected at: {actual_file}")
-                    return
-
-            self.client = TelegramClient(self.session_file, api_id_int, self.api_hash)
-
-            # Conectar sin prompt interactivo
-            await self.client.connect()
-
-            if not await self.client.is_user_authorized():
-                logger.error("Legacy Bot: NOT AUTHORIZED. The session file is invalid or expired for these credentials.")
-                await self.client.disconnect()
-                return
-
-            @self.client.on(events.NewMessage)
-            async def handler(event):
-                try:
-                    chat_id = str(event.chat_id)
-                    text = event.message.message
-
-                    # Intentar obtener info del remitente para el log de consola
-                    sender_name = "Unknown"
-                    try:
-                        sender = await event.get_sender()
-                        sender_name = getattr(sender, 'username', '') or f"{getattr(sender, 'first_name', '')} {getattr(sender, 'last_name', '')}".strip()
-                    except: pass
-
-                    # REQUISITO: Mostrar todos los mensajes por consola (API logs)
-                    print(f"\n[TELEGRAM MESSAGE] From: {sender_name} ({chat_id}) | Content: {text}\n")
-                    logger.info(f"Global Bot received message from {chat_id}")
-
-                    # Emitir vía Socket para visibilidad en tiempo real en Dashboard para todos
-                    try:
-                        from api.src.adapters.driven.notifications.socket_service import socket_service
-                        log_entry = {
-                            "chatId": chat_id,
-                            "chatName": sender_name,
-                            "message": text if text else "<Media>",
-                            "timestamp": datetime.utcnow().isoformat(),
-                            "status": "received",
-                            "source": "global_bot"
-                        }
-                        await socket_service.broadcast("telegram_log", log_entry)
-                    except Exception as socket_err:
-                        logger.error(f"Error broadcasting global message to sockets: {socket_err}")
-
-                    if text and self.message_handler:
-                        signal_obj = TradingSignal(
-                            source=f"legacy_telegram_{chat_id}",
-                            raw_text=text
-                        )
-                        # Ejecutar procesamiento GLOBAL para todos los usuarios activos
-                        if asyncio.iscoroutinefunction(self.message_handler):
-                            asyncio.create_task(self.message_handler(signal_obj, user_id="ALL"))
-                        else:
-                            self.message_handler(signal_obj, user_id="ALL")
-                except Exception as e:
-                    logger.error(f"Error in legacy bot handler: {e}")
-
-            logger.info("LEGACY Telegram bot connected and listening")
-
-        except Exception as e:
-            logger.error(f"Failed to start Legacy Bot: {e}")
-    
-    async def stop(self):
-        if self.client:
-            await self.client.disconnect()
-
-
-bot_instance = LegacyTelegramBot()
-
-async def start_userbot():
-    """Función legacy para compatibilidad"""
-    await bot_instance.start()

@@ -17,7 +17,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 from contextlib import asynccontextmanager
-from api.src.infrastructure.telegram.telegram_bot import start_userbot, bot_instance
 from api.src.infrastructure.telegram.telegram_bot_manager import bot_manager
 from api.src.application.services.monitor_service import MonitorService
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,9 +30,7 @@ async def lifespan(app: FastAPI):
     bot_manager.signal_processor = process_signal_task
     
     try:
-        # Iniciar Bot Global (Legacy) con archivo de sesión
-        await bot_instance.start(message_handler=process_signal_task)
-
+        # Iniciar bots por usuario desde la DB (incluye fuentes globales marcadas con isGlobalSource)
         await bot_manager.restart_all_bots(message_handler=process_signal_task)
         logger.info(f"Telegram Bot Manager started with {bot_manager.get_active_bots_count()} active bots")
         
@@ -65,7 +62,6 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("=== Stopping SignalKey Platform Services ===")
-    await bot_instance.stop()
     await bot_manager.stop_all_bots()
     await monitor_service.stop_monitoring()
     monitor_task.cancel()
