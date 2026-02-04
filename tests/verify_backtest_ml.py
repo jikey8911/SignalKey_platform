@@ -32,16 +32,22 @@ def generate_dummy_ohlcv(length=500):
 async def main():
     print("🚀 Starting Backtest Service Verification (Mocked Data)...")
     
-    # Instantiate
-    service = BacktestService()
-    
     # Updated to patch CCXTAdapter since BacktestService now uses it
     from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
 
+    # Instantiate
+    service = BacktestService(exchange_adapter=ccxt_service)
+
     # Mock the adapter method
-    ccxt_service.get_historical_ohlcv = AsyncMock(return_value=generate_dummy_ohlcv(1000))
+    import pandas as pd
+    data = generate_dummy_ohlcv(1000)
+    df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+    df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+    df.set_index('timestamp', inplace=True)
+    ccxt_service.get_historical_data = AsyncMock(return_value=df)
     
-    # We don't need to patch the internal context manager logic anymore, just the service call
+    # Also mock public method
+    ccxt_service.get_public_historical_data = AsyncMock(return_value=df)
     
     # Define variables
     symbol = "BTC/USDT"

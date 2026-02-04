@@ -262,7 +262,7 @@ async def deploy_bot(
 
 
 @router.get("/ml_models")
-async def get_ml_models():
+async def get_ml_models(market: str = "spot"):
     """
     Obtiene la lista de modelos ML entrenados disponibles
     
@@ -272,7 +272,7 @@ async def get_ml_models():
     try:
         from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
         ml_service = MLService(exchange_adapter=ccxt_service)
-        models = await ml_service.get_models_status()
+        models = await ml_service.get_models_status(market_type=market)
         
         logger.info(f"Found {len(models)} trained ML models")
         return {"models": models}
