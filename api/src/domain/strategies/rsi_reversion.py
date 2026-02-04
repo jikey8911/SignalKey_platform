@@ -12,7 +12,7 @@ class RsiReversion(BaseStrategy):
         self.oversold = int(self.config.get('oversold', 25))
         self.overbought = int(self.config.get('overbought', 75))
 
-    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+    def apply(self, df: pd.DataFrame, current_position: dict = None) -> pd.DataFrame:
         delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=self.rsi_period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=self.rsi_period).mean()

@@ -10,7 +10,7 @@ class VolatilityBreakout(BaseStrategy):
         super().__init__(config or {})
         self.period = 20
 
-    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+    def apply(self, df: pd.DataFrame, current_position: dict = None) -> pd.DataFrame:
         df['upper_channel'] = df['high'].rolling(window=self.period).max()
         df['lower_channel'] = df['low'].rolling(window=self.period).min()
         

@@ -175,7 +175,7 @@ class MLService:
         """Consulta el inventario de cerebros .pkl disponibles en el sistema."""
         return self.trainer.discover_strategies()
 
-    def predict(self, symbol: str, timeframe: str, candles: List[Dict], strategy_name: str = "auto") -> Dict[str, Any]:
+    def predict(self, symbol: str, timeframe: str, candles: List[Dict], strategy_name: str = "auto", current_position: Dict = None) -> Dict[str, Any]:
         """
         Inferencia Real-Time.
         Si strategy_name es 'auto' o se omite, se evalúan todas y se devuelve la que decida el sistema.
@@ -205,8 +205,21 @@ class MLService:
                 StrategyClass = getattr(module, class_name)
                 strategy = StrategyClass()
                 
-                df_features = strategy.apply(df.copy())
-                features = strategy.get_features() 
+                # S9: Pasar current_position a la estrategia
+                df_features = strategy.apply(df.copy(), current_position=current_position)
+                
+                # S9.3: Inyectar Contexto de Posición para el Modelo (Match Training)
+                pos = current_position or {}
+                in_pos = 1 if pos.get('qty', 0) > 0 else 0
+                avg_price = pos.get('avg_price', 0)
+                current_price = df.iloc[-1]['close']
+                current_pnl = (current_price - avg_price) / avg_price if avg_price > 0 else 0.0
+                
+                df_features['in_position'] = in_pos
+                df_features['current_pnl'] = current_pnl
+                
+                base_features = strategy.get_features() 
+                features = base_features + ['in_position', 'current_pnl']
                 
                 if df_features.empty or not all(c in df_features.columns for c in features): continue
                 

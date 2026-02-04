@@ -18,7 +18,7 @@ class StatisticalMeanReversion(BaseStrategy):
         self.rsi_period = self.config.get('rsi_period', 14)
         self.ema_trend = self.config.get('ema_trend', 200)
 
-    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+    def apply(self, df: pd.DataFrame, current_position: dict = None) -> pd.DataFrame:
         """
         Calcula indicadores técnicos avanzados y genera señales estandarizadas.
         """

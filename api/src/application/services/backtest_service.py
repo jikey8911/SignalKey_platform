@@ -169,8 +169,9 @@ class BacktestService:
                 strategy_obj = StrategyClass()
                 features = strategy_obj.get_features()
 
-                # Preparar DataFrame con indicadores
-                df_processed = strategy_obj.apply(df.copy())
+                # Preparar DataFrame con indicadores y contexto
+                # Tarea S9.4: Inyectar datos de contexto (Missing features fix)
+                df_processed = self.prepare_data_for_model(df.copy(), strategy_obj)
                 
                 if df_processed.empty or not all(c in df_processed.columns for c in features):
                     self.logger.warning(f"⏩ Skipping {strat_name}: Missing features.")
@@ -196,8 +197,12 @@ class BacktestService:
                         self.logger.warning(f"⚠️ No se pudo cargar configuración de usuario, usando default: {e}")
 
                 # Predicciones
-                valid_idx = df_processed[features].dropna().index
-                X = df_processed.loc[valid_idx, features]
+                # Ajustar features para incluir las nuevas columnas de contexto
+                model_features = features + ['current_pnl', 'in_position']
+                
+                # Validar que existan todas las columnas
+                valid_idx = df_processed[model_features].dropna().index
+                X = df_processed.loc[valid_idx, model_features]
                 df_processed.loc[valid_idx, 'ai_signal'] = model.predict(X)
                 df_processed['ai_signal'] = df_processed['ai_signal'].fillna(0)
 
@@ -599,3 +604,40 @@ class BacktestService:
         if len(y_true) == 0: return 0.0
         matches = (y_true == y_pred).sum()
         return float(matches / len(y_true))
+
+    def prepare_data_for_model(self, df: pd.DataFrame, strategy: BaseStrategy) -> pd.DataFrame:
+        """
+        Prepara el DataFrame con los indicadores técnicos 
+        y el contexto de posición requerido por los nuevos modelos (S9).
+        """
+        # 1. Aplicar indicadores técnicos base de la estrategia
+        df = strategy.apply(df)
+        
+        # 2. Simular el contexto de posición (Igual que en el StrategyTrainer)
+        df['in_position'] = 0
+        df['current_pnl'] = 0.0
+        
+        avg_price = 0.0
+        in_pos = False
+        
+        # Iteramos para reconstruir el estado que el modelo espera ver
+        # Esto es crucial para que Random Forest no falle por falta de dimensiones
+        for i in range(1, len(df)):
+            if in_pos:
+                df.at[df.index[i], 'in_position'] = 1
+                current_price = df.iloc[i]['close']
+                if avg_price > 0:
+                    df.at[df.index[i], 'current_pnl'] = (current_price - avg_price) / avg_price
+                
+                # Si hubo una señal de venta técnica en el paso anterior, reseteamos
+                # Ojo: Usamos 'signal' que genera strategy.apply() (la técnica pura)
+                if df.iloc[i-1].get('signal') == BaseStrategy.SIGNAL_SELL:
+                    in_pos = False
+                    avg_price = 0.0
+            else:
+                # Si hubo señal de compra técnica, iniciamos posición simulada
+                if df.iloc[i-1].get('signal') == BaseStrategy.SIGNAL_BUY:
+                    in_pos = True
+                    avg_price = df.iloc[i]['close']
+                    
+        return df

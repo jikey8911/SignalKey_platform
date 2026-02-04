@@ -93,16 +93,19 @@ class StrategyTrainer:
             
             # Selección de características (Features) - Dynamic
             # Enforce strict contract: Strategy MUST implement get_features
-            features = strategy.get_features()
+            # --- AGREGAR CONTEXTO A LAS FEATURES ---
+            # Las estrategias ahora aprenden de los indicadores + el estado de la posición
+            base_features = strategy.get_features()
+            ml_features = base_features + ['in_position', 'current_pnl']
             
-            if not features:
+            if not ml_features:
                  msg = f"❌ [StrategyTrainer] Strategy {strategy_name} returned empty features list."
                  logger.error(msg)
                  if emit_callback: await emit_callback(msg, "error")
                  return False
 
             # Verify features exist in dataset
-            missing_cols = [c for c in features if c not in full_dataset.columns]
+            missing_cols = [c for c in ml_features if c not in full_dataset.columns]
             if missing_cols:
                 msg = f"❌ [StrategyTrainer] Missing features for {strategy_name}: {missing_cols}"
                 logger.error(msg)
@@ -110,15 +113,15 @@ class StrategyTrainer:
                 if emit_callback: await emit_callback(msg, "error")
                 return False
 
-            X = full_dataset[features]
+            X = full_dataset[ml_features]
             y = full_dataset['signal']
 
-            # Entrenamiento del clasificador
-            msg_train = f"🧠 [StrategyTrainer] Training {strategy_name} on {len(X)} samples with features: {features}..."
+            # Entrenamiento del clasificador con mayor profundidad para captar las reglas de PnL
+            msg_train = f"🧠 [StrategyTrainer] Training {strategy_name} on {len(X)} samples with features: {ml_features}..."
             print(msg_train)
             if emit_callback: await emit_callback(msg_train, "info")
             
-            model = RandomForestClassifier(n_estimators=100, random_state=42)
+            model = RandomForestClassifier(n_estimators=150, max_depth=10, random_state=42)
             model.fit(X, y)
 
             # Persistencia: Un solo modelo por estrategia
@@ -153,8 +156,8 @@ class StrategyTrainer:
 
     def _inject_position_context(self, df: pd.DataFrame) -> pd.DataFrame:
         """
-        Tarea 5.1: Inyección de Contexto en Entrenamiento.
-        Añade columnas de estado de cuenta para que la IA aprenda a gestionar DCA.
+        Tarea 5.1 Mejorada: Inyección de Contexto para SPOT.
+        Enseña a la IA que si hay pérdida, no debe cerrar (Flip), debe promediar.
         """
         df = df.copy()
         df['in_position'] = 0
@@ -163,25 +166,29 @@ class StrategyTrainer:
         avg_price = 0.0
         in_pos = False
         
-        # Iteración explícita para simulación de estado
         for i in range(1, len(df)):
-            prev_signal = df.iloc[i-1]['signal']
+            current_close = df.iloc[i]['close']
+            # Obtener la señal original de la estrategia técnica
+            original_signal = df.iloc[i]['signal']
             
-            # Si la estrategia base indica compra, iniciamos/aumentamos posición
-            if prev_signal == 1:
-                in_pos = True
-                # Lógica de promedio simplificada para entrenamiento:
-                # Asumimos que la señal 1 actualiza el precio de referencia (o es la entrada)
-                avg_price = df.iloc[i]['close'] 
-                
             if in_pos:
                 df.at[df.index[i], 'in_position'] = 1
-                if avg_price > 0:
-                    df.at[df.index[i], 'current_pnl'] = (df.iloc[i]['close'] - avg_price) / avg_price
+                pnl = (current_close - avg_price) / avg_price
+                df.at[df.index[i], 'current_pnl'] = pnl
                 
-                # Si hay señal de venta, reseteamos para el siguiente ciclo
-                if prev_signal == 2:
+                # REGLA SPOT: Si la señal es SELL pero el PnL es negativo, 
+                # forzamos a la IA a aprender que la señal correcta es WAIT (0) o BUY (DCA)
+                if original_signal == 2 and pnl < -0.01: # -1% de margen
+                    # Cambiamos la 'etiqueta' que el modelo intentará predecir
+                    df.at[df.index[i], 'signal'] = 0 # WAIT: No vendas en pérdida
+                    
+                # Si la señal de venta ocurre en ganancia, reseteamos posición
+                if original_signal == 2 and pnl > 0:
                     in_pos = False
                     avg_price = 0.0
+            else:
+                if original_signal == 1: # Entrada
+                    in_pos = True
+                    avg_price = current_close
                     
         return df

@@ -18,10 +18,11 @@ class BaseStrategy(ABC):
         self.name = self.__class__.__name__
 
     @abstractmethod
-    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+    def apply(self, df: pd.DataFrame, current_position: dict = None) -> pd.DataFrame:
         """
         Calcula indicadores y genera la columna 'signal' 
         usando exclusivamente las constantes SIGNAL_*.
+        Ahora recibe 'current_position' opcional para lógica dependiente del estado.
         """
         pass
 

@@ -12,7 +12,7 @@ class SpotIntraExchangeArbitrage(BaseStrategy):
         self.period = self.config.get('period', 20)
         self.z_threshold = self.config.get('z_threshold', 2.0)
 
-    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+    def apply(self, df: pd.DataFrame, current_position: dict = None) -> pd.DataFrame:
         if len(df) < self.period: return df
 
         # Lógica de Z-Score

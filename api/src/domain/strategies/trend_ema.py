@@ -11,7 +11,7 @@ class TrendEma(BaseStrategy):
         self.fast = 9
         self.slow = 21
 
-    def apply(self, df: pd.DataFrame) -> pd.DataFrame:
+    def apply(self, df: pd.DataFrame, current_position: dict = None) -> pd.DataFrame:
         df['ema_f'] = df['close'].ewm(span=self.fast).mean()
         df['ema_s'] = df['close'].ewm(span=self.slow).mean()
         df['vol_sma'] = df['volume'].rolling(window=20).mean()
