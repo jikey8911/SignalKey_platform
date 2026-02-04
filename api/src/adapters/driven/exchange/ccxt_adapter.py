@@ -210,10 +210,48 @@ class CcxtAdapter(IExchangePort):
     # --- IExchangePort Implementation ---
 
     async def get_current_price(self, symbol: str, user_id: str) -> float:
-        """Get the current price of a symbol using the system's active exchange."""
-        client = await self._get_system_client()
+        """Get the current price of a symbol using the user's configured exchange."""
+        # Fix: Use user specific client to respect active exchange
+        client = await self._get_client_for_user(user_id)
         ticker = await client.fetch_ticker(symbol)
         return ticker['last']
+
+    async def create_public_instance(self, exchange_id: str):
+        """Create a public instance for CEXService support"""
+        try:
+            exchange_class = getattr(ccxt, exchange_id.lower())
+            instance = exchange_class({
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot', 'fetchCurrencies': False}
+            })
+            session = self._create_custom_session()
+            if session: instance.session = session
+            if exchange_id.lower() == 'okx': instance.has['fetchCurrencies'] = False
+            return instance
+        except Exception as e:
+            logger.error(f"Error creating public instance {exchange_id}: {e}")
+            return None
+
+    async def get_private_instance(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None):
+        """Create a private instance matching CEXService expectations"""
+        try:
+            exchange_class = getattr(ccxt, exchange_id.lower())
+            config = {
+                'apiKey': api_key,
+                'secret': secret,
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'}
+            }
+            if password: config['password'] = password
+            if uid: config['uid'] = uid
+            
+            instance = exchange_class(config)
+            session = self._create_custom_session()
+            if session: instance.session = session
+            return instance
+        except Exception as e:
+             logger.error(f"Error creating private instance {exchange_id}: {e}")
+             return None
 
     async def fetch_balance(self, user_id: str, exchange_id: Optional[str] = None) -> List[Balance]:
         """

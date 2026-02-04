@@ -35,8 +35,8 @@ class BotInstance:
             "status": self.status,
             "config": self.config,
             "position": self.position,
-            "last_execution": self.last_execution.isoformat() if self.last_execution else None,
-            "last_signal_at": self.last_signal_at.isoformat() if self.last_signal_at else None,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None
+            "last_execution": self.last_execution.isoformat() if isinstance(self.last_execution, datetime) else self.last_execution,
+            "last_signal_at": self.last_signal_at.isoformat() if isinstance(self.last_signal_at, datetime) else self.last_signal_at,
+            "created_at": self.created_at.isoformat() if isinstance(self.created_at, datetime) else self.created_at,
+            "updated_at": self.updated_at.isoformat() if isinstance(self.updated_at, datetime) else self.updated_at
         }

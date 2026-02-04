@@ -78,7 +78,19 @@ async def list_user_bots(current_user: dict = Depends(get_current_user)):
             
         result.append(b_dict)
         
-    return result
+    return _serialize_mongo(result)
+
+def _serialize_mongo(obj):
+    """
+    Recursively convert ObjectId to string to make data JSON serializable.
+    """
+    if isinstance(obj, list):
+        return [_serialize_mongo(i) for i in obj]
+    if isinstance(obj, dict):
+        return {k: _serialize_mongo(v) for k, v in obj.items()}
+    if isinstance(obj, ObjectId):
+        return str(obj)
+    return obj
 
 @router.patch("/{bot_id}/status")
 async def toggle_bot_status(bot_id: str, status: str):
