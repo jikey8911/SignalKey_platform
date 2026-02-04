@@ -210,11 +210,16 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
 
     # Soporte para "ALL": Procesar señal para todos los usuarios activos
     if user_id == "ALL":
-        logger.info(f"Procesando señal GLOBAL de {signal.source} para TODOS los usuarios activos")
+        logger.info(f"Procesando señal GLOBAL de {signal.source}")
         try:
-            # Buscar configuraciones que tengan el bot de telegram activado
+            # Seleccionamos usuarios que tienen el procesamiento activado para análisis IA
+            # Los mensajes ya se enviaron a la consola y sockets globales en el bot_instance
             configs_cursor = db.app_configs.find({"botTelegramActivate": True})
             configs = await configs_cursor.to_list(length=100)
+
+            if not configs:
+                logger.info("No hay usuarios con botTelegramActivate=True. Saltando análisis IA.")
+                return
 
             for config in configs:
                 try:

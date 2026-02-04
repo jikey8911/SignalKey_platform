@@ -338,6 +338,21 @@ class LegacyTelegramBot:
                     print(f"\n[TELEGRAM MESSAGE] From: {sender_name} ({chat_id}) | Content: {text}\n")
                     logger.info(f"Global Bot received message from {chat_id}")
 
+                    # Emitir vía Socket para visibilidad en tiempo real en Dashboard para todos
+                    try:
+                        from api.src.adapters.driven.notifications.socket_service import socket_service
+                        log_entry = {
+                            "chatId": chat_id,
+                            "chatName": sender_name,
+                            "message": text if text else "<Media>",
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "status": "received",
+                            "source": "global_bot"
+                        }
+                        await socket_service.broadcast("telegram_log", log_entry)
+                    except Exception as socket_err:
+                        logger.error(f"Error broadcasting global message to sockets: {socket_err}")
+
                     if text and self.message_handler:
                         signal_obj = TradingSignal(
                             source=f"legacy_telegram_{chat_id}",
