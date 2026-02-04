@@ -49,39 +49,39 @@ const Analytics = () => {
     }, []);
 
     return (
-        <div className="p-6 bg-slate-900 min-h-screen text-white">
-            <h1 className="text-3xl font-bold mb-6 text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
-                Performance Analytics
+        <div className="p-6 bg-background min-h-screen text-foreground">
+            <h1 className="text-3xl font-bold mb-6 text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400 tracking-tighter uppercase italic">
+                Performance <span className="text-blue-500">Analytics</span>
             </h1>
 
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-                <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg">
-                    <h3 className="text-gray-400 text-sm">Total Return</h3>
-                    <p className={`text-2xl font-bold ${stats.totalReturn >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                <div className="bg-slate-900/60 backdrop-blur-xl p-4 rounded-xl border border-white/5 shadow-lg">
+                    <h3 className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Total Return</h3>
+                    <p className={`text-2xl font-black ${stats.totalReturn >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
                         {stats.totalReturn.toFixed(2)}%
                     </p>
                 </div>
-                <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg">
-                    <h3 className="text-gray-400 text-sm">Max Drawdown</h3>
-                    <p className="text-2xl font-bold text-rose-400">
+                <div className="bg-slate-900/60 backdrop-blur-xl p-4 rounded-xl border border-white/5 shadow-lg">
+                    <h3 className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Max Drawdown</h3>
+                    <p className="text-2xl font-black text-rose-400">
                         -{stats.maxDrawdown}%
                     </p>
                 </div>
-                <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg">
-                    <h3 className="text-gray-400 text-sm">Win Rate</h3>
-                    <p className="text-2xl font-bold text-blue-400">
+                <div className="bg-slate-900/60 backdrop-blur-xl p-4 rounded-xl border border-white/5 shadow-lg">
+                    <h3 className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Win Rate</h3>
+                    <p className="text-2xl font-black text-blue-400">
                         {stats.winRate}%
                     </p>
                 </div>
-                <div className="bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg">
-                    <h3 className="text-gray-400 text-sm">Total Trades</h3>
-                    <p className="text-2xl font-bold text-gray-200">
+                <div className="bg-slate-900/60 backdrop-blur-xl p-4 rounded-xl border border-white/5 shadow-lg">
+                    <h3 className="text-slate-500 text-[10px] font-bold uppercase tracking-wider">Total Trades</h3>
+                    <p className="text-2xl font-black text-white">
                         {stats.totalTrades}
                     </p>
                 </div>
             </div>
 
-            <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 shadow-lg h-[500px]">
+            <div className="bg-slate-900/60 backdrop-blur-xl p-6 rounded-xl border border-white/5 shadow-lg h-[500px]">
                 <h3 className="text-xl font-semibold mb-4 text-gray-200">Account Growth (Equity)</h3>
                 {equityData.length > 0 ? (
                     <ResponsiveContainer width="100%" height="100%">

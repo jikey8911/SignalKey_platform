@@ -104,47 +104,47 @@ export default function Trades() {
 
       {/* Stats */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card className="p-4 bg-gradient-to-br from-primary/10 to-primary/5">
-          <p className="text-sm text-muted-foreground mb-1">P&L Total</p>
-          <p className={`text-2xl font-bold ${stats.totalPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+        <Card className="p-4 bg-gradient-to-br from-blue-500/10 to-transparent border-white/5">
+          <p className="text-sm text-slate-400 mb-1">P&L Total</p>
+          <p className={`text-2xl font-bold ${stats.totalPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
             ${(stats.totalPnL ?? 0).toFixed(2)}
           </p>
         </Card>
-        <Card className="p-4 bg-gradient-to-br from-primary/10 to-primary/5">
-          <p className="text-sm text-muted-foreground mb-1">Win Rate</p>
-          <p className="text-2xl font-bold text-primary">{stats.winRate}%</p>
+        <Card className="p-4 bg-gradient-to-br from-blue-500/10 to-transparent border-white/5">
+          <p className="text-sm text-slate-400 mb-1">Win Rate</p>
+          <p className="text-2xl font-bold text-blue-400">{stats.winRate}%</p>
         </Card>
-        <Card className="p-4 bg-gradient-to-br from-primary/10 to-primary/5">
-          <p className="text-sm text-muted-foreground mb-1">P&L Promedio</p>
-          <p className={`text-2xl font-bold ${stats.avgPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+        <Card className="p-4 bg-gradient-to-br from-blue-500/10 to-transparent border-white/5">
+          <p className="text-sm text-slate-400 mb-1">P&L Promedio</p>
+          <p className={`text-2xl font-bold ${stats.avgPnL >= 0 ? 'text-green-400' : 'text-red-400'}`}>
             ${(stats.avgPnL ?? 0).toFixed(2)}
           </p>
         </Card>
       </div>
 
       {/* Filters */}
-      <Card className="p-4">
+      <Card className="p-4 bg-slate-900/40 border-white/5">
         <div className="flex items-center gap-2 mb-4">
           <Filter size={20} />
           <h3 className="font-semibold text-foreground">Filtros</h3>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div>
-            <label className="text-sm text-muted-foreground mb-2 block">Símbolo</label>
+            <label className="text-sm text-slate-400 mb-2 block font-bold uppercase tracking-wider text-[10px]">Símbolo</label>
             <input
               type="text"
               placeholder="BTC, ETH, SOL..."
               value={searchSymbol}
               onChange={(e) => setSearchSymbol(e.target.value)}
-              className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+              className="w-full px-3 py-2 border border-white/10 rounded-lg bg-slate-950/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
           <div>
-            <label className="text-sm text-muted-foreground mb-2 block">Mercado</label>
+            <label className="text-sm text-slate-400 mb-2 block font-bold uppercase tracking-wider text-[10px]">Mercado</label>
             <select
               value={filterMarket}
               onChange={(e) => setFilterMarket(e.target.value as any)}
-              className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+              className="w-full px-3 py-2 border border-white/10 rounded-lg bg-slate-950/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="all">Todos</option>
               <option value="CEX">CEX</option>
@@ -152,11 +152,11 @@ export default function Trades() {
             </select>
           </div>
           <div>
-            <label className="text-sm text-muted-foreground mb-2 block">Tipo</label>
+            <label className="text-sm text-slate-400 mb-2 block font-bold uppercase tracking-wider text-[10px]">Tipo</label>
             <select
               value={filterSide}
               onChange={(e) => setFilterSide(e.target.value as any)}
-              className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+              className="w-full px-3 py-2 border border-white/10 rounded-lg bg-slate-950/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="all">Todos</option>
               <option value="BUY">Compra</option>
@@ -164,11 +164,11 @@ export default function Trades() {
             </select>
           </div>
           <div>
-            <label className="text-sm text-muted-foreground mb-2 block">Modo</label>
+            <label className="text-sm text-slate-400 mb-2 block font-bold uppercase tracking-wider text-[10px]">Modo</label>
             <select
               value={filterMode}
               onChange={(e) => setFilterMode(e.target.value as any)}
-              className="w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+              className="w-full px-3 py-2 border border-white/10 rounded-lg bg-slate-950/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
               <option value="all">Todos</option>
               <option value="demo">Demo</option>
@@ -211,57 +211,57 @@ export default function Trades() {
                     <td className="px-6 py-4 text-sm">
                       <div className="flex items-center gap-2">
                         {bot.side === 'BUY' ? (
-                          <TrendingUp className="text-green-600" size={16} />
+                          <TrendingUp className="text-green-400" size={16} />
                         ) : (
-                          <TrendingDown className="text-red-600" size={16} />
+                          <TrendingDown className="text-red-400" size={16} />
                         )}
-                        <span className={bot.side === 'BUY' ? 'text-green-600' : 'text-red-600'}>
+                        <span className={bot.side === 'BUY' ? 'text-green-400' : 'text-red-400'}>
                           {bot.side}
                         </span>
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-sm text-foreground">{bot.marketType}</td>
-                    <td className="px-6 py-4 text-sm text-foreground">${(bot.entryPrice ?? bot.price ?? 0).toFixed(6)}</td>
-                    <td className="px-6 py-4 text-sm">
+                    <td className="px-6 py-4 text-sm text-slate-300">{bot.marketType}</td>
+                    <td className="px-6 py-4 text-sm text-slate-300 font-mono">${(bot.entryPrice ?? bot.price ?? 0).toFixed(6)}</td>
+                    <td className="px-6 py-4 text-sm font-mono">
                       <span className={
                         bot.currentPrice && (bot.entryPrice || bot.price)
                           ? (bot.side === 'BUY'
-                            ? (bot.currentPrice >= (bot.entryPrice || bot.price) ? 'text-green-600' : 'text-red-600')
-                            : (bot.currentPrice <= (bot.entryPrice || bot.price) ? 'text-green-600' : 'text-red-600'))
-                          : 'text-foreground'
+                            ? (bot.currentPrice >= (bot.entryPrice || bot.price) ? 'text-green-400' : 'text-red-400')
+                            : (bot.currentPrice <= (bot.entryPrice || bot.price) ? 'text-green-400' : 'text-red-400'))
+                          : 'text-white'
                       }>
                         ${(bot.currentPrice ?? bot.entryPrice ?? bot.price ?? 0).toFixed(6)}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-sm text-blue-600 font-medium">
+                    <td className="px-6 py-4 text-sm text-blue-400 font-mono">
                       {bot.takeProfits ? (
                         <div className="flex flex-col gap-1">
                           {bot.takeProfits.map((tp: any) => (
-                            <span key={tp.level} className={tp.status === 'hit' ? 'line-through text-muted-foreground' : ''}>
+                            <span key={tp.level} className={tp.status === 'hit' ? 'line-through text-slate-500' : ''}>
                               TP{tp.level}: ${tp.price?.toFixed(6)}
                             </span>
                           ))}
                         </div>
                       ) : `$${(bot.targetPrice ?? 0).toFixed(6)}`}
                     </td>
-                    <td className="px-6 py-4 text-sm text-foreground">{(bot.amount ?? 0).toFixed(4)}</td>
-                    <td className="px-6 py-4 text-sm font-semibold">
-                      <span className={bot.pnl && bot.pnl > 0 ? 'text-green-600' : 'text-red-600'}>
+                    <td className="px-6 py-4 text-sm text-slate-300">{(bot.amount ?? 0).toFixed(4)}</td>
+                    <td className="px-6 py-4 text-sm font-semibold font-mono">
+                      <span className={bot.pnl && bot.pnl > 0 ? 'text-green-400' : 'text-red-400'}>
                         {bot.pnl?.toFixed(2)}%
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm">
-                      <span className={`px-2 py-1 rounded-full text-xs font-semibold ${bot.isDemo ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'
+                      <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${bot.isDemo ? 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20' : 'bg-red-500/10 text-red-500 border-red-500/20'
                         }`}>
-                        {bot.isDemo ? '🧪 Demo' : '⚠️ Real'}
+                        {bot.isDemo ? 'Demo' : 'Real'}
                       </span>
                     </td>
                     <td className="px-6 py-4 text-sm">
-                      <span className={`px-2 py-1 rounded-full text-xs font-semibold ${bot.status === 'active' || bot.status === 'filled'
-                        ? 'bg-green-100 text-green-800'
+                      <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${bot.status === 'active' || bot.status === 'filled'
+                        ? 'bg-green-500/10 text-green-500 border-green-500/20'
                         : bot.status === 'pending'
-                          ? 'bg-yellow-100 text-yellow-800'
-                          : 'bg-red-100 text-red-800'
+                          ? 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20'
+                          : 'bg-red-500/10 text-red-500 border-red-500/20'
                         }`}>
                         {bot.status}
                       </span>

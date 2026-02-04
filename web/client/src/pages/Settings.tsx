@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
 import { Eye, EyeOff, Save, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -238,21 +239,21 @@ export default function Settings() {
 
   const InputField = ({ label, value, onChange, type = 'text', placeholder }: any) => (
     <div className="flex-1">
-      <label className="block text-xs font-semibold text-foreground mb-1">
+      <label className="block text-xs font-semibold text-slate-400 mb-1">
         {label}
       </label>
       <div className="relative">
-        <input
+        <Input
           type={showSecrets && type === 'password' ? 'text' : type}
           placeholder={placeholder}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          className="pr-10"
         />
         {type === 'password' && (
           <button
             onClick={() => setShowSecrets(!showSecrets)}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300"
           >
             {showSecrets ? <EyeOff size={14} /> : <Eye size={14} />}
           </button>
@@ -291,7 +292,7 @@ export default function Settings() {
                 <select
                   value={formData.aiProvider}
                   onChange={(e) => setFormData({ ...formData, aiProvider: e.target.value as any })}
-                  className="w-full px-3 py-2 border border-border rounded bg-muted/30 text-sm font-medium text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  className="w-full px-3 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-sm font-medium text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
                 >
                   <option value="gemini">Google Gemini (Recomendado)</option>
                   <option value="openai">OpenAI (GPT-4o mini)</option>
@@ -541,7 +542,7 @@ export default function Settings() {
                   <select
                     value={ex.exchangeId}
                     onChange={(e) => updateExchange(index, 'exchangeId', e.target.value)}
-                    className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground"
+                    className="w-full px-3 py-1.5 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-sm text-white"
                   >
                     {CCXT_EXCHANGES.map(exchange => (
                       <option key={exchange} value={exchange}>

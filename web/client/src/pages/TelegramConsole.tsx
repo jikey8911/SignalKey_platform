@@ -117,26 +117,26 @@ export default function TelegramConsole() {
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'signal_detected':
-        return <AlertCircle className="text-blue-600" size={16} />;
+        return <AlertCircle className="text-blue-400" size={16} />;
       case 'processed':
-        return <CheckCircle className="text-green-600" size={16} />;
+        return <CheckCircle className="text-green-400" size={16} />;
       case 'received':
-        return <MessageSquare className="text-gray-600" size={16} />;
+        return <MessageSquare className="text-slate-400" size={16} />;
       default:
-        return <MessageSquare className="text-gray-400" size={16} />;
+        return <MessageSquare className="text-slate-500" size={16} />;
     }
   };
 
   const getStatusBadgeColor = (status: string) => {
     switch (status) {
       case 'signal_detected':
-        return 'bg-blue-100 text-blue-700 border border-blue-200';
+        return 'bg-blue-500/20 text-blue-400 border border-blue-500/30';
       case 'processed':
-        return 'bg-green-100 text-green-700 border border-green-200';
+        return 'bg-green-500/20 text-green-400 border border-green-500/30';
       case 'received':
-        return 'bg-gray-100 text-gray-700 border border-gray-200';
+        return 'bg-slate-800 text-slate-300 border border-white/10';
       default:
-        return 'bg-yellow-100 text-yellow-700 border border-yellow-200';
+        return 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30';
     }
   };
 
@@ -170,7 +170,7 @@ export default function TelegramConsole() {
             <div className="flex items-center gap-3">
               <p className="text-muted-foreground">Monitor en vivo</p>
               {status && (
-                <div className={`flex items-center gap-2 px-3 py-1 rounded-full border ${status.connected ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                <div className={`flex items-center gap-2 px-3 py-1 rounded-full border ${status.connected ? 'bg-green-500/10 border-green-500/20 text-green-500' : 'bg-red-500/10 border-red-500/20 text-red-500'}`}>
                   {status.connected ? <Wifi size={14} /> : <WifiOff size={14} />}
                   <span className="text-xs font-medium">
                     {status.connected
@@ -184,7 +184,7 @@ export default function TelegramConsole() {
                   variant="ghost"
                   size="sm"
                   onClick={handleReconnect}
-                  className="text-xs h-7 px-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                  className="text-xs h-7 px-2 text-blue-400 hover:text-blue-300 hover:bg-white/5"
                 >
                   Restaurar Sesión
                 </Button>
@@ -210,26 +210,26 @@ export default function TelegramConsole() {
 
         {/* Estadísticas */}
         <div className="grid grid-cols-4 gap-4">
-          <Card className="p-4 border-l-4 border-l-gray-500">
-            <div className="text-sm text-muted-foreground mb-1">Total Mensajes (Buffer)</div>
-            <div className="text-2xl font-bold text-foreground">{stats.total}</div>
+          <Card className="p-4 border-l-4 border-l-slate-500">
+            <div className="text-sm text-slate-400 mb-1">Total Mensajes (Buffer)</div>
+            <div className="text-2xl font-bold text-white">{stats.total}</div>
           </Card>
           <Card className="p-4 border-l-4 border-l-blue-500">
-            <div className="text-sm text-muted-foreground mb-1">Señales Detectadas</div>
-            <div className="text-2xl font-bold text-blue-600">{stats.signals}</div>
+            <div className="text-sm text-slate-400 mb-1">Señales Detectadas</div>
+            <div className="text-2xl font-bold text-blue-400">{stats.signals}</div>
           </Card>
           <Card className="p-4 border-l-4 border-l-green-500">
-            <div className="text-sm text-muted-foreground mb-1">Procesados</div>
-            <div className="text-2xl font-bold text-green-600">{stats.processed}</div>
+            <div className="text-sm text-slate-400 mb-1">Procesados</div>
+            <div className="text-2xl font-bold text-green-400">{stats.processed}</div>
           </Card>
-          <Card className="p-4 border-l-4 border-l-gray-400">
-            <div className="text-sm text-muted-foreground mb-1">Recibidos</div>
-            <div className="text-2xl font-bold text-gray-600">{stats.received}</div>
+          <Card className="p-4 border-l-4 border-l-slate-400">
+            <div className="text-sm text-slate-400 mb-1">Recibidos</div>
+            <div className="text-2xl font-bold text-slate-400">{stats.received}</div>
           </Card>
         </div>
 
         {/* Filtros */}
-        <Card className="p-4 bg-muted/50">
+        <Card className="p-4 bg-slate-900/40 border-white/5">
           <div className="space-y-4">
             <div className="flex gap-3">
               <div className="flex-1">
@@ -330,11 +330,11 @@ export default function TelegramConsole() {
         </Card>
 
         {/* Info */}
-        <Card className="p-4 bg-blue-50 border-blue-200">
+        <Card className="p-4 bg-blue-500/5 border-blue-500/20">
           <div className="flex gap-3">
-            <AlertCircle className="text-blue-600 flex-shrink-0 mt-0.5" size={18} />
-            <div className="text-sm text-blue-900">
-              <strong>Nota:</strong> Esta consola muestra mensajes en vivo recibidos a través del socket.
+            <AlertCircle className="text-blue-400 flex-shrink-0 mt-0.5" size={18} />
+            <div className="text-sm text-slate-400">
+              <strong className="text-blue-400">Nota:</strong> Esta consola muestra mensajes en vivo recibidos a través del socket.
               La persistencia está deshabilitada, por lo que los mensajes desaparecerán al recargar.
             </div>
           </div>

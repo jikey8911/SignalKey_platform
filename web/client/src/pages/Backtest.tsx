@@ -632,7 +632,7 @@ export default function Backtest() {
                   <select
                     value={selectedExchange}
                     onChange={(e) => setSelectedExchange(e.target.value)}
-                    className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                    className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
                   >
                     <option value="">Seleccionar exchange</option>
                     {exchanges.map((ex: Exchange) => (
@@ -658,7 +658,7 @@ export default function Backtest() {
                     value={selectedMarket}
                     onChange={(e) => setSelectedMarket(e.target.value)}
                     disabled={!selectedExchange || markets.length === 0}
-                    className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                    className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
                   >
                     {markets.map((market: string) => (
                       <option key={market} value={market}>
@@ -676,7 +676,7 @@ export default function Backtest() {
                 <select
                   value={timeframe}
                   onChange={(e) => setTimeframe(e.target.value)}
-                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
                 >
                   <option value="1m">1 minuto</option>
                   <option value="5m">5 minutos</option>
@@ -702,7 +702,7 @@ export default function Backtest() {
                       placeholder="Buscar símbolo..."
                       value={symbolSearch}
                       onChange={(e) => setSymbolSearch(e.target.value)}
-                      className="px-3 py-1 text-sm border border-slate-700 rounded-md bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary w-40"
+                      className="px-3 py-1 text-sm border border-white/10 rounded-md bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary w-40"
                     />
                   </div>
                 </div>
@@ -769,7 +769,7 @@ export default function Backtest() {
                 onChange={(e) => setDays(parseInt(e.target.value))}
                 min="1"
                 max="365"
-                className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
               />
             </div>
 
@@ -783,7 +783,7 @@ export default function Backtest() {
                   type="number"
                   value={initialBalance}
                   onChange={(e) => setInitialBalance(parseFloat(e.target.value) || 0)}
-                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>
               <div>
@@ -794,7 +794,7 @@ export default function Backtest() {
                   type="number"
                   value={tradeAmount}
                   onChange={(e) => setTradeAmount(parseFloat(e.target.value) || 0)}
-                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>
             </div>
@@ -1117,7 +1117,7 @@ export default function Backtest() {
                   <select
                     value={selectedExchange}
                     onChange={(e) => setSelectedExchange(e.target.value)}
-                    className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                    className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
                   >
                     <option value="">Seleccionar</option>
                     {exchanges.map((ex: Exchange) => (
@@ -1144,7 +1144,7 @@ export default function Backtest() {
                     value={selectedMarket}
                     onChange={(e) => setSelectedMarket(e.target.value)}
                     disabled={!selectedExchange}
-                    className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                    className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
                   >
                     {markets.map((market: string) => (
                       <option key={market} value={market}>
@@ -1163,7 +1163,7 @@ export default function Backtest() {
                 <select
                   value={timeframe}
                   onChange={(e) => setTimeframe(e.target.value)}
-                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
                 >
                   <option value="1m">1m</option>
                   <option value="5m">5m</option>
@@ -1185,7 +1185,7 @@ export default function Backtest() {
                   onChange={(e) => setDays(parseInt(e.target.value))}
                   min="1"
                   max="365"
-                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
                 />
               </div>
             </div>

@@ -109,9 +109,9 @@
   --destructive: oklch(0.45 0.15 20);
   --destructive-foreground: oklch(0.95 0 0);
 
-  --border: oklch(1 0 0 / 0.1);
+  --border: oklch(1 0 0 / 0.15);
   /* Subtle white border */
-  --input: oklch(1 0 0 / 0.1);
+  --input: oklch(1 0 0 / 0.05);
   --ring: oklch(0.60 0.18 260);
 
   /* Sidebar Specifics */

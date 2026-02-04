@@ -50,9 +50,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   return (
-    <div className="flex h-screen bg-slate-950 text-slate-200 font-sans overflow-hidden">
+    <div className="flex h-screen bg-background text-foreground font-sans overflow-hidden">
       {/* Sidebar Glassmorphism */}
-      <aside className="w-64 border-r border-white/5 bg-slate-900/60 backdrop-blur-3xl flex flex-col z-30 transition-all">
+      <aside className="w-64 border-r border-border bg-sidebar backdrop-blur-3xl flex flex-col z-30 transition-all">
         <div className="p-8 flex items-center gap-4">
           <div className="h-10 w-10 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/30">
             <Zap className="w-6 h-6 text-white fill-current" />
@@ -101,7 +101,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       </aside>
 
       {/* Main Content Area */}
-      <main className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-blue-900/10 via-slate-950 to-slate-950 p-0">
+      <main className="flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top_right,_var(--tw-gradient-stops))] from-blue-900/10 via-background to-background p-0">
         {children}
       </main>
     </div>

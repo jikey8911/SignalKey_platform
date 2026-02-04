@@ -65,8 +65,8 @@ export default function Login() {
     }
 
     return (
-        <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4 py-12 sm:px-6 lg:px-8">
-            <Card className="w-full max-w-md">
+        <div className="flex min-h-screen items-center justify-center bg-slate-950 px-4 py-12 sm:px-6 lg:px-8">
+            <Card className="w-full max-w-md border-white/5">
                 <CardHeader className="text-center">
                     <CardTitle className="text-2xl font-bold">SignaalKei</CardTitle>
                     <CardDescription>

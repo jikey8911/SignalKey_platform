@@ -205,7 +205,7 @@ export default function Training() {
                                 <select
                                     value={selectedExchange}
                                     onChange={(e) => setSelectedExchange(e.target.value)}
-                                    className="w-full bg-slate-800 border-none rounded-xl px-3 py-2 text-xs text-white outline-none ring-1 ring-white/5"
+                                    className="w-full bg-slate-900/50 backdrop-blur-sm border-none rounded-xl px-3 py-2 text-xs text-white outline-none ring-1 ring-white/5"
                                 >
                                     {exchanges.map(ex => <option key={ex} value={ex}>{ex.toUpperCase()}</option>)}
                                     {exchanges.length === 0 && <option value="okx">OKX (Default)</option>}
@@ -218,7 +218,7 @@ export default function Training() {
                                 <select
                                     value={selectedMarket}
                                     onChange={(e) => setSelectedMarket(e.target.value)}
-                                    className="w-full bg-slate-800 border-none rounded-xl px-3 py-2 text-xs text-white outline-none ring-1 ring-white/5"
+                                    className="w-full bg-slate-900/50 backdrop-blur-sm border-none rounded-xl px-3 py-2 text-xs text-white outline-none ring-1 ring-white/5"
                                 >
                                     {markets.map(m => <option key={m} value={m}>{m.toUpperCase()}</option>)}
                                 </select>
@@ -259,7 +259,7 @@ export default function Training() {
                                         <button
                                             key={s}
                                             onClick={() => toggleSymbol(s)}
-                                            className="text-[9px] px-2 py-1 rounded bg-slate-800 hover:bg-blue-600 text-slate-300 hover:text-white transition-colors text-left truncate"
+                                            className="text-[9px] px-2 py-1 rounded bg-slate-900/50 hover:bg-blue-600 text-slate-300 hover:text-white transition-colors text-left truncate border border-white/5"
                                         >
                                             + {s}
                                         </button>

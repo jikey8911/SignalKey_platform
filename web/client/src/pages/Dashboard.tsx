@@ -54,7 +54,7 @@ const MetaSelectorWidget = ({ user }: { user: any }) => {
           <input
             value={symbol}
             onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-            className="bg-slate-800 border border-slate-700 rounded px-3 py-1 text-sm w-full md:w-32 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors"
+            className="bg-slate-900/50 backdrop-blur-sm border border-white/10 rounded px-3 py-1 text-sm w-full md:w-32 text-white placeholder-slate-500 focus:outline-none focus:border-purple-500 transition-colors"
             placeholder="BTC/USDT"
           />
           <button

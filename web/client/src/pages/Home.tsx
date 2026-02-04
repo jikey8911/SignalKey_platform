@@ -118,23 +118,23 @@ export default function Home() {
   };
 
   const StatusRow = ({ item }: { item: ServiceStatus }) => (
-    <div className="flex items-center justify-between p-4 bg-white rounded-lg border shadow-sm">
+    <div className="flex items-center justify-between p-4 bg-slate-900/60 backdrop-blur-xl rounded-lg border border-white/5 shadow-sm">
       <div className="flex items-center gap-3">
         <StatusIcon status={item.status} />
         <div>
-          <p className="font-medium text-gray-900">{item.name}</p>
-          <p className="text-sm text-gray-500">{item.message || (item.status === 'pending' ? 'Pendiente' : '')}</p>
+          <p className="font-medium text-slate-100">{item.name}</p>
+          <p className="text-sm text-slate-400">{item.message || (item.status === 'pending' ? 'Pendiente' : '')}</p>
         </div>
       </div>
     </div>
   );
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-slate-950 p-4 text-slate-200">
       <div className="w-full max-w-md space-y-6">
         <div className="text-center space-y-2">
-          <h1 className="text-2xl font-bold text-gray-900">SignaalKei Boot</h1>
-          <p className="text-muted-foreground">Verificando servicios del sistema...</p>
+          <h1 className="text-2xl font-bold text-white">SignaalKei Boot</h1>
+          <p className="text-slate-400">Verificando servicios del sistema...</p>
         </div>
 
         <div className="space-y-3">
