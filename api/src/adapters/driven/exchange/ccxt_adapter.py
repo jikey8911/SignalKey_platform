@@ -122,19 +122,19 @@ class CcxtAdapter(IExchangePort):
     async def _get_system_client_for_exchange(self, exchange_id: str):
         """
         Retrieves a system-wide client for a specific exchange.
+        Uses a separate cache for system instances.
         """
         exchange_id = exchange_id.lower()
-        if self._exchange_instance and self._current_exchange_id == exchange_id:
-            return self._exchange_instance
 
-        # Initialize new system-wide client for this exchange
-        logger.info(f"🔄 Switching System Exchange Adapter to: {exchange_id.upper()}")
+        # 1. Check if we already have a public/system instance for this exchange
+        if exchange_id in self.public_instances:
+            return self.public_instances[exchange_id]
 
-        if self._exchange_instance:
-            await self._exchange_instance.close()
+        # 2. Initialize new system-wide client for this exchange
+        logger.info(f"🔄 Initializing System Exchange Adapter for: {exchange_id.upper()}")
 
         exchange_class = getattr(ccxt, exchange_id)
-        self._exchange_instance = exchange_class({
+        instance = exchange_class({
             'enableRateLimit': True,
             'options': {
                 'defaultType': 'spot',
@@ -144,13 +144,14 @@ class CcxtAdapter(IExchangePort):
 
         session = self._create_custom_session()
         if session:
-            self._exchange_instance.session = session
+            instance.session = session
 
         if exchange_id == 'okx':
-            self._exchange_instance.has['fetchCurrencies'] = False
+            instance.has['fetchCurrencies'] = False
 
-        self._current_exchange_id = exchange_id
-        return self._exchange_instance
+        # Update Cache
+        self.public_instances[exchange_id] = instance
+        return instance
 
     async def _get_system_client(self):
         """

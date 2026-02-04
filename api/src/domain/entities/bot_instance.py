@@ -14,7 +14,8 @@ class BotInstance:
     symbol: str
     strategy_name: str
     timeframe: str
-    mode: str = "simulated"  # "simulated" o "real"
+    market_type: str = "spot" # "spot" o "futures"
+    mode: str = "simulated"   # "simulated" o "real"
     status: str = "paused"   # "active" o "paused" (Persistido en DB para resiliencia)
     config: Dict = field(default_factory=dict) # Parametros especificos de la estrategia
     position: Dict = field(default_factory=dict) # Estado de la posición actual
@@ -31,6 +32,7 @@ class BotInstance:
             "symbol": self.symbol,
             "strategy_name": self.strategy_name,
             "timeframe": self.timeframe,
+            "market_type": self.market_type,
             "mode": self.mode,
             "status": self.status,
             "config": self.config,

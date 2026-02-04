@@ -69,22 +69,21 @@ class MLService:
         
         return data_collection
 
-    async def _run_strategy_backtest(self, strategy_name: str, data: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
+    async def _run_strategy_backtest(self, strategy_name: str, data: Dict[str, pd.DataFrame], market_type: str = "spot") -> Dict[str, Any]:
         """
         Ejecuta un backtest simulado para una estrategia específica usando su .pkl si existe.
         Calcula PnL acumulado, tasa de acierto y número de operaciones.
         """
-        model_path = os.path.join(self.models_dir, f"{strategy_name}.pkl")
+        model_path = os.path.join(self.models_dir, market_type.lower(), f"{strategy_name}.pkl")
         if not os.path.exists(model_path):
             return None
             
         try:
             # Load model and strategy
             model = joblib.load(model_path)
-            StrategyClass = self.trainer.load_strategy_class(strategy_name)
+            StrategyClass = self.trainer.load_strategy_class(strategy_name, market_type)
             if not StrategyClass: return None
             
-            strategy = StrategyClass()
             strategy = StrategyClass()
             features = strategy.get_features()
             
@@ -131,10 +130,10 @@ class MLService:
             self.logger.error(f"Error backtesting {strategy_name}: {e}")
             return None
 
-    async def train_all_strategies(self, symbols: List[str], timeframe: str, days: int, user_id: str = "default_user") -> Dict[str, Any]:
+    async def train_all_strategies(self, symbols: List[str], timeframe: str, days: int, market_type: str = "spot", user_id: str = "default_user") -> Dict[str, Any]:
         """
-        Ciclo de entrenamiento masivo y agnóstico.
-        Orquesta la obtención de datos + Entrenamiento de Modelos de Estategia + Entrenamiento del Selector.
+        Ciclo de entrenamiento masivo y agnóstico segmentado por mercado.
+        Orquesta la obtención de datos + Entrenamiento de Modelos de Estategia.
         """
         self.logger.info(f"Iniciando orquestación de entrenamiento para {len(symbols)} activos (User: {user_id}).")
 
@@ -154,8 +153,8 @@ class MLService:
 
         try:
             # 2. Entrenar Modelos de Estrategia Individuales
-            trained_models = await self.trainer.train_all(data_collection, emit_callback=socket_callback)
-            self.logger.info(f"Modelos de estrategia entrenados: {len(trained_models)}")
+            trained_models = await self.trainer.train_all(data_collection, market_type=market_type, emit_callback=socket_callback)
+            self.logger.info(f"Modelos de estrategia ({market_type}) entrenados: {len(trained_models)}")
             
             # 3. Entrenar Meta-Modelo (Selector) - YA NO ES AUTOMÁTICO
             # Se ha desacoplado a petición del usuario para ser un paso manual.
@@ -171,11 +170,11 @@ class MLService:
             await socket_callback(f"❌ Critical Error: {e}", "error")
             return {"status": "error", "message": f"Error en motor ML: {str(e)}"}
 
-    async def get_available_models(self) -> List[str]:
+    async def get_available_models(self, market_type: str = None) -> List[str]:
         """Consulta el inventario de cerebros .pkl disponibles en el sistema."""
-        return self.trainer.discover_strategies()
+        return self.trainer.discover_strategies(market_type)
 
-    def predict(self, symbol: str, timeframe: str, candles: List[Dict], strategy_name: str = "auto", current_position: Dict = None) -> Dict[str, Any]:
+    def predict(self, symbol: str, timeframe: str, candles: List[Dict], market_type: str = "spot", strategy_name: str = "auto", current_position: Dict = None) -> Dict[str, Any]:
         """
         Inferencia Real-Time.
         Si strategy_name es 'auto' o se omite, se evalúan todas y se devuelve la que decida el sistema.
@@ -186,7 +185,7 @@ class MLService:
         df = pd.DataFrame(candles)
         
         # Inferencia para estrategias específicas
-        strategies = self.trainer.discover_strategies()
+        strategies = self.trainer.discover_strategies(market_type)
         if strategy_name != "auto" and strategy_name in strategies:
             target_strategies = [strategy_name]
         else:
@@ -196,13 +195,12 @@ class MLService:
         
         for strat_name in target_strategies:
             try:
-                model_path = os.path.join(self.models_dir, f"{strat_name}.pkl")
+                model_path = os.path.join(self.models_dir, market_type.lower(), f"{strat_name}.pkl")
                 if not os.path.exists(model_path): continue
                 model = joblib.load(model_path)
                 
-                module = importlib.import_module(f"api.src.domain.strategies.{strat_name}")
-                class_name = "".join(w.title() for w in strat_name.split("_"))
-                StrategyClass = getattr(module, class_name)
+                StrategyClass = self.trainer.load_strategy_class(strat_name, market_type)
+                if not StrategyClass: continue
                 strategy = StrategyClass()
                 
                 # S9: Pasar current_position a la estrategia
@@ -248,15 +246,15 @@ class MLService:
             "strategy_used": strategy_name
         }
 
-    async def get_models_status(self) -> List[Dict[str, Any]]:
+    async def get_models_status(self, market_type: str = "spot") -> List[Dict[str, Any]]:
         """
-        Obtiene el estado de todos los modelos entrenados disponibles.
+        Obtiene el estado de todos los modelos entrenados disponibles para un mercado.
         """
-        strategies = self.trainer.discover_strategies()
+        strategies = self.trainer.discover_strategies(market_type)
         models_status = []
         
         for strat in strategies:
-            model_path = os.path.join(self.models_dir, f"{strat}.pkl")
+            model_path = os.path.join(self.models_dir, market_type.lower(), f"{strat}.pkl")
             is_trained = os.path.exists(model_path)
             
             last_trained = None

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Play, BarChart3, TrendingUp, TrendingDown, Loader2, Trophy, BrainCircuit, ChevronRight, Search, RotateCcw, X } from 'lucide-react';
+import { Play, BarChart3, TrendingUp, TrendingDown, Loader2, Trophy, BrainCircuit, ChevronRight, Search, RotateCcw, CircleStop, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { Badge } from '@/components/ui/badge';
@@ -182,6 +182,7 @@ export default function Backtest() {
             exchange_id: selectedExchange,
             days: days.toString(),
             timeframe: timeframe,
+            market_type: selectedMarket, // Usamos el mercado seleccionado (spot/futures)
             initial_balance: initialBalance.toString(),
             trade_amount: tradeAmount.toString()
           }), {
@@ -368,6 +369,7 @@ export default function Backtest() {
           exchange_id: selectedExchange || 'binance',
           days: days.toString(),
           timeframe: timeframe,
+          market_type: selectedMarket,
           initial_balance: initialBalance.toString(),
           trade_amount: tradeAmount.toString()
         }),
@@ -1092,7 +1094,9 @@ export default function Backtest() {
                         {selectedTrade.side === 'BUY' ? <TrendingUp className="text-blue-500" size={16} /> : <TrendingDown className="text-amber-500" size={16} />}
                         Detalle Operación
                       </h4>
-                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setSelectedTrade(null)}>×</Button>
+                      <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => setSelectedTrade(null)}>
+                        <X size={16} />
+                      </Button>
                     </div>
                     <div className="space-y-2 text-sm">
                       <div className="flex justify-between">
@@ -1233,7 +1237,7 @@ export default function Backtest() {
                   variant="destructive"
                   size="lg"
                 >
-                  <X className="mr-2 h-4 w-4" /> Detener Escaneo
+                  <CircleStop className="mr-2 h-4 w-4 fill-current" /> Detener Escaneo
                 </Button>
               )}
               <Button
