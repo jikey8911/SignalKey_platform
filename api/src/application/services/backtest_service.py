@@ -162,6 +162,7 @@ class BacktestService:
                 model_dir_specific = os.path.join(self.models_dir, market_type.lower()).replace('\\', '/')
                 model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl").replace('\\', '/')
                 
+                if not os.path.exists(model_path):
                     # Fallback: Check root models dir
                     model_path_root = os.path.join(self.models_dir, f"{strat_name}.pkl").replace('\\', '/')
                     if os.path.exists(model_path_root):
