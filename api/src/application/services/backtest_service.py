@@ -127,7 +127,7 @@ class BacktestService:
         # 1. Obtener datos históricos
         # 1. Obtener datos históricos (Tarea 5.1: Sourcing de Datos Reales)
         try:
-            df = await self.get_market_data(symbol, timeframe, days, exchange_id)
+            df = await self.get_market_data(symbol, timeframe, days, exchange_id, user_id=user_id)
         except Exception as e:
             self.logger.error(f"Error fetching data: {e}")
             raise ValueError(f"No se pudieron obtener datos para {symbol}: {e}")
@@ -286,10 +286,10 @@ class BacktestService:
             }
         }
 
-    async def get_market_data(self, symbol: str, timeframe: str, days: int = 30, exchange_id: str = 'binance'):
+    async def get_market_data(self, symbol: str, timeframe: str, days: int = 30, exchange_id: str = 'binance', user_id: str = "default_user"):
         """
         Tarea 5.1: Sourcing de Datos Reales para Backtest
-        Obtiene datos reales para el backtest.
+        Obtiene datos reales para el backtest, utilizando credenciales del usuario si están disponibles.
         """
         limit = (24 * days)
         if timeframe == '4h': limit = days * 6
@@ -299,8 +299,14 @@ class BacktestService:
         elif timeframe == '1m': limit = days * 1440
         limit += 100 # Buffer
         
-        self.logger.info(f"🌍 FETCHING REAL DATA via CCXT PubAPI for {symbol} (Limit: {limit} candles)")
-        df = await self.exchange.get_public_historical_data(symbol, timeframe, limit=limit, exchange_id=exchange_id)
+        self.logger.info(f"🌍 FETCHING REAL DATA via CCXT for {symbol} (Limit: {limit} candles, User: {user_id})")
+        # Use get_historical_data which now supports user-auth via _get_client_for_user
+        df = await self.exchange.get_historical_data(symbol, timeframe, limit=limit, user_id=user_id)
+        if df.empty:
+            # Fallback to public if private fails or returns empty (though get_historical_data handles this)
+            self.logger.warning("Empty data from auth client, retrying with public...")
+            df = await self.exchange.get_public_historical_data(symbol, timeframe, limit=limit, exchange_id=exchange_id)
+            
         if df.empty:
             raise ValueError(f"No se pudieron obtener datos para {symbol}")
         return df

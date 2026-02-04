@@ -76,15 +76,30 @@ class CcxtAdapter(IExchangePort):
 
             # Initialize new client
             exchange_class = getattr(ccxt, exchange_id)
-            # Potentially load API keys here if private access needed
-            # For now, public instance as per previous implementation logic, but scoped to user preference
-            instance = exchange_class({
+            
+            # Prepare configuration with API Keys
+            exchange_config = {
                 'enableRateLimit': True,
                 'options': {
                     'defaultType': 'spot',
                     'fetchCurrencies': False
                 }
-            })
+            }
+            
+            # Extract credentials if available in the matched config
+            active_ex_config = None
+            if config and 'exchanges' in config:
+                 # Find the specific config object for this exchange_id
+                 active_ex_config = next((e for e in config['exchanges'] if e.get('exchangeId') == exchange_id), None)
+            
+            if active_ex_config:
+                if 'apiKey' in active_ex_config: exchange_config['apiKey'] = active_ex_config['apiKey']
+                if 'secret' in active_ex_config: exchange_config['secret'] = active_ex_config['secret']
+                if 'password' in active_ex_config: exchange_config['password'] = active_ex_config['password']
+                if 'uid' in active_ex_config: exchange_config['uid'] = active_ex_config['uid']
+                logger.info(f"🔑 Loaded credentials for {exchange_id} (User {user_id})")
+
+            instance = exchange_class(exchange_config)
             
             # Apply Windows DNS Fix
             session = self._create_custom_session()

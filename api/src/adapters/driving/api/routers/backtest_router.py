@@ -123,7 +123,7 @@ async def get_exchange_symbols(
 @router.post("/run")
 async def run_backtest(
     symbol: str,
-    exchange_id: str = "binance",
+    exchange_id: str = "okx",
     days: int = 7,
     timeframe: str = "1h",
     use_ai: bool = True,
