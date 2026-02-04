@@ -59,18 +59,6 @@ async def lifespan(app: FastAPI):
 
     bot_monitor_task = asyncio.create_task(signal_bot_service.monitor_bots())
     
-    # --- Strategy Runner Auto-Trade Loop ---
-    from api.src.application.services.strategy_runner_service import StrategyRunnerService
-    from api.src.application.services.ml_service import MLService
-    from api.src.adapters.driving.api.routers.bot_router import repo as bot_repo, engine
-    
-    # Initialize ML Service shared instance
-    ml_service = MLService(exchange_adapter=ccxt_adapter)
-    
-    # Inject dependencies
-    strategy_runner = StrategyRunnerService(bot_repo, ml_service, engine)
-    await strategy_runner.start()
-    
     logger.info("=== All services are running in background ===")
     
     yield
@@ -82,7 +70,6 @@ async def lifespan(app: FastAPI):
     await monitor_service.stop_monitoring()
     monitor_task.cancel()
     bot_monitor_task.cancel()
-    await strategy_runner.stop()
     await cex_service.close_all()
     await dex_service.close_all()
     await ai_service.close()

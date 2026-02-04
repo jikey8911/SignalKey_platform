@@ -319,7 +319,28 @@ class LegacyTelegramBot:
         try:
             # Asegurar que api_id sea int
             api_id_int = int(self.api_id)
+
+            # Verificar si el archivo existe (Telethon añade .session)
+            actual_file = f"{self.session_file}.session"
+            if not os.path.exists(actual_file):
+                # Intentar en el directorio raíz como respaldo
+                backup_file = "userbot_session.session"
+                if os.path.exists(backup_file):
+                    logger.info(f"Session file not found at {actual_file}, using backup at {backup_file}")
+                    self.session_file = "userbot_session"
+                else:
+                    logger.error(f"Telegram session file NOT FOUND. Expected at: {actual_file}")
+                    return
+
             self.client = TelegramClient(self.session_file, api_id_int, self.api_hash)
+
+            # Conectar sin prompt interactivo
+            await self.client.connect()
+
+            if not await self.client.is_user_authorized():
+                logger.error("Legacy Bot: NOT AUTHORIZED. The session file is invalid or expired for these credentials.")
+                await self.client.disconnect()
+                return
 
             @self.client.on(events.NewMessage)
             async def handler(event):
@@ -366,7 +387,6 @@ class LegacyTelegramBot:
                 except Exception as e:
                     logger.error(f"Error in legacy bot handler: {e}")
 
-            await self.client.start()
             logger.info("LEGACY Telegram bot connected and listening")
 
         except Exception as e:
