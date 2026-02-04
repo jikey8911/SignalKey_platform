@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { createChart, ColorType, IChartApi, ISeriesApi, Time } from 'lightweight-charts';
+import { createChart, ColorType, IChartApi, ISeriesApi, Time, CandlestickSeries } from 'lightweight-charts';
 
 interface Candle {
     time: number; // Unix timestamp in seconds or milliseconds
@@ -71,7 +71,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
             },
         });
 
-        const candlestickSeries = (chart as any).addCandlestickSeries({
+        const candlestickSeries = chart.addSeries(CandlestickSeries, {
             upColor: upColor,
             downColor: downColor,
             borderVisible: false,
@@ -108,7 +108,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
 
             // Sort markers by time
             markers.sort((a, b) => (a.time as number) - (b.time as number));
-            candlestickSeries.setMarkers(markers as any);
+            (candlestickSeries as any).setMarkers(markers);
         }
 
         chart.timeScale().fitContent();
