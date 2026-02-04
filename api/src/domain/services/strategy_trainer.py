@@ -54,28 +54,43 @@ class StrategyTrainer:
             if market_type:
                 module_path = f"api.src.domain.strategies.{market_type.lower()}.{strategy_name}"
             else:
-                module_path = f"api.src.domain.strategies.{strategy_name}"
+                module_path = f"api.src.domain.strategies.spot.{strategy_name}"
 
             try:
                 module = importlib.import_module(module_path)
             except ImportError:
                 # Fallback to root strategies if market-specific not found
                 if market_type:
-                    module_path = f"api.src.domain.strategies.{strategy_name}"
+                    module_path = f"api.src.domain.strategies.spot.{strategy_name}"
                     module = importlib.import_module(module_path)
                 else:
                     raise
             
-            # Try snake_case to PascalCase conversion first
-            class_name_pascal = "".join(w.title() for w in strategy_name.split("_"))
+            # Try multiple class naming conventions
+            possible_names = []
             
-            if hasattr(module, class_name_pascal):
-                return getattr(module, class_name_pascal)
-            elif hasattr(module, strategy_name): # Fallback to filename as classname
-                return getattr(module, strategy_name)
-            else:
-                logger.error(f"Class {class_name_pascal} or {strategy_name} not found in {module_path}")
-                return None
+            # 1. PascalCase (e.g. stochastic -> Stochastic)
+            pascal = "".join(w.title() for w in strategy_name.split("_"))
+            possible_names.append(pascal)
+            
+            # 2. PascalCase + Strategy (e.g. StochasticStrategy)
+            possible_names.append(pascal + "Strategy")
+            
+            # 3. UPPERCASE + Strategy (e.g. vwap -> VWAPStrategy)
+            possible_names.append(strategy_name.upper() + "Strategy")
+            
+            # 4. UPPERCASE (e.g. VWAP)
+            possible_names.append(strategy_name.upper())
+
+            # 5. Original naming (lowercase or whatever filename is)
+            possible_names.append(strategy_name)
+
+            for name in possible_names:
+                if hasattr(module, name):
+                    return getattr(module, name)
+            
+            logger.error(f"Could not find strategy class in {module_path}. Checked: {possible_names}")
+            return None
         except Exception as e:
             logger.error(f"Error loading strategy {strategy_name}: {e}")
             return None
