@@ -13,6 +13,8 @@ import { useSocketContext } from '@/contexts/SocketContext';
 import { toast } from 'react-hot-toast';
 import { CONFIG } from '@/config';
 import { TradingViewChart } from '@/components/ui/TradingViewChart';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Separator } from '@/components/ui/separator';
 
 // --- MONITOR HÍBRIDO (Integrado con Socket Tarea 4.3 & 4.5) ---
 
@@ -128,12 +130,239 @@ const ExecutionMonitor = ({ bot }: any) => {
     );
 };
 
-// --- PÁGINA DE BOTS ---
+// --- CONFIG MODULE ---
+const BotInfoModule = ({ bot }: { bot: any }) => {
+    return (
+        <div className="space-y-6 animate-in slide-in-from-bottom-2 duration-500">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Status Card */}
+                <Card className="p-6 bg-slate-900 border-white/10">
+                    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 border-b border-white/5 pb-2">Estado General</h3>
+                    <div className="space-y-4">
+                        <div className="flex justify-between items-center">
+                            <span className="text-slate-500 text-sm">Estado:</span>
+                            <Badge variant={bot.status === 'active' ? 'success' : 'secondary'} className="uppercase">
+                                {bot.status === 'active' ? 'ACTIVO' : 'PAUSADO'}
+                            </Badge>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-slate-500 text-sm">Modo:</span>
+                            <Badge variant={bot.mode === 'real' ? 'destructive' : 'outline'} className="uppercase border-blue-500/50">
+                                {bot.mode === 'real' ? 'REAL TRADING' : 'SIMULACIÓN'}
+                            </Badge>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-slate-500 text-sm">Par:</span>
+                            <span className="font-mono text-white text-lg font-bold">{bot.symbol}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-slate-500 text-sm">Estrategia:</span>
+                            <span className="text-blue-400 font-medium">{bot.strategy_name}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-slate-500 text-sm">Timeframe:</span>
+                            <span className="text-white font-mono bg-slate-800 px-2 rounded">{bot.timeframe}</span>
+                        </div>
+                    </div>
+                </Card>
+
+                {/* Configuration Card */}
+                <Card className="p-6 bg-slate-900 border-white/10">
+                    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 border-b border-white/5 pb-2">Configuración de Riesgo</h3>
+                    <div className="space-y-4">
+                        <div className="flex justify-between items-center">
+                            <span className="text-slate-500 text-sm">Monto Inversión:</span>
+                            <span className="font-mono text-white">${bot.amount?.toFixed(2)}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-slate-500 text-sm">Take Profits:</span>
+                            <div className="flex gap-1">
+                                {(bot.takeProfits || []).map((tp: any, idx: number) => (
+                                    <Badge key={idx} variant="outline" className={`text-[10px] ${tp.status === 'hit' ? 'bg-green-500/20 text-green-400' : 'text-slate-500'}`}>
+                                        {tp.price?.toFixed(2)}
+                                    </Badge>
+                                ))}
+                                {(!bot.takeProfits || bot.takeProfits.length === 0) && <span className="text-xs text-slate-600">Auto (IA)</span>}
+                            </div>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-slate-500 text-sm">Stop Loss:</span>
+                            <span className="font-mono text-red-400">${bot.stopLoss?.toFixed(4) || '---'}</span>
+                        </div>
+                        <div className="flex justify-between items-center">
+                            <span className="text-slate-500 text-sm">Leverage:</span>
+                            <span className="font-mono text-amber-500">x{bot.leverage || 1}</span>
+                        </div>
+                    </div>
+                </Card>
+            </div>
+
+            {/* Performance Snapshot */}
+            <Card className="p-6 bg-gradient-to-r from-blue-900/10 to-slate-900/50 border-white/5">
+                <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2">Snapshot de Rendimiento</h3>
+                <div className="flex gap-8 items-end">
+                    <div>
+                        <p className="text-xs text-slate-500 mb-1">PnL Actual</p>
+                        <p className={`text-3xl font-black ${bot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                            {bot.pnl > 0 ? '+' : ''}{bot.pnl?.toFixed(2) || '0.00'}%
+                        </p>
+                    </div>
+                    <div>
+                        <p className="text-xs text-slate-500 mb-1">Precio Entrada</p>
+                        <p className="text-xl font-mono text-white">${bot.entryPrice?.toFixed(4)}</p>
+                    </div>
+                    <div>
+                        <p className="text-xs text-slate-500 mb-1">Precio Actual</p>
+                        <p className="text-xl font-mono text-white">${bot.current_price?.toFixed(4) || '---'}</p>
+                    </div>
+                </div>
+            </Card>
+        </div>
+    );
+}
+
+const SignalHistoryModule = ({ botId }: { botId: string }) => {
+    const [signals, setSignals] = useState<any[]>([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const fetchHistory = async () => {
+            setLoading(true);
+            try {
+                const res = await fetch(`${CONFIG.API_BASE_URL}/bots/${botId}/signals`);
+                if (res.ok) {
+                    const data = await res.json();
+                    setSignals(data.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+                }
+            } catch (e) {
+                console.error("Error fetching history", e);
+            } finally {
+                setLoading(false);
+            }
+        };
+        fetchHistory();
+    }, [botId]);
+
+    if (loading) return <div className="text-center py-10 text-slate-500 animate-pulse">Cargando historial...</div>;
+
+    return (
+        <Card className="overflow-hidden bg-slate-900 border-white/10 animate-in fade-in slide-in-from-bottom-4">
+            <div className="max-h-[500px] overflow-y-auto custom-scrollbar">
+                <table className="w-full text-left text-sm text-slate-400">
+                    <thead className="bg-slate-950 text-xs uppercase font-medium text-slate-500 sticky top-0 z-10">
+                        <tr>
+                            <th className="px-6 py-4 bg-slate-950">Fecha</th>
+                            <th className="px-6 py-4 bg-slate-950">Señal</th>
+                            <th className="px-6 py-4 bg-slate-950">Precio</th>
+                            <th className="px-6 py-4 bg-slate-950">Confianza</th>
+                            <th className="px-6 py-4 bg-slate-950 text-right">Estado</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                        {signals.length === 0 ? (
+                            <tr>
+                                <td colSpan={5} className="px-6 py-10 text-center text-slate-600 italic">
+                                    No hay señales registradas para este bot.
+                                </td>
+                            </tr>
+                        ) : (
+                            signals.map((signal) => (
+                                <tr key={signal.id} className="hover:bg-white/5 transition-colors">
+                                    <td className="px-6 py-4 font-mono text-xs text-slate-500">
+                                        {new Date(signal.createdAt).toLocaleString()}
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        <Badge variant="outline" className={`${signal.decision?.toLowerCase().includes('buy') ? 'text-green-400 border-green-500/30 bg-green-500/10' : signal.decision?.toLowerCase().includes('sell') ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-slate-400 border-slate-500/30'}`}>
+                                            {signal.decision}
+                                        </Badge>
+                                    </td>
+                                    <td className="px-6 py-4 font-mono text-white">
+                                        {signal.price ? `$${signal.price.toFixed(2)}` : '---'}
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        {signal.confidence ? (
+                                            <div className="flex items-center gap-2">
+                                                <div className="h-1.5 w-16 bg-slate-800 rounded-full overflow-hidden">
+                                                    <div className="h-full bg-blue-500" style={{ width: `${signal.confidence * 100}%` }} />
+                                                </div>
+                                                <span className="text-xs">{Math.round(signal.confidence * 100)}%</span>
+                                            </div>
+                                        ) : '-'}
+                                    </td>
+                                    <td className="px-6 py-4 text-right">
+                                        <span className="text-xs text-slate-500 lowercase">{signal.status || 'processed'}</span>
+                                    </td>
+                                </tr>
+                            ))
+                        )}
+                    </tbody>
+                </table>
+            </div>
+        </Card>
+    );
+};
+
+
+const GlobalSignalTicker = () => {
+    const { lastMessage } = useSocketContext();
+    const [globalSignals, setGlobalSignals] = useState<any[]>([]);
+
+    useEffect(() => {
+        if (lastMessage && (lastMessage.event === 'signal_update' || lastMessage.event === 'live_execution_signal')) {
+            // Add to global list regardless of selected bot
+            setGlobalSignals(prev => {
+                const newSig = lastMessage.data;
+                // Avoid duplicates if unique ID exists
+                if (prev.find(s => s.id === newSig.id && s.timestamp === newSig.timestamp)) return prev;
+                return [newSig, ...prev].slice(0, 8); // Keep last 8
+            });
+        }
+    }, [lastMessage]);
+
+    if (globalSignals.length === 0) return (
+        <Card className="mb-6 p-4 bg-slate-900/50 border-dashed border-white/10 flex items-center justify-center gap-2 text-slate-500 text-xs">
+            <Activity className="w-4 h-4" />
+            Esperando señales de la red neuronal...
+        </Card>
+    );
+
+    return (
+        <Card className="mb-6 bg-slate-950 border-blue-500/20 overflow-hidden relative">
+            <div className="absolute top-0 left-0 w-1 h-full bg-blue-500 animate-pulse" />
+            <div className="p-3 flex items-center gap-4 overflow-x-auto custom-scrollbar">
+                <div className="flex items-center gap-2 pr-4 border-r border-white/10 shrink-0">
+                    <BrainCircuit className="w-5 h-5 text-blue-500" />
+                    <div className="flex flex-col">
+                        <span className="text-[10px] uppercase font-bold text-white leading-none">Global</span>
+                        <span className="text-[10px] text-blue-400 font-mono tracking-wider">LIVE FEED</span>
+                    </div>
+                </div>
+
+                <div className="flex gap-3">
+                    {globalSignals.map((sig, idx) => (
+                        <div key={idx} className="flex flex-col bg-white/5 rounded px-3 py-1.5 min-w-[100px] border border-white/5 animate-in slide-in-from-right-4 fade-in duration-500">
+                            <div className="flex justify-between items-center mb-1">
+                                <span className="text-[10px] font-bold text-slate-300">{sig.symbol || 'UNK'}</span>
+                                <span className="text-[9px] text-slate-500">{new Date(sig.createdAt || Date.now()).toLocaleTimeString()}</span>
+                            </div>
+                            <div className="flex justify-between items-center">
+                                <Badge variant="outline" className={`h-4 text-[9px] px-1 ${(sig.decision?.includes('BUY') || sig.type === 'LONG') ? 'text-green-400 border-green-500/30' : 'text-red-400 border-red-500/30'}`}>
+                                    {sig.decision || sig.type}
+                                </Badge>
+                                <span className="text-[10px] font-mono text-white">${sig.price?.toFixed(2)}</span>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        </Card>
+    );
+};
 
 // --- PÁGINA DE BOTS ---
 
 const BotsPage = () => {
-    const { user } = useAuth(); // sp4: Get actual user context
+    const { user } = useAuth();
     const [bots, setBots] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -143,7 +372,6 @@ const BotsPage = () => {
         if (!user?.openId) return;
 
         try {
-            // sp4: Pass dynamic user_id
             const res = await fetch(`${CONFIG.API_BASE_URL}/bots/`);
             if (res.ok) {
                 const data = await res.json();
@@ -162,7 +390,6 @@ const BotsPage = () => {
     useEffect(() => {
         if (user?.openId) {
             fetchBots();
-            // Polling reducido a 60s para confiar más en los WebSockets (sp4 opt)
             const interval = setInterval(fetchBots, 60000);
             return () => clearInterval(interval);
         }
@@ -249,35 +476,57 @@ const BotsPage = () => {
                         ))}
                     </div>
 
-                    {/* Panel Principal */}
+                    {/* Panel Principal con TABS */}
                     <div className="xl:col-span-3 space-y-6">
+                        <GlobalSignalTicker />
                         {activeBot ? (
-                            <>
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                    <Card className="p-6 bg-gradient-to-br from-blue-500/5 to-transparent border-blue-500/10">
-                                        <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Profit Actual</p>
-                                        <h3 className={`text-3xl font-black ${activeBot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                                            {activeBot.pnl > 0 ? '+' : ''}{activeBot.pnl?.toFixed(2) || '0.00'}%
-                                        </h3>
-                                    </Card>
-                                    <Card className="p-6 bg-slate-900/50 border-white/5">
-                                        <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Precio Actual</p>
-                                        <h3 className="text-2xl font-mono text-white">
-                                            ${activeBot.current_price?.toFixed(2) || '---'}
-                                        </h3>
-                                    </Card>
-                                    <Card className="p-6 bg-slate-900/50 border-white/5">
-                                        <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Bot ID</p>
-                                        <h3 className="text-sm font-mono text-slate-400 truncate" title={activeBot.id}>
-                                            {activeBot.id}
-                                        </h3>
-                                    </Card>
+                            <Tabs defaultValue="info" className="w-full">
+                                <TabsList className="bg-slate-900/50 border border-white/5">
+                                    <TabsTrigger value="info">Configuración</TabsTrigger>
+                                    <TabsTrigger value="monitor">Live Monitor</TabsTrigger>
+                                    <TabsTrigger value="history">Historial de Señales</TabsTrigger>
+                                </TabsList>
+
+                                <div className="mt-6">
+                                    <TabsContent value="info">
+                                        <BotInfoModule bot={activeBot} />
+                                    </TabsContent>
+
+                                    <TabsContent value="monitor">
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                                            <Card className="p-6 bg-gradient-to-br from-blue-500/5 to-transparent border-blue-500/10">
+                                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Profit Actual</p>
+                                                <h3 className={`text-3xl font-black ${activeBot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                    {activeBot.pnl > 0 ? '+' : ''}{activeBot.pnl?.toFixed(2) || '0.00'}%
+                                                </h3>
+                                            </Card>
+                                            <Card className="p-6 bg-slate-900/50 border-white/5">
+                                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Precio Actual</p>
+                                                <h3 className="text-2xl font-mono text-white">
+                                                    ${activeBot.current_price?.toFixed(2) || '---'}
+                                                </h3>
+                                            </Card>
+                                            <Card className="p-6 bg-slate-900/50 border-white/5">
+                                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Bot ID</p>
+                                                <h3 className="text-sm font-mono text-slate-400 truncate" title={activeBot.id}>
+                                                    {activeBot.id}
+                                                </h3>
+                                            </Card>
+                                        </div>
+                                        <ExecutionMonitor bot={activeBot} />
+                                    </TabsContent>
+
+                                    <TabsContent value="history">
+                                        <SignalHistoryModule botId={activeBot.id} />
+                                    </TabsContent>
                                 </div>
-                                <ExecutionMonitor bot={activeBot} />
-                            </>
+                            </Tabs>
                         ) : (
-                            <div className="flex h-full items-center justify-center text-slate-600">
-                                Selecciona un bot para ver detalles
+                            <div className="flex h-full items-center justify-center text-slate-600 bg-slate-900/20 rounded-xl border border-white/5">
+                                <div className="text-center">
+                                    <Activity className="w-12 h-12 mx-auto mb-4 text-slate-700 opacity-50" />
+                                    <p>Selecciona un bot del panel izquierdo</p>
+                                </div>
                             </div>
                         )}
                     </div>

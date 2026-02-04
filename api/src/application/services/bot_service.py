@@ -23,7 +23,7 @@ class SignalBotService:
         })
         return active_bots_count < max_bots
 
-    async def activate_bot(self, analysis: AnalysisResult, user_id: str, config: Dict[str, Any]) -> ExecutionResult:
+    async def activate_bot(self, analysis: AnalysisResult, user_id: str, config: Dict[str, Any], bot_id: str = None) -> ExecutionResult:
         """Activa un bot para una señal aprobada, manejando acumulación o cierre."""
         symbol = self.cex_service._normalize_symbol(analysis.symbol)
         
@@ -42,10 +42,10 @@ class SignalBotService:
             
             if bot_side == signal_side:
                 # ACUMULACIÓN (Mismo lado)
-                return await self._accumulate_position(existing_bot, analysis, user_id, config)
+                return await self._accumulate_position(existing_bot, analysis, user_id, config, bot_id)
             else:
                 # CIERRE / REVERSO (Lado opuesto)
-                return await self._close_position_by_signal(existing_bot, analysis, user_id, config)
+                return await self._close_position_by_signal(existing_bot, analysis, user_id, config, bot_id)
 
         # 2. Si no existe, lógica standard de creación (Nuevo Bot)
         if not await self.can_activate_bot(user_id, config):
@@ -132,6 +132,7 @@ class SignalBotService:
         # Bot Document
         bot_doc = {
             "userId": user_id,
+            "botInstanceId": bot_id, # Link to Bot Instance
             "symbol": symbol,
             "side": analysis.decision.upper(),
             "entryPrice": entry_price,
@@ -166,6 +167,20 @@ class SignalBotService:
         else:
             inserted_id = await save_trade(bot_doc)
 
+        # --- SAVE OPERATION LOG ---
+        if bot_id:
+            await db.bot_operations.insert_one({
+                "botId": bot_id,
+                "tradeId": str(inserted_id),
+                "type": analysis.decision.upper(), # BUY/SELL
+                "price": entry_price,
+                "amount": amount,
+                "timestamp": datetime.utcnow(),
+                "mode": "simulated" if demo_mode else "real",
+                "reason": "ENTRY"
+            })
+        # --------------------------
+
         return ExecutionResult(
             success=True, 
             message=execution_result.message,
@@ -173,7 +188,7 @@ class SignalBotService:
             details={"botId": str(inserted_id), "execution": execution_result.details}
         )
 
-    async def _accumulate_position(self, existing_bot: Dict[str, Any], analysis: AnalysisResult, user_id: str, config: Dict[str, Any]) -> ExecutionResult:
+    async def _accumulate_position(self, existing_bot: Dict[str, Any], analysis: AnalysisResult, user_id: str, config: Dict[str, Any], bot_id: str = None) -> ExecutionResult:
         """Aumenta el tamaño de una posición existente (Dollar Cost Averaging)."""
         symbol = existing_bot['symbol']
         side = existing_bot['side'] # BUY/SELL
@@ -258,6 +273,20 @@ class SignalBotService:
                 "$push": {"history": history_entry}
             }
         )
+
+        # --- SAVE ACCUMULATE LOG ---
+        if bot_id:
+            await db.bot_operations.insert_one({
+                "botId": bot_id,
+                "tradeId": str(existing_bot["_id"]),
+                "type": side, # Same side accumulation
+                "price": execution_price,
+                "amount": amount_to_add,
+                "timestamp": datetime.utcnow(),
+                "mode": "simulated" if demo_mode else "real",
+                "reason": "ACCUMULATE"
+            })
+        # ---------------------------
         
         return ExecutionResult(
             success=True,
@@ -265,7 +294,7 @@ class SignalBotService:
             details={"new_entry": new_entry_price, "total_amount": total_amount}
         )
 
-    async def _close_position_by_signal(self, existing_bot: Dict[str, Any], analysis: AnalysisResult, user_id: str, config: Dict[str, Any]) -> ExecutionResult:
+    async def _close_position_by_signal(self, existing_bot: Dict[str, Any], analysis: AnalysisResult, user_id: str, config: Dict[str, Any], bot_id: str = None) -> ExecutionResult:
         """Cierra una posición existente debido a una señal opuesta."""
         symbol = existing_bot['symbol']
         current_price = await self.cex_service.get_current_price(symbol, user_id)
@@ -288,11 +317,6 @@ class SignalBotService:
             
             if existing_bot["side"] == "BUY":
                  # Vender lo que se compró
-                 value_now = (amount / existing_bot["entryPrice"]) * current_price # Assuming amount is in USDT
-                 # No, amount in bot is in USDT usually based on implementation lines 86 (min(suggested, max_amount))
-                 # Wait, line 235 in CEXService: "amount": amount (USDT).
-                 # So Coin Amount = Amount / EntryPrice
-                 
                  coin_amount = amount / existing_bot["entryPrice"]
                  revenue = coin_amount * current_price
                  await update_virtual_balance(user_id, "CEX", "USDT", revenue, is_relative=True)
@@ -301,10 +325,7 @@ class SignalBotService:
             else: # SELL/SHORT
                  # Buy to cover
                  # Profit if Price < Entry
-                 # Short PnL = (Entry - Close) / Entry
                  pnl_pct = ((existing_bot["entryPrice"] - current_price) / existing_bot["entryPrice"]) * 100
-                 # Balance effect: Return Margin + Profit
-                 # Simplified: user gets back Amount + ProfitValue
                  revenue = amount * (1 + (pnl_pct/100))
                  await update_virtual_balance(user_id, "CEX", "USDT", revenue, is_relative=True)
 
@@ -320,6 +341,20 @@ class SignalBotService:
                     }
                 }
             )
+
+            # --- SAVE CLOSE LOG ---
+            if bot_id:
+                await db.bot_operations.insert_one({
+                    "botId": bot_id,
+                    "tradeId": str(existing_bot["_id"]),
+                    "type": "SELL" if existing_bot["side"] == "BUY" else "BUY", # Opposite side
+                    "price": current_price,
+                    "amount": amount,
+                    "timestamp": datetime.utcnow(),
+                    "mode": "simulated",
+                    "reason": "CLOSE_SIGNAL"
+                })
+            # ----------------------
             
             return ExecutionResult(success=True, message=f"Posición cerrada por señal opuesta. PnL: {pnl_pct:.2f}%")
             

@@ -17,6 +17,7 @@ class BotInstance:
     market_type: str = "spot" # "spot" o "futures"
     mode: str = "simulated"   # "simulated" o "real"
     status: str = "paused"   # "active" o "paused" (Persistido en DB para resiliencia)
+    amount: float = 0.0       # Monto base de inversión
     config: Dict = field(default_factory=dict) # Parametros especificos de la estrategia
     position: Dict = field(default_factory=dict) # Estado de la posición actual
     last_execution: Optional[datetime] = None
@@ -35,6 +36,7 @@ class BotInstance:
             "market_type": self.market_type,
             "mode": self.mode,
             "status": self.status,
+            "amount": self.amount,
             "config": self.config,
             "position": self.position,
             "last_execution": self.last_execution.isoformat() if isinstance(self.last_execution, datetime) else self.last_execution,

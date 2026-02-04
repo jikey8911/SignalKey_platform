@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from api.src.domain.entities.bot_instance import BotInstance
 from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
-from api.src.adapters.driven.persistence.mongodb import db 
+from api.src.adapters.driven.persistence.mongodb import db, get_app_config 
 from api.src.infrastructure.security.auth_deps import get_current_user
 
 router = APIRouter(prefix="/bots", tags=["Bot Management sp2"])
@@ -20,6 +20,20 @@ class CreateBotSchema(BaseModel):
 @router.post("/")
 async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get_current_user)):
     user_id = current_user["openId"]
+    
+    # Obtener configuración del usuario para limites de inversión
+    app_config = await get_app_config(user_id)
+    default_amount = 0.0
+    
+    if app_config:
+        limits = app_config.get('investmentLimits', {})
+        if data.market_type == 'spot' or data.market_type == 'cex':
+            default_amount = limits.get('cexMaxAmount', 100.0)
+        else:
+            default_amount = limits.get('dexMaxAmount', 10.0)
+    else:
+        default_amount = 100.0 # Fallback default
+        
     bot = BotInstance(
         id=None,
         user_id=user_id, 
@@ -29,7 +43,8 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
         timeframe=data.timeframe,
         market_type=data.market_type,
         mode=data.mode,
-        status="active" # Se crea activo para iniciar monitoreo
+        status="active", # Se crea activo para iniciar monitoreo
+        amount=float(default_amount)
     )
     bot_id = await repo.save(bot)
     return {"id": bot_id, "status": "created"}
