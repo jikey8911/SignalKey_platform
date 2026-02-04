@@ -1,6 +1,6 @@
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
-from telethon.errors import PhoneCodeExpiredError
+from telethon.errors import PhoneCodeExpiredError, SessionPasswordNeededError
 from api.config import Config
 from api.src.domain.models.schemas import TradingSignal
 from api.src.adapters.driven.persistence.mongodb import db
@@ -164,15 +164,15 @@ class TelegramUserBot:
                 except Exception as e:
                     logger.error(f"Error in telegram handler for {self.user_id}: {e}")
 
-            # Configurar autostart y reconexión automática
-            # El cliente de Telethon reconecta por defecto, pero start() asegura que esté activo
-            # Usamos start() sin parámetros si ya hay sesión, o con phone si es nuevo
-            await self.client.start(phone=self.phone_number if self.phone_number else None)
+            # Configurar autostart y reconexión automática (NO INTERACTIVO)
+            # Evitamos usar start(phone=...) porque Telethon pide input() por consola si no está autorizado
+            if not self.client.is_connected():
+                await self.client.connect()
             
             if not await self.client.is_user_authorized():
                 logger.error(f"Bot for user {self.user_id} NOT authorized")
                 await self.client.disconnect()
-                return
+                raise ValueError("TELEGRAM_NOT_AUTHORIZED")
             
             # Tarea: Guardar la sesión en la base de datos para persistencia centralizada
             try:
@@ -292,6 +292,9 @@ class TelegramUserBot:
         except PhoneCodeExpiredError:
             logger.warning(f"Phone code expired for user {self.user_id}")
             return False, "CODE_EXPIRED"
+        except SessionPasswordNeededError:
+            logger.info(f"2FA Password needed for user {self.user_id}")
+            return False, "PASSWORD_NEEDED"
         except Exception as e:
             logger.error(f"Error signing in user {self.user_id}: {e}")
             return False, ""

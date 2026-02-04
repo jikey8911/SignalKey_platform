@@ -141,6 +141,11 @@ async def verify_telegram_code(request: TelegramAuthVerifyRequest, current_user:
         if not success:
             if session_string == "CODE_EXPIRED":
                 raise HTTPException(status_code=400, detail="CODE_EXPIRED")
+            if session_string == "PASSWORD_NEEDED":
+                return {
+                    "status": "password_needed",
+                    "message": "Two-step verification is enabled. Please provide your 2FA password."
+                }
             raise HTTPException(status_code=400, detail="Invalid verification code")
         
         # Guardar sesión en BD
