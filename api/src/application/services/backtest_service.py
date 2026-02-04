@@ -617,6 +617,7 @@ class BacktestService:
         df = strategy.apply(df)
         
         # 2. Simular el contexto de posición (Igual que en el StrategyTrainer)
+        # Inicializar columnas para evitar NaN
         df['in_position'] = 0
         df['current_pnl'] = 0.0
         

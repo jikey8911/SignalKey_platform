@@ -32,14 +32,19 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
     bot_id = await repo.save(bot)
     return {"id": bot_id, "status": "created"}
 
+def get_signal_repository():
+    from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
+    return MongoDBSignalRepository(db)
+
 @router.get("/{bot_id}/signals")
-async def get_bot_signals(bot_id: str, current_user: dict = Depends(get_current_user)):
+async def get_bot_signals(
+    bot_id: str,
+    current_user: dict = Depends(get_current_user),
+    signal_repo = Depends(get_signal_repository)
+):
     """
     Recupera el historial de señales para un bot específico.
     """
-    from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
-    signal_repo = MongoDBSignalRepository(db)
-
     signals = await signal_repo.find_by_bot_id(bot_id)
     return [s.to_dict() for s in signals]
 

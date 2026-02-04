@@ -141,9 +141,15 @@ export default function Backtest() {
 
   // --- Semi-Auto Access ---
   const [isScanning, setIsScanning] = useState(false);
+  const stopScanRef = useRef(false);
   const [scanResults, setScanResults] = useState<BacktestResults[]>([]);
   const [scanProgress, setScanProgress] = useState({ current: 0, total: 0 });
   const [selectedResult, setSelectedResult] = useState<BacktestResults | null>(null);
+
+  const handleStopScan = () => {
+    stopScanRef.current = true;
+    toast.info("Deteniendo escaneo...");
+  };
 
   const handleStartScan = async () => {
     if (!user?.openId || !selectedExchange || !selectedMarket) {
@@ -152,16 +158,21 @@ export default function Backtest() {
     }
 
     setIsScanning(true);
+    stopScanRef.current = false;
     setScanResults([]);
 
-    // Filter symbols to scan (e.g., exclude outliers if needed, currently taking all valid ones)
-    // We limit to top 20 for Demo purposes or use pagination in real scenario? 
-    // User asked for "ALL symbols", but browser might choke on 500 requests at once.
-    // We'll execute them mostly strictly sequential to avoid rate limits/DoS.
-    const targetSymbols = symbols.map(s => s.symbol).slice(0, 50); // LIMIT 50 for SAFETY during Dev
+    // Filter symbols to scan - Now taking ALL symbols as requested by user
+    // We execute them sequentially to avoid rate limits/DoS.
+    const targetSymbols = symbols.map(s => s.symbol);
     setScanProgress({ current: 0, total: targetSymbols.length });
 
     for (let i = 0; i < targetSymbols.length; i++) {
+      if (stopScanRef.current) {
+        setIsScanning(false);
+        toast.success("Escaneo detenido");
+        return;
+      }
+
       const sym = targetSymbols[i];
       try {
         // Call Backtest API
@@ -235,6 +246,8 @@ export default function Backtest() {
         console.error(`Error scanning ${sym}`, e);
       } finally {
         setScanProgress(prev => ({ ...prev, current: prev.current + 1 }));
+        // Small delay to be kind to the rate limits and keep UI snappy
+        await new Promise(resolve => setTimeout(resolve, 100));
       }
     }
 
@@ -267,12 +280,35 @@ export default function Backtest() {
       .finally(() => setLoadingSymbols(false));
   }, [selectedExchange, selectedMarket]);
 
-  // Auto-select defaults
+  // Fetch user config and auto-select active exchange
+  useEffect(() => {
+    if (!user?.openId) return;
+
+    fetch(`${CONFIG.API_BASE_URL}/config/`)
+      .then(res => res.json())
+      .then(data => {
+        const config = data.config;
+        if (config) {
+          let activeEx = config.activeExchange;
+          if (!activeEx && config.exchanges && config.exchanges.length > 0) {
+            const firstActive = config.exchanges.find((e: any) => e.isActive);
+            if (firstActive) activeEx = firstActive.exchangeId;
+          }
+
+          if (activeEx) {
+            setSelectedExchange(activeEx);
+          }
+        }
+      })
+      .catch(err => console.error("Error fetching user config for active exchange:", err));
+  }, [user?.openId]);
+
+  // Auto-select defaults if no config found or no active exchange
   useEffect(() => {
     if (exchanges.length > 0 && !selectedExchange) {
       setSelectedExchange(exchanges[0].exchangeId);
     }
-  }, [exchanges]);
+  }, [exchanges, selectedExchange]);
 
   // Reset/Default Market
   useEffect(() => {
@@ -1190,7 +1226,16 @@ export default function Backtest() {
               </div>
             </div>
 
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-4">
+              {isScanning && (
+                <Button
+                  onClick={handleStopScan}
+                  variant="destructive"
+                  size="lg"
+                >
+                  <X className="mr-2 h-4 w-4" /> Detener Escaneo
+                </Button>
+              )}
               <Button
                 onClick={handleStartScan}
                 disabled={isScanning || !selectedExchange || !selectedMarket}
