@@ -46,12 +46,13 @@ class BacktestService:
 
         for strat_name in strategies:
             try:
-                model_dir_specific = os.path.join(self.models_dir, market_type.lower())
-                model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl")
+                # Cargar modelo segmentado (o fallback a root) y normalizar rutas
+                model_dir_specific = os.path.normpath(os.path.join(self.models_dir, market_type.lower()))
+                model_path = os.path.normpath(os.path.join(model_dir_specific, f"{strat_name}.pkl"))
 
                 if not os.path.exists(model_path):
                     # Fallback: Check root models dir
-                    model_path_root = os.path.join(self.models_dir, f"{strat_name}.pkl")
+                    model_path_root = os.path.normpath(os.path.join(self.models_dir, f"{strat_name}.pkl"))
                     if os.path.exists(model_path_root):
                         model_path = model_path_root
                     else:
@@ -157,13 +158,13 @@ class BacktestService:
             try:
                 self.logger.info(f"🧪 Testing strategy: {strat_name} ({market_type})")
                 
-                # Cargar modelo segmentado (o fallback a root)
-                model_dir_specific = os.path.join(self.models_dir, market_type.lower())
-                model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl")
+                # Cargar modelo segmentado (o fallback a root) y normalizar rutas
+                model_dir_specific = os.path.normpath(os.path.join(self.models_dir, market_type.lower()))
+                model_path = os.path.normpath(os.path.join(model_dir_specific, f"{strat_name}.pkl"))
                 
                 if not os.path.exists(model_path):
                     # Fallback: Check root models dir
-                    model_path_root = os.path.join(self.models_dir, f"{strat_name}.pkl")
+                    model_path_root = os.path.normpath(os.path.join(self.models_dir, f"{strat_name}.pkl"))
                     if os.path.exists(model_path_root):
                         model_path = model_path_root
                         self.logger.info(f"Using root model for {strat_name}")
