@@ -46,9 +46,8 @@ class BacktestService:
 
         for strat_name in strategies:
             try:
-                # Cargar modelo segmentado (o fallback a root) y normalizar rutas
-                model_dir_specific = os.path.normpath(os.path.join(self.models_dir, market_type.lower()))
-                model_path = os.path.normpath(os.path.join(model_dir_specific, f"{strat_name}.pkl"))
+                model_dir_specific = os.path.join(self.models_dir, market_type.lower()).replace('\\', '/')
+                model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl").replace('\\', '/')
 
                 if not os.path.exists(model_path):
                     # Fallback: Check root models dir
@@ -158,9 +157,9 @@ class BacktestService:
             try:
                 self.logger.info(f"🧪 Testing strategy: {strat_name} ({market_type})")
                 
-                # Cargar modelo segmentado (o fallback a root) y normalizar rutas
-                model_dir_specific = os.path.normpath(os.path.join(self.models_dir, market_type.lower()))
-                model_path = os.path.normpath(os.path.join(model_dir_specific, f"{strat_name}.pkl"))
+                # Cargar modelo segmentado (o fallback a root)
+                model_dir_specific = os.path.join(self.models_dir, market_type.lower()).replace('\\', '/')
+                model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl").replace('\\', '/')
                 
                 if not os.path.exists(model_path):
                     # Fallback: Check root models dir

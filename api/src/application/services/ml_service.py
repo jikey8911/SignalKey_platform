@@ -195,8 +195,8 @@ class MLService:
         for strat_name in target_strategies:
             try:
                 # Fallback path logic
-                model_dir_specific = os.path.join(self.models_dir, market_type.lower())
-                model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl")
+                model_dir_specific = os.path.join(self.models_dir, market_type.lower()).replace('\\', '/')
+                model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl").replace('\\', '/')
                 
                 if not os.path.exists(model_path):
                      # Check root
@@ -263,8 +263,8 @@ class MLService:
         
         for strat in strategies:
             # Check specific then root
-            model_path_specific = os.path.join(self.models_dir, market_type.lower(), f"{strat}.pkl")
-            model_path_root = os.path.join(self.models_dir, f"{strat}.pkl")
+            model_path_specific = os.path.join(self.models_dir, market_type.lower(), f"{strat}.pkl").replace('\\', '/')
+            model_path_root = os.path.join(self.models_dir, f"{strat}.pkl").replace('\\', '/')
             
             model_path = model_path_specific
             is_trained = os.path.exists(model_path)
