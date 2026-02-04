@@ -33,6 +33,7 @@ class BatchTrainRequest(BaseModel):
 class PredictRequest(BaseModel):
     symbol: str
     timeframe: str = "1h"
+    market: str = "spot"
     candles: list[dict] # [ {'timestamp':..., 'open':..., 'close':...}, ... ]
 
 @router.post("/train")
@@ -56,6 +57,7 @@ async def train_all_strategies_endpoint(request: BatchTrainRequest, background_t
             request.symbols, 
             request.timeframe, 
             request.days,
+            request.market,
             request.user_id
         )
         logging.info(f"✅ Background task added for User: {request.user_id} - Symbols: {request.symbols}")
@@ -69,6 +71,7 @@ async def train_all_strategies_endpoint(request: BatchTrainRequest, background_t
             request.symbols, 
             request.timeframe, 
             request.days,
+            request.market,
             request.user_id
         )
         return {"status": "started (fallback)", "message": f"Training started (fallback)"}
@@ -114,7 +117,7 @@ async def predict_strategy(request: PredictRequest):
         
         # Predict uses local models, no exchange call needed really, but service needs init
         service = MLService(exchange_adapter=CEXService())
-        result = service.predict(request.symbol, request.timeframe, request.candles)
+        result = service.predict(request.symbol, request.timeframe, request.candles, market_type=request.market)
         return result
     except Exception as e:
         logger.error(f"Error predicting strategy: {e}")

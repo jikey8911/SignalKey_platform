@@ -26,12 +26,12 @@ class BacktestService:
         from api.src.application.services.ml_service import MLService
         self.ml_service = MLService(exchange_adapter=self.exchange)
 
-    async def select_best_model(self, symbol: str, timeframe: str) -> Dict[str, Any]:
+    async def select_best_model(self, symbol: str, timeframe: str, market_type: str = "spot") -> Dict[str, Any]:
         """
         Evalúa todos los modelos agnósticos y recomienda el mejor para un activo,
         utilizando exclusivamente el contrato de features de la estrategia.
         """
-        self.logger.info(f"Iniciando validación técnica para {symbol}...")
+        self.logger.info(f"Iniciando validación técnica para {symbol} ({market_type})...")
         
         # 1. Obtener datos históricos del exchange
         df = await self.exchange.get_historical_data(symbol, timeframe)
@@ -43,9 +43,10 @@ class BacktestService:
         best_strat = None
 
         results = []
+
         for strat_name in strategies:
             try:
-                model_path = os.path.join(self.models_dir, f"{strat_name}.pkl")
+                model_path = os.path.join(self.models_dir, market_type, f"{strat_name}.pkl")
                 if not os.path.exists(model_path):
                     continue
                 
@@ -109,6 +110,7 @@ class BacktestService:
         symbol: str, 
         days: int = 7, 
         timeframe: str = "1h", 
+        market_type: str = "spot",
         use_ai: bool = True,
         user_config: Dict = None,
         strategy: str = "auto",
@@ -146,10 +148,10 @@ class BacktestService:
         # 3. Ejecutar simulación para cada estrategia
         for strat_name in strategies_to_test:
             try:
-                self.logger.info(f"🧪 Testing strategy: {strat_name}")
+                self.logger.info(f"🧪 Testing strategy: {strat_name} ({market_type})")
                 
-                # Cargar modelo y clase de estrategia una sola vez por estrategia
-                model_path = os.path.join(self.models_dir, f"{strat_name}.pkl")
+                # Cargar modelo segmentado
+                model_path = os.path.join(self.models_dir, market_type, f"{strat_name}.pkl")
                 if not os.path.exists(model_path):
                     self.logger.warning(f"⏩ Skipping {strat_name}: No .pkl model found.")
                     continue
@@ -319,11 +321,9 @@ class BacktestService:
             raise ValueError(f"No se pudieron obtener datos para {symbol}")
         return df
 
-    def _simulate_with_reversal(self, df_processed, initial_balance=1000.0, trade_amount=None, tp=0.03, sl=0.02):
+    def _simulate_with_reversal(self, df_processed, initial_balance=1000.0, trade_amount=None, **kwargs):
         """
-        Tarea 9.1: Lógica de Inversión / Flip (S9).
-        Anteriormente _simulate_event_driven.
-        Si la IA detecta cambio de tendencia, cierra y reversa.
+        Simulación de Backtesting sin SL/TP, puramente impulsada por flipping (Long/Short).
         """
         balance = initial_balance
         step_investment = trade_amount or (initial_balance * 0.2)
@@ -337,250 +337,78 @@ class BacktestService:
         win_count = 0
         loss_count = 0
         
-        previous_signal = None
-        active_trading = False
-        
         from api.src.domain.strategies.base import BaseStrategy
 
         for timestamp, row in df_processed.iterrows():
             price = row['close']
             signal = row['ai_signal']
             
-            # --- Logic: Wait for First Flip ---
-            if previous_signal is None:
-                previous_signal = signal
-                continue 
-
-            if not active_trading:
-                if signal != previous_signal:
-                    active_trading = True 
-                else:
-                    previous_signal = signal
-                    continue 
-            
-            previous_signal = signal
-            
-            # --- Task 6.1: Validación de Mechas (High/Low) - Pessimistic Approach ---
-            # 1. Chequeo para LONGs
-            if long_amount > 0:
-                avg_price = long_invested / long_amount
-                
-                # Check Stop Loss FIRST (Pessimistic: Assume we hit SL before TP if both in range)
-                if row['low'] <= avg_price * (1 - sl):
-                    exit_price = avg_price * (1 - sl)
-                    pnl = (long_amount * exit_price) - long_invested
-                    balance += (long_amount * exit_price)
-                    pnl_percent = (pnl / long_invested * 100)
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "SELL",
-                        "price": exit_price,
-                        "amount": long_amount,
-                        "pnl": round(pnl, 2),
-                        "pnl_percent": round(pnl_percent, 2),
-                        "avg_price": round(avg_price, 2),
-                        "label": "SL_HIT_LONG"
-                    })
-                    if pnl > 0: win_count += 1
-                    else: loss_count += 1
-                    long_amount = 0
-                    long_invested = 0
-                    continue 
-
-                # Take Profit (Sell at High)
-                if row['high'] >= avg_price * (1 + tp):
-                    exit_price = avg_price * (1 + tp)
-                    pnl = (long_amount * exit_price) - long_invested
-                    balance += (long_amount * exit_price)
-                    pnl_percent = (pnl / long_invested * 100)
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "SELL",
-                        "price": exit_price,
-                        "amount": long_amount,
-                        "pnl": round(pnl, 2),
-                        "pnl_percent": round(pnl_percent, 2),
-                        "avg_price": round(avg_price, 2),
-                        "label": "TP_HIT_LONG"
-                    })
-                    if pnl > 0: win_count += 1
-                    else: loss_count += 1
-                    long_amount = 0
-                    long_invested = 0
-                    continue 
-            
-            # 2. Chequeo para SHORTS
-            if short_amount > 0:
-                avg_price = short_invested / short_amount
-                
-                # Check Stop Loss FIRST (Buy at High)
-                if row['high'] >= avg_price * (1 + sl):
-                    exit_price = avg_price * (1 + sl)
-                    pnl = short_invested - (short_amount * exit_price)
-                    balance += short_invested + pnl
-                    pnl_percent = (pnl / short_invested * 100)
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "BUY",
-                        "price": exit_price,
-                        "amount": short_amount,
-                        "pnl": round(pnl, 2),
-                        "pnl_percent": round(pnl_percent, 2),
-                        "avg_price": round(avg_price, 2),
-                        "label": "SL_HIT_SHORT"
-                    })
-                    if pnl > 0: win_count += 1
-                    else: loss_count += 1
-                    short_amount = 0
-                    short_invested = 0
-                    continue
-
-                # Take Profit (Buy at Low)
-                if row['low'] <= avg_price * (1 - tp):
-                    exit_price = avg_price * (1 - tp)
-                    pnl = short_invested - (short_amount * exit_price)
-                    balance += short_invested + pnl
-                    pnl_percent = (pnl / short_invested * 100)
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "BUY",
-                        "price": exit_price,
-                        "amount": short_amount,
-                        "pnl": round(pnl, 2),
-                        "pnl_percent": round(pnl_percent, 2),
-                        "avg_price": round(avg_price, 2),
-                        "label": "TP_HIT_SHORT"
-                    })
-                    if pnl > 0: win_count += 1
-                    else: loss_count += 1
-                    short_amount = 0
-                    short_invested = 0
-                    continue
-
-            # --- Trading Logic (DCA & Market Flip) ---
+            # --- Lógica de Inversión (Market Flip) ---
             if signal == BaseStrategy.SIGNAL_BUY: 
                 # Check for FLIP (Short -> Long)
                 if short_amount > 0:
-                    # 1. Close Short (Flip Side A)
                     pnl = short_invested - (short_amount * price)
                     balance += short_invested + pnl
-                    avg_entry_price = short_invested / short_amount
-                    pnl_percent = (pnl / short_invested * 100)
-                    
                     trades.append({
                         "time": timestamp.isoformat(),
                         "type": "BUY",
                         "price": price,
                         "amount": short_amount,
                         "pnl": round(pnl, 2),
-                        "pnl_percent": round(pnl_percent, 2),
-                        "avg_price": round(avg_entry_price, 2),
-                        "label": "FLIP_CLOSE_SHORT" # Etiqueta específica para Flip
+                        "label": "FLIP_CLOSE_SHORT"
                     })
                     if pnl > 0: win_count += 1
                     else: loss_count += 1
+                    short_amount, short_invested = 0, 0
                     
-                    short_amount = 0
-                    short_invested = 0
-                    
-                    # 2. Immediate Open Long (Flip Side B - Atomic Reversal)
-                    # El Flip implica estar posicionado en Long inmediatamente
+                    # Reversal
                     if balance >= step_investment:
                         amount_to_buy = step_investment / price
-                        long_amount += amount_to_buy
-                        long_invested += step_investment
+                        long_amount, long_invested = amount_to_buy, step_investment
                         balance -= step_investment
-                        
-                        trades.append({
-                            "time": timestamp.isoformat(),
-                            "type": "BUY",
-                            "price": price,
-                            "amount": amount_to_buy,
-                            "avg_price": round(price, 2),
-                            "label": "FLIP_OPEN_LONG" # Etiqueta específica para Flip
-                        })
+                        trades.append({"time": timestamp.isoformat(), "type": "BUY", "price": price, "amount": amount_to_buy, "label": "FLIP_OPEN_LONG"})
                 
-                # Normal Long (Open or DCA) if not a Flip (or if balance allowed flipping)
+                # Entry/DCA
                 elif balance >= step_investment:
-                     # Si ya era Long, es DCA. Si no tenía nada, es Open Normal.
                     is_dca = long_amount > 0
                     amount_to_buy = step_investment / price
                     long_amount += amount_to_buy
                     long_invested += step_investment
                     balance -= step_investment
-                    avg_entry = long_invested / long_amount
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "BUY",
-                        "price": price,
-                        "amount": amount_to_buy,
-                        "avg_price": round(avg_entry, 2),
-                        "label": "DCA_LONG" if is_dca else "OPEN_LONG"
-                    })
+                    trades.append({"time": timestamp.isoformat(), "type": "BUY", "price": price, "amount": amount_to_buy, "label": "DCA_LONG" if is_dca else "OPEN_LONG"})
                     
             elif signal == BaseStrategy.SIGNAL_SELL: 
                 # Check for FLIP (Long -> Short)
                 if long_amount > 0:
-                    # 1. Close Long (Flip Side A)
                     pnl = (long_amount * price) - long_invested
                     balance += (long_amount * price)
-                    avg_entry_price = long_invested / long_amount
-                    pnl_percent = (pnl / long_invested * 100)
-                    
                     trades.append({
                         "time": timestamp.isoformat(),
                         "type": "SELL",
                         "price": price,
                         "amount": long_amount,
                         "pnl": round(pnl, 2),
-                        "pnl_percent": round(pnl_percent, 2),
-                        "avg_price": round(avg_entry_price, 2),
-                        "label": "FLIP_CLOSE_LONG" # Etiqueta específica para Flip
+                        "label": "FLIP_CLOSE_LONG"
                     })
                     if pnl > 0: win_count += 1
                     else: loss_count += 1
+                    long_amount, long_invested = 0, 0
                     
-                    long_amount = 0
-                    long_invested = 0
-                    
-                    # 2. Immediate Open Short (Flip Side B - Atomic Reversal)
+                    # Reversal
                     if balance >= step_investment:
                         amount_to_short = step_investment / price
-                        short_amount += amount_to_short
-                        short_invested += step_investment
+                        short_amount, short_invested = amount_to_short, step_investment
                         balance -= step_investment
+                        trades.append({"time": timestamp.isoformat(), "type": "SELL", "price": price, "amount": amount_to_short, "label": "FLIP_OPEN_SHORT"})
                         
-                        trades.append({
-                            "time": timestamp.isoformat(),
-                            "type": "SELL",
-                            "price": price,
-                            "amount": amount_to_short,
-                            "avg_price": round(price, 2),
-                            "label": "FLIP_OPEN_SHORT" # Etiqueta específica para Flip
-                        })
-                        
-                # Normal Short (Open or DCA) if not a Flip
+                # Entry/DCA
                 elif balance >= step_investment:
                     is_dca = short_amount > 0
                     amount_to_short = step_investment / price
                     short_amount += amount_to_short
                     short_invested += step_investment
                     balance -= step_investment
-                    avg_entry = short_invested / short_amount
-                    
-                    trades.append({
-                        "time": timestamp.isoformat(),
-                        "type": "SELL",
-                        "price": price,
-                        "amount": amount_to_short,
-                        "avg_price": round(avg_entry, 2),
-                        "label": "DCA_SHORT" if is_dca else "OPEN_SHORT"
-                    })
+                    trades.append({"time": timestamp.isoformat(), "type": "SELL", "price": price, "amount": amount_to_short, "label": "DCA_SHORT" if is_dca else "OPEN_SHORT"})
 
         # Calculate Final Stats
         final_balance = balance
@@ -624,24 +452,29 @@ class BacktestService:
         avg_price = 0.0
         in_pos = False
         
-        # Iteramos para reconstruir el estado que el modelo espera ver
-        # Esto es crucial para que Random Forest no falle por falta de dimensiones
+        # Iteramos para reconstruir el estado que el modelo espera ver (Long/Short flipping)
+        current_side = None
+
         for i in range(1, len(df)):
-            # 1. Actualizar estado basado en la señal de la vela anterior
             prev_signal = df.iloc[i-1].get('signal')
 
-            if not in_pos and prev_signal == BaseStrategy.SIGNAL_BUY:
+            # Cambio de dirección (Flip)
+            if prev_signal == BaseStrategy.SIGNAL_BUY:
                 in_pos = True
+                current_side = "BUY"
                 avg_price = df.iloc[i]['close']
-            elif in_pos and prev_signal == BaseStrategy.SIGNAL_SELL:
-                in_pos = False
-                avg_price = 0.0
+            elif prev_signal == BaseStrategy.SIGNAL_SELL:
+                in_pos = True
+                current_side = "SELL"
+                avg_price = df.iloc[i]['close']
 
-            # 2. Aplicar estado a la vela actual
             if in_pos:
                 df.at[df.index[i], 'in_position'] = 1
                 current_price = df.iloc[i]['close']
                 if avg_price > 0:
-                    df.at[df.index[i], 'current_pnl'] = (current_price - avg_price) / avg_price
+                    if current_side == "BUY":
+                        df.at[df.index[i], 'current_pnl'] = (current_price - avg_price) / avg_price
+                    else:
+                        df.at[df.index[i], 'current_pnl'] = (avg_price - current_price) / avg_price
                     
         return df

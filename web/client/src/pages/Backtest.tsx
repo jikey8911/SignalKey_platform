@@ -182,6 +182,7 @@ export default function Backtest() {
             exchange_id: selectedExchange,
             days: days.toString(),
             timeframe: timeframe,
+            market_type: selectedMarket, // Usamos el mercado seleccionado (spot/futures)
             initial_balance: initialBalance.toString(),
             trade_amount: tradeAmount.toString()
           }), {
@@ -368,6 +369,7 @@ export default function Backtest() {
           exchange_id: selectedExchange || 'binance',
           days: days.toString(),
           timeframe: timeframe,
+          market_type: selectedMarket,
           initial_balance: initialBalance.toString(),
           trade_amount: tradeAmount.toString()
         }),
