@@ -987,13 +987,13 @@ export default function Backtest() {
                   <table className="w-full text-sm">
                     <thead className="border-b border-border text-xs uppercase text-muted-foreground">
                       <tr>
-                        <th className="text-left py-2 px-4 font-bold">Tipo</th>
-                        <th className="text-left py-2 px-4 font-bold">Acción</th>
-                        <th className="text-right py-2 px-4 font-bold">Cantidad</th>
-                        <th className="text-right py-2 px-4 font-bold">Precio Ejecución</th>
-                        <th className="text-right py-2 px-4 font-bold">Precio Entrada</th>
-                        <th className="text-right py-2 px-4 font-bold">Hora</th>
-                        <th className="text-right py-2 px-4 font-bold">Profit</th>
+                        <th className="text-left py-2 px-4 font-semibold">Tipo</th>
+                        <th className="text-left py-2 px-4 font-semibold">Acción</th>
+                        <th className="text-right py-2 px-4 font-semibold">Cantidad</th>
+                        <th className="text-right py-2 px-4 font-semibold">Precio Ejecución</th>
+                        <th className="text-right py-2 px-4 font-semibold">Precio Entrada</th>
+                        <th className="text-right py-2 px-4 font-semibold">Hora</th>
+                        <th className="text-right py-2 px-4 font-semibold">Profit</th>
                       </tr>
                     </thead>
                     <tbody>

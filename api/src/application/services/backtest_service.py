@@ -34,7 +34,7 @@ class BacktestService:
         self.logger.info(f"Iniciando validación técnica para {symbol}...")
         
         # 1. Obtener datos históricos del exchange
-        df = await self.exchange.get_historical_data(symbol, timeframe, limit=1000)
+        df = await self.exchange.get_historical_data(symbol, timeframe)
         if df.empty:
             return {"error": "Fallo al obtener datos históricos para validación."}
 
@@ -116,7 +116,7 @@ class BacktestService:
         initial_balance: float = 10000.0,
         trade_amount: Optional[float] = None,
         tp: float = 0.03,
-        sl: float = 0.02
+        sl: float = 0.9
     ) -> Dict[str, Any]:
         """
         Ejecuta un Backtest Tournament: evalúa todas las estrategias y devuelve 

@@ -190,7 +190,16 @@
       /* 32px - desktop padding */
       padding-right: 2rem;
       max-width: 1280px;
-      /* Standard content width */
     }
   }
+}
+
+@layer base {
+  th {
+    font-weight: 600;
+  }
+}
+
+.font-semibold {
+  font-weight: 600;
 }
