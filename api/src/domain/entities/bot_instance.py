@@ -17,7 +17,9 @@ class BotInstance:
     mode: str = "simulated"  # "simulated" o "real"
     status: str = "paused"   # "active" o "paused" (Persistido en DB para resiliencia)
     config: Dict = field(default_factory=dict) # Parametros especificos de la estrategia
+    position: Dict = field(default_factory=dict) # Estado de la posición actual
     created_at: datetime = field(default_factory=datetime.now)
+    last_execution: Optional[datetime] = None
     last_signal_at: Optional[datetime] = None
     
     def to_dict(self):

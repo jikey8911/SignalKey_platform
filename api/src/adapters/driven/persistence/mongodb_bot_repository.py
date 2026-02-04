@@ -55,10 +55,18 @@ class MongoBotRepository:
     def _map_doc(self, doc) -> BotInstance:
         doc["id"] = str(doc["_id"])
         data = {k: v for k, v in doc.items() if k != "_id"}
+        
         # Manejo de fechas isoformat a datetime si es necesario
         if isinstance(data.get('created_at'), str):
             try:
                 data['created_at'] = datetime.fromisoformat(data['created_at'])
             except:
                 pass
-        return BotInstance(**data)
+                
+        # Robust Mapping: Filter fields that are not in BotInstance constructor
+        # This prevents crashes if DB has extra fields (e.g. from future versions or manual edits)
+        import inspect
+        valid_fields = inspect.signature(BotInstance).parameters
+        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
+        
+        return BotInstance(**filtered_data)

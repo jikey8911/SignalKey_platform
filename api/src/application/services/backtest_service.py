@@ -198,7 +198,8 @@ class BacktestService:
 
                 # Predicciones
                 # Ajustar features para incluir las nuevas columnas de contexto
-                model_features = features + ['current_pnl', 'in_position']
+                # OJO: El orden debe ser EXACTAMENTE el mismo que en StrategyTrainer
+                model_features = features + ['in_position', 'current_pnl']
                 
                 # Validar que existan todas las columnas
                 valid_idx = df_processed[model_features].dropna().index
