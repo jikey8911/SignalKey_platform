@@ -128,10 +128,14 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
                 color: t.side === 'BUY' ? '#2196F3' : '#FF9800',
                 shape: t.side === 'BUY' ? 'arrowUp' : 'arrowDown',
                 text: t.side === 'BUY' ? (t.label || 'BUY') : (t.label || 'SELL'),
+                size: 2, // Ensure visibility
             }));
 
             // Sort markers by time
             markers.sort((a, b) => (a.time as number) - (b.time as number));
+
+            console.log("Setting Markers:", markers.length, "First:", markers[0]);
+
             if (typeof (seriesRef.current as any).setMarkers === 'function') {
                 (seriesRef.current as any).setMarkers(markers);
             }

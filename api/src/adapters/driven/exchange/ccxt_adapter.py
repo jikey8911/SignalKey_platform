@@ -617,6 +617,41 @@ class CcxtAdapter(IExchangePort):
             logger.error(f"Error fetching markets temp for {exchange_id}: {e}")
             return {}
 
+    async def test_connection_private(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None) -> bool:
+        """
+        Tests connection with provided credentials.
+        """
+        exchange_id = exchange_id.lower()
+        client = None
+        try:
+            exchange_class = getattr(ccxt, exchange_id)
+            config = {
+                'apiKey': api_key,
+                'secret': secret,
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'}
+            }
+            if password:
+                config['password'] = password
+            if uid: 
+                 config['uid'] = uid
+            
+            client = exchange_class(config)
+            
+            # Windows DNS Fix
+            session = self._create_custom_session()
+            if session: client.session = session
+            
+            # Try a private endpoint (fetch_balance is usually good)
+            await client.fetch_balance()
+            return True
+        except Exception as e:
+            logger.error(f"Test connection failed for {exchange_id}: {e}")
+            return False
+        finally:
+             if client:
+                 await client.close()
+
     async def fetch_balance_private(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None) -> Dict[str, Any]:
         """
         Fetches balance using provided credentials directly (without persistent user referencing).

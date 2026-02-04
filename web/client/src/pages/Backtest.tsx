@@ -75,6 +75,20 @@ interface Symbol {
   volume: number;
 }
 
+// TradingView Chart Wrapper for Backtest
+const BacktestChart = ({ candles, trades }: { candles: Candle[]; trades: Trade[] }) => (
+  <TradingViewChart
+    data={candles}
+    trades={trades.map(t => ({
+      time: t.time,
+      price: t.price,
+      side: t.side,
+      label: t.label
+    }))}
+    height={400}
+  />
+);
+
 export default function Backtest() {
   const { user } = useAuth();
 
@@ -390,9 +404,17 @@ export default function Backtest() {
 
       const data = await response.json();
 
+      // Robust time normalization helper
+      const normalizeTime = (t: any): number => {
+        if (typeof t === 'string') return new Date(t).getTime();
+        // If less than 20000000000 (year 2603), it's likely seconds, convert to MS
+        if (typeof t === 'number' && t < 20000000000) return t * 1000;
+        return t; // Already MS
+      };
+
       // Transformar datos del backend al formato del frontend
       const transformedTrades: Trade[] = data.trades?.map((t: any) => ({
-        time: (typeof t.time === 'string' ? new Date(t.time).getTime() : t.time * 1000),
+        time: normalizeTime(t.time),
         price: t.price,
         side: t.type as 'BUY' | 'SELL',
         profit: t.pnl,
@@ -402,25 +424,21 @@ export default function Backtest() {
         pnl_percent: t.pnl_percent
       })) || [];
 
-      // Sort trades: Newest first (Descending)
+      // Sort trades: Newest first (Descending) for Table
       // Tie-breaker: OPEN/DCA events are "Newer" than CLOSE events in the same tick.
       transformedTrades.sort((a, b) => {
         if (b.time !== a.time) {
           return b.time - a.time;
         }
-        // Same time: Determine sequence
-        // We want [OPEN, CLOSE] order in the table (Top to Bottom)
-        // implying OPEN is newer than CLOSE.
         const isCloseA = a.label?.includes('CLOSE') || false;
         const isCloseB = b.label?.includes('CLOSE') || false;
-
-        if (isCloseA && !isCloseB) return 1; // A (Close) is Older -> Move down (Positive index)
-        if (!isCloseA && isCloseB) return -1; // B (Close) is Older -> Move down
+        if (isCloseA && !isCloseB) return 1;
+        if (!isCloseA && isCloseB) return -1;
         return 0;
       });
 
       const candles: Candle[] = data.chart_data?.map((c: any) => ({
-        time: c.time * 1000,
+        time: normalizeTime(c.time),
         open: c.open,
         high: c.high,
         low: c.low,
@@ -498,20 +516,6 @@ export default function Backtest() {
       setPanIndex(newPan);
     }
   };
-
-  // TradingView Chart Wrapper for Backtest
-  const BacktestChart = ({ candles, trades }: { candles: Candle[]; trades: Trade[] }) => (
-    <TradingViewChart
-      data={candles}
-      trades={trades.map(t => ({
-        time: t.time,
-        price: t.price,
-        side: t.side,
-        label: t.label
-      }))}
-      height={400}
-    />
-  );
 
   return (
     <div className="p-6 space-y-6">
@@ -1266,3 +1270,5 @@ export default function Backtest() {
     </div>
   );
 }
+
+

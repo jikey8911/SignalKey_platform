@@ -143,10 +143,25 @@ class BacktestService:
             self.logger.error(f"Error fetching data: {e}")
             raise ValueError(f"No se pudieron obtener datos para {symbol}: {e}")
 
-        # 2. Descubrir estrategias a evaluar
-        strategies_to_test = self.trainer.discover_strategies(market_type)
+        # 2. Descubrir estrategias (Dynamic Discovery from Models Directory)
+        # El usuario solicita usar los modelos que YA existen en api/data/models/[market]
+        model_dir_specific = os.path.normpath(os.path.join(self.models_dir, market_type.lower()))
+        
+        if not os.path.exists(model_dir_specific):
+             self.logger.warning(f"No model directory found for {market_type} at {model_dir_specific}")
+             strategies_to_test = []
+        else:
+             strategies_to_test = [f[:-4] for f in os.listdir(model_dir_specific) if f.endswith(".pkl")]
+             
+        self.logger.info(f"Available models for backtest in {market_type}: {strategies_to_test}")
+
         if not strategies_to_test:
-            raise ValueError(f"No hay estrategias disponibles para el mercado {market_type}.")
+            # Fallback to trainer discovery if models dir is empty (maybe models are in root?)
+            self.logger.info("No compiled models found, attempting to discover from source code...")
+            strategies_to_test = self.trainer.discover_strategies(market_type)
+        
+        if not strategies_to_test:
+            raise ValueError(f"No hay estrategias disponibles para el mercado {market_type} (Ni modelos .pkl ni código fuente).")
 
         tournament_results = []
         best_strategy_data = None
@@ -359,7 +374,7 @@ class BacktestService:
                     pnl = short_invested - (short_amount * price)
                     balance += short_invested + pnl
                     trades.append({
-                        "time": timestamp.isoformat(),
+                        "time": int(timestamp.timestamp()),
                         "type": "BUY",
                         "price": price,
                         "amount": short_amount,
@@ -375,7 +390,7 @@ class BacktestService:
                         amount_to_buy = step_investment / price
                         long_amount, long_invested = amount_to_buy, step_investment
                         balance -= step_investment
-                        trades.append({"time": timestamp.isoformat(), "type": "BUY", "price": price, "amount": amount_to_buy, "label": "FLIP_OPEN_LONG"})
+                        trades.append({"time": int(timestamp.timestamp()), "type": "BUY", "price": price, "amount": amount_to_buy, "label": "FLIP_OPEN_LONG"})
                 
                 # Entry/DCA
                 elif balance >= step_investment:
@@ -384,7 +399,7 @@ class BacktestService:
                     long_amount += amount_to_buy
                     long_invested += step_investment
                     balance -= step_investment
-                    trades.append({"time": timestamp.isoformat(), "type": "BUY", "price": price, "amount": amount_to_buy, "label": "DCA_LONG" if is_dca else "OPEN_LONG"})
+                    trades.append({"time": int(timestamp.timestamp()), "type": "BUY", "price": price, "amount": amount_to_buy, "label": "DCA_LONG" if is_dca else "OPEN_LONG"})
                     
             elif signal == BaseStrategy.SIGNAL_SELL: 
                 # Check for FLIP (Long -> Short)
@@ -392,7 +407,7 @@ class BacktestService:
                     pnl = (long_amount * price) - long_invested
                     balance += (long_amount * price)
                     trades.append({
-                        "time": timestamp.isoformat(),
+                        "time": int(timestamp.timestamp()),
                         "type": "SELL",
                         "price": price,
                         "amount": long_amount,
@@ -408,7 +423,7 @@ class BacktestService:
                         amount_to_short = step_investment / price
                         short_amount, short_invested = amount_to_short, step_investment
                         balance -= step_investment
-                        trades.append({"time": timestamp.isoformat(), "type": "SELL", "price": price, "amount": amount_to_short, "label": "FLIP_OPEN_SHORT"})
+                        trades.append({"time": int(timestamp.timestamp()), "type": "SELL", "price": price, "amount": amount_to_short, "label": "FLIP_OPEN_SHORT"})
                         
                 # Entry/DCA
                 elif balance >= step_investment:
@@ -417,7 +432,7 @@ class BacktestService:
                     short_amount += amount_to_short
                     short_invested += step_investment
                     balance -= step_investment
-                    trades.append({"time": timestamp.isoformat(), "type": "SELL", "price": price, "amount": amount_to_short, "label": "DCA_SHORT" if is_dca else "OPEN_SHORT"})
+                    trades.append({"time": int(timestamp.timestamp()), "type": "SELL", "price": price, "amount": amount_to_short, "label": "DCA_SHORT" if is_dca else "OPEN_SHORT"})
 
         # Calculate Final Stats
         final_balance = balance

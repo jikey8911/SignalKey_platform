@@ -14,7 +14,7 @@ from api.src.adapters.driven.exchange.ccxt_adapter import CcxtAdapter
 logging.basicConfig(level=logging.INFO)
 
 async def train():
-    print("🚀 Starting manual training...")
+    print("Starting manual training...")
     try:
         adapter = CcxtAdapter()
         service = MLService(exchange_adapter=adapter)
@@ -22,10 +22,11 @@ async def train():
         symbols = ["BTC/USDT", "ETH/USDT"] 
         print(f"Symbols: {symbols}")
         
+        # Fixed argument: 'days' instead of 'days_back'
         await service.train_all_strategies(
             symbols=symbols,
             timeframe="1h",
-            days_back=20, 
+            days=5, 
             market_type="spot",
             user_id="default"
         )

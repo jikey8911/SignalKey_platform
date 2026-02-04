@@ -1,0 +1,26 @@
+INFO:api.src.adapters.driven.persistence.mongodb:MongoDB: Connecting to mongodb+srv://juank8911User:89N11ic%23.@jeikey.yep...
+E:\antigravity\signaalKei_platform\train_strategies_manual.py:40: DeprecationWarning: 'asyncio.WindowsSelectorEventLoopPolicy' is deprecated and slated for removal in Python 3.16
+  asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+E:\antigravity\signaalKei_platform\train_strategies_manual.py:40: DeprecationWarning: 'asyncio.set_event_loop_policy' is deprecated and slated for removal in Python 3.16
+  asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+Traceback (most recent call last):
+  File "E:\antigravity\signaalKei_platform\train_strategies_manual.py", line 41, in <module>
+    asyncio.run(train())
+    ~~~~~~~~~~~^^^^^^^^^
+  File "C:\Python314\Lib\asyncio\runners.py", line 204, in run
+    return runner.run(main)
+           ~~~~~~~~~~^^^^^^
+  File "C:\Python314\Lib\asyncio\runners.py", line 127, in run
+    return self._loop.run_until_complete(task)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "C:\Python314\Lib\asyncio\base_events.py", line 719, in run_until_complete
+    return future.result()
+           ~~~~~~~~~~~~~^^
+  File "E:\antigravity\signaalKei_platform\train_strategies_manual.py", line 17, in train
+    print("\U0001f680 Starting manual training...")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python314\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\U0001f680' in position 0: character maps to <undefined>
+CRITICAL ERROR: 'charmap' codec can't encode character '\U0001f680' in position 0: character maps to <undefined>

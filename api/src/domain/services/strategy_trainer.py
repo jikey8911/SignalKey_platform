@@ -107,9 +107,9 @@ class StrategyTrainer:
             
             strategy = StrategyClass()
             
-            msg_start = f"💎 [StrategyTrainer] Using Virtual Balance Validation for {strategy_name} (No Exchange Ops)"
+            msg_start = f"[StrategyTrainer] Using Virtual Balance Validation for {strategy_name} (No Exchange Ops)"
             print(msg_start)
-            if emit_callback: await emit_callback(f"🚀 Starting training for {strategy_name}...", "info")
+            if emit_callback: await emit_callback(f"Starting training for {strategy_name}...", "info")
 
             datasets = []
             for symbol, df in symbols_data.items():
@@ -121,7 +121,7 @@ class StrategyTrainer:
                     datasets.append(processed)
 
             if not datasets: 
-                msg = f"⚠️ [StrategyTrainer] No valid data found for {strategy_name}"
+                msg = f"[StrategyTrainer] No valid data found for {strategy_name}"
                 logger.warning(msg)
                 print(msg)
                 if emit_callback: await emit_callback(msg, "warning")
@@ -143,7 +143,7 @@ class StrategyTrainer:
             ml_features = base_features + ['in_position', 'current_pnl']
             
             if not ml_features:
-                 msg = f"❌ [StrategyTrainer] Strategy {strategy_name} returned empty features list."
+                 msg = f"[StrategyTrainer] Strategy {strategy_name} returned empty features list."
                  logger.error(msg)
                  if emit_callback: await emit_callback(msg, "error")
                  return False
@@ -151,7 +151,7 @@ class StrategyTrainer:
             # Verify features exist in dataset
             missing_cols = [c for c in ml_features if c not in full_dataset.columns]
             if missing_cols:
-                msg = f"❌ [StrategyTrainer] Missing features for {strategy_name}: {missing_cols}"
+                msg = f"[StrategyTrainer] Missing features for {strategy_name}: {missing_cols}"
                 logger.error(msg)
                 print(msg)
                 if emit_callback: await emit_callback(msg, "error")
@@ -161,7 +161,7 @@ class StrategyTrainer:
             y = full_dataset['signal']
 
             # Entrenamiento del clasificador con mayor profundidad para captar las reglas de PnL
-            msg_train = f"🧠 [StrategyTrainer] Training {strategy_name} on {len(X)} samples with features: {ml_features}..."
+            msg_train = f"[StrategyTrainer] Training {strategy_name} on {len(X)} samples with features: {ml_features}..."
             print(msg_train)
             if emit_callback: await emit_callback(msg_train, "info")
             
@@ -176,29 +176,29 @@ class StrategyTrainer:
             joblib.dump(model, model_file)
             
             logger.info(f"Modelo {strategy_name}.pkl generado exitosamente.")
-            msg_success = f"✅ [StrategyTrainer] Saved model: {strategy_name}.pkl"
+            msg_success = f"[StrategyTrainer] Saved model: {strategy_name}.pkl"
             print(msg_success)
             if emit_callback: await emit_callback(msg_success, "success")
             
             return True
         except Exception as e:
             logger.error(f"Error en entrenamiento de {strategy_name}: {e}")
-            print(f"❌ [StrategyTrainer] Error training {strategy_name}: {e}")
+            print(f"[StrategyTrainer] Error training {strategy_name}: {e}")
             if emit_callback: await emit_callback(f"Error training {strategy_name}: {e}", "error")
             return False
 
     async def train_all(self, symbols_data: Dict[str, pd.DataFrame], market_type: str = "spot", emit_callback=None):
         """Entrena todas las estrategias disponibles."""
         strategies = self.discover_strategies(market_type)
-        print(f"📋 [StrategyTrainer] Found {len(strategies)} strategies to train for {market_type}: {strategies}")
-        if emit_callback: await emit_callback(f"📋 Found {len(strategies)} strategies for {market_type}", "info")
+        print(f"[StrategyTrainer] Found {len(strategies)} strategies to train for {market_type}: {strategies}")
+        if emit_callback: await emit_callback(f"Found {len(strategies)} strategies for {market_type}", "info")
         
         results = {}
         for strat in strategies:
             success = await self.train_agnostic_model(strat, symbols_data, market_type, emit_callback)
             results[strat] = "Success" if success else "Failed"
-        print(f"🏁 [StrategyTrainer] Training complete. Results: {results}")
-        if emit_callback: await emit_callback("🏁 Training complete", "success")
+        print(f"[StrategyTrainer] Training complete. Results: {results}")
+        if emit_callback: await emit_callback("Training complete", "success")
         return results
 
     def _inject_position_context(self, df: pd.DataFrame) -> pd.DataFrame:
