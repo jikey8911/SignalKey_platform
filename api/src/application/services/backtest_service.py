@@ -1,6 +1,7 @@
 import os
 import joblib
 import pandas as pd
+import numpy as np
 import logging
 import importlib
 from typing import Dict, Any, List, Optional
@@ -51,7 +52,7 @@ class BacktestService:
 
                 if not os.path.exists(model_path):
                     # Fallback: Check root models dir
-                    model_path_root = os.path.join(self.models_dir, f"{strat_name}.pkl")
+                    model_path_root = os.path.join(self.models_dir, f"{strat_name}.pkl").replace('\\', '/')
                     if os.path.exists(model_path_root):
                         model_path = model_path_root
                     else:
@@ -161,9 +162,8 @@ class BacktestService:
                 model_dir_specific = os.path.join(self.models_dir, market_type.lower()).replace('\\', '/')
                 model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl").replace('\\', '/')
                 
-                if not os.path.exists(model_path):
                     # Fallback: Check root models dir
-                    model_path_root = os.path.join(self.models_dir, f"{strat_name}.pkl")
+                    model_path_root = os.path.join(self.models_dir, f"{strat_name}.pkl").replace('\\', '/')
                     if os.path.exists(model_path_root):
                         model_path = model_path_root
                         self.logger.info(f"Using root model for {strat_name}")
@@ -214,8 +214,14 @@ class BacktestService:
                 # OJO: El orden debe ser EXACTAMENTE el mismo que en StrategyTrainer
                 model_features = features + ['in_position', 'current_pnl']
                 
-                # Validar que existan todas las columnas
+                # Validar que existan todas las columnas y no haya infinitos
+                df_processed[model_features] = df_processed[model_features].replace([np.inf, -np.inf], np.nan)
                 valid_idx = df_processed[model_features].dropna().index
+
+                if valid_idx.empty:
+                    self.logger.warning(f"⏩ Skipping {strat_name}: No valid data after dropping NaNs/Infs.")
+                    continue
+
                 X = df_processed.loc[valid_idx, model_features]
                 df_processed.loc[valid_idx, 'ai_signal'] = model.predict(X)
                 df_processed['ai_signal'] = df_processed['ai_signal'].fillna(0)

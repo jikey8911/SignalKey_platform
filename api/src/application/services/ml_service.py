@@ -1,5 +1,6 @@
 import logging
 import pandas as pd
+import numpy as np
 import os
 import joblib
 import importlib
@@ -74,7 +75,7 @@ class MLService:
         Ejecuta un backtest simulado para una estrategia específica usando su .pkl si existe.
         Calcula PnL acumulado, tasa de acierto y número de operaciones.
         """
-        model_path = os.path.join(self.models_dir, market_type.lower(), f"{strategy_name}.pkl")
+        model_path = os.path.join(self.models_dir, market_type.lower(), f"{strategy_name}.pkl").replace('\\', '/')
         if not os.path.exists(model_path):
             return None
             
@@ -100,7 +101,8 @@ class MLService:
                     self.logger.warning(f"Strategy {strategy_name} missing features for {symbol}: {missing}")
                     continue
                 
-                # Use only rows where features are not NaN
+                # Use only rows where features are not NaN/Inf
+                processed[features] = processed[features].replace([np.inf, -np.inf], np.nan)
                 X = processed[features].dropna()
                 if X.empty: continue
                 
@@ -200,7 +202,7 @@ class MLService:
                 
                 if not os.path.exists(model_path):
                      # Check root
-                     model_path_root = os.path.join(self.models_dir, f"{strat_name}.pkl")
+                     model_path_root = os.path.join(self.models_dir, f"{strat_name}.pkl").replace('\\', '/')
                      if os.path.exists(model_path_root):
                          model_path = model_path_root
                      else:
@@ -229,7 +231,10 @@ class MLService:
                 
                 if df_features.empty or not all(c in df_features.columns for c in features): continue
                 
-                last_row = df_features.iloc[[-1]][features]
+                # Ensure no infs/nans in prediction row
+                last_row = df_features.iloc[[-1]][features].replace([np.inf, -np.inf], np.nan).dropna()
+                if last_row.empty: continue
+
                 pred = model.predict(last_row)[0]
                 
                 action = "HOLD"

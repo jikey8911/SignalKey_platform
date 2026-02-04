@@ -1,6 +1,7 @@
 import os
 import importlib
 import pandas as pd
+import numpy as np
 import joblib
 import logging
 from typing import Dict, List, Optional
@@ -49,7 +50,10 @@ class StrategyTrainer:
         return sorted(list(strategies))
 
     def load_strategy_class(self, strategy_name: str, market_type: str = None):
-        """Dynamic strategy class loading."""
+        """Dynamic strategy class loading by scanning for BaseStrategy subclasses."""
+        from api.src.domain.strategies.base import BaseStrategy
+        import inspect
+
         try:
             if market_type:
                 module_path = f"api.src.domain.strategies.{market_type.lower()}.{strategy_name}"
@@ -66,16 +70,21 @@ class StrategyTrainer:
                 else:
                     raise
             
-            # Try snake_case to PascalCase conversion first
-            class_name_pascal = "".join(w.title() for w in strategy_name.split("_"))
+            # Scan for any class that inherits from BaseStrategy
+            for name, obj in inspect.getmembers(module):
+                if inspect.isclass(obj) and issubclass(obj, BaseStrategy) and obj is not BaseStrategy:
+                    return obj
             
+            # If no class found via scan, try the legacy naming convention as fallback
+            class_name_pascal = "".join(w.title() for w in strategy_name.split("_"))
             if hasattr(module, class_name_pascal):
                 return getattr(module, class_name_pascal)
-            elif hasattr(module, strategy_name): # Fallback to filename as classname
+            elif hasattr(module, strategy_name):
                 return getattr(module, strategy_name)
-            else:
-                logger.error(f"Class {class_name_pascal} or {strategy_name} not found in {module_path}")
-                return None
+
+            logger.error(f"No BaseStrategy subclass found in {module_path}")
+            return None
+
         except Exception as e:
             logger.error(f"Error loading strategy {strategy_name}: {e}")
             return None
@@ -139,6 +148,16 @@ class StrategyTrainer:
                 msg = f"❌ [StrategyTrainer] Missing features for {strategy_name}: {missing_cols}"
                 logger.error(msg)
                 print(msg)
+                if emit_callback: await emit_callback(msg, "error")
+                return False
+
+            # Clean dataset from Infs/NaNs before training
+            full_dataset[ml_features] = full_dataset[ml_features].replace([np.inf, -np.inf], np.nan)
+            full_dataset = full_dataset.dropna(subset=ml_features + ['signal'])
+
+            if full_dataset.empty:
+                msg = f"❌ [StrategyTrainer] Dataset became empty after dropping NaNs/Infs for {strategy_name}."
+                logger.error(msg)
                 if emit_callback: await emit_callback(msg, "error")
                 return False
 
