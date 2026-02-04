@@ -154,10 +154,10 @@ class StrategyTrainer:
             model.fit(X, y)
 
             # Persistencia segmentada por mercado
-            market_dir = os.path.join(self.models_dir, market_type.lower())
+            market_dir = os.path.join(self.models_dir, market_type.lower()).replace('\\', '/')
             os.makedirs(market_dir, exist_ok=True)
 
-            model_file = os.path.join(market_dir, f"{strategy_name}.pkl")
+            model_file = os.path.join(market_dir, f"{strategy_name}.pkl").replace('\\', '/')
             joblib.dump(model, model_file)
             
             logger.info(f"Modelo {strategy_name}.pkl generado exitosamente.")

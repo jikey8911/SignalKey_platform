@@ -20,6 +20,9 @@ class SpotIntraExchangeArbitrage(BaseStrategy):
         df['std'] = df['close'].rolling(self.period).std()
         df['z_score'] = (df['close'] - df['avg']) / df['std']
         
+        # Reemplazar infinitos (cuando std es 0) por NaN
+        df.replace([np.inf, -np.inf], np.nan, inplace=True)
+
         # Features dinámicas para que la IA entienda el contexto
         df['volatility_index'] = df['std'] / df['avg']
         df['distance_pct'] = (df['close'] - df['avg']) / df['avg']

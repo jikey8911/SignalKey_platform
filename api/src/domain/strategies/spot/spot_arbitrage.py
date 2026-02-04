@@ -24,6 +24,9 @@ class SpotArbitrage(BaseStrategy):
         # Z-Score: (Precio - Media) / Desviación
         df['z_score'] = (df['close'] - df['mean']) / df['std']
         
+        # Reemplazar infinitos (cuando std es 0) por NaN
+        df.replace([np.inf, -np.inf], np.nan, inplace=True)
+
         # 2. Features dinámicas
         df['deviation_pct'] = (df['close'] - df['mean']) / df['mean']
         df['volatility_z'] = df['std'].pct_change()
