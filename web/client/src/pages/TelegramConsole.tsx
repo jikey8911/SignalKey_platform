@@ -117,13 +117,13 @@ export default function TelegramConsole() {
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'signal_detected':
-        return <AlertCircle className="text-blue-400" size={16} />;
+        return <AlertCircle className="text-blue-600" size={16} />;
       case 'processed':
-        return <CheckCircle className="text-green-400" size={16} />;
+        return <CheckCircle className="text-green-600" size={16} />;
       case 'received':
-        return <MessageSquare className="text-slate-400" size={16} />;
+        return <MessageSquare className="text-gray-600" size={16} />;
       default:
-        return <MessageSquare className="text-slate-500" size={16} />;
+        return <MessageSquare className="text-gray-400" size={16} />;
     }
   };
 
@@ -170,7 +170,7 @@ export default function TelegramConsole() {
             <div className="flex items-center gap-3">
               <p className="text-muted-foreground">Monitor en vivo</p>
               {status && (
-                <div className={`flex items-center gap-2 px-3 py-1 rounded-full border ${status.connected ? 'bg-green-500/10 border-green-500/20 text-green-500' : 'bg-red-500/10 border-red-500/20 text-red-500'}`}>
+                <div className={`flex items-center gap-2 px-3 py-1 rounded-full border ${status.connected ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
                   {status.connected ? <Wifi size={14} /> : <WifiOff size={14} />}
                   <span className="text-xs font-medium">
                     {status.connected
@@ -184,7 +184,7 @@ export default function TelegramConsole() {
                   variant="ghost"
                   size="sm"
                   onClick={handleReconnect}
-                  className="text-xs h-7 px-2 text-blue-400 hover:text-blue-300 hover:bg-white/5"
+                  className="text-xs h-7 px-2 text-blue-600 hover:text-blue-700 hover:bg-blue-50"
                 >
                   Restaurar Sesión
                 </Button>
@@ -224,12 +224,12 @@ export default function TelegramConsole() {
           </Card>
           <Card className="p-4 border-l-4 border-l-slate-400">
             <div className="text-sm text-slate-400 mb-1">Recibidos</div>
-            <div className="text-2xl font-bold text-slate-400">{stats.received}</div>
+            <div className="text-2xl font-bold text-slate-300">{stats.received}</div>
           </Card>
         </div>
 
         {/* Filtros */}
-        <Card className="p-4 bg-slate-900/40 border-white/5">
+        <Card className="p-4 bg-slate-900/40 border-white/5 shadow-inner backdrop-blur-xl">
           <div className="space-y-4">
             <div className="flex gap-3">
               <div className="flex-1">
@@ -288,7 +288,7 @@ export default function TelegramConsole() {
             <div className="col-span-7">Mensaje</div>
             <div className="col-span-2 text-right">Estado</div>
           </div>
-          <div className="divide-y divide-border max-h-[70vh] overflow-y-auto bg-background">
+          <div className="divide-y divide-white/5 max-h-[70vh] overflow-y-auto bg-slate-950/50 backdrop-blur-sm">
             {filteredLogs.length === 0 ? (
               <div className="p-8 text-center text-muted-foreground col-span-12">
                 {logs.length === 0 ? "Esperando mensajes del socket..." : "No hay mensajes que coincidan con los filtros"}

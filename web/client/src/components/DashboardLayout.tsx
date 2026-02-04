@@ -52,7 +52,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   return (
     <div className="flex h-screen bg-background text-foreground font-sans overflow-hidden">
       {/* Sidebar Glassmorphism */}
-      <aside className="w-64 border-r border-border bg-sidebar backdrop-blur-3xl flex flex-col z-30 transition-all">
+      <aside className="w-64 border-r border-white/5 bg-slate-900/60 backdrop-blur-3xl flex flex-col z-30 transition-all">
         <div className="p-8 flex items-center gap-4">
           <div className="h-10 w-10 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-500/30">
             <Zap className="w-6 h-6 text-white fill-current" />

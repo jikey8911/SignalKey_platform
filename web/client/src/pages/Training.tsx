@@ -259,7 +259,7 @@ export default function Training() {
                                         <button
                                             key={s}
                                             onClick={() => toggleSymbol(s)}
-                                            className="text-[9px] px-2 py-1 rounded bg-slate-900/50 hover:bg-blue-600 text-slate-300 hover:text-white transition-colors text-left truncate border border-white/5"
+                                            className="text-[9px] px-2 py-1 rounded bg-slate-900/50 border border-white/5 hover:bg-blue-600 text-slate-300 hover:text-white transition-colors text-left truncate"
                                         >
                                             + {s}
                                         </button>

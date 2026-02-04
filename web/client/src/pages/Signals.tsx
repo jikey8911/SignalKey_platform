@@ -96,21 +96,21 @@ export default function Signals() {
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'processing':
-        return <Clock className="text-blue-400 animate-spin" size={18} />;
+        return <Clock className="text-blue-600 animate-spin" size={18} />;
       case 'accepted':
-        return <CheckCircle className="text-green-400" size={18} />;
+        return <CheckCircle className="text-green-600" size={18} />;
       case 'rejected':
-        return <XCircle className="text-red-400" size={18} />;
+        return <XCircle className="text-red-600" size={18} />;
       case 'executing':
-        return <Zap className="text-orange-400 animate-pulse" size={18} />;
+        return <Zap className="text-orange-600 animate-pulse" size={18} />;
       case 'completed':
-        return <CheckCircle className="text-green-400" size={18} />;
+        return <CheckCircle className="text-green-600" size={18} />;
       case 'failed':
-        return <AlertCircle className="text-red-400" size={18} />;
+        return <AlertCircle className="text-red-600" size={18} />;
       case 'error':
-        return <AlertCircle className="text-red-400" size={18} />;
+        return <AlertCircle className="text-red-600" size={18} />;
       default:
-        return <Clock className="text-slate-400" size={18} />;
+        return <Clock className="text-gray-600" size={18} />;
     }
   };
 
@@ -235,34 +235,34 @@ export default function Signals() {
 
         {/* Estadísticas */}
         <div className="grid grid-cols-6 gap-3">
-          <Card className="p-3 border-l-4 border-l-slate-500">
-            <div className="text-xs text-slate-400 mb-1">Total</div>
-            <div className="text-xl font-bold text-white">{stats.total}</div>
+          <Card className="p-3 border-l-4 border-l-gray-500">
+            <div className="text-xs text-muted-foreground mb-1">Total</div>
+            <div className="text-xl font-bold text-foreground">{stats.total}</div>
           </Card>
           <Card className="p-3 border-l-4 border-l-blue-500">
-            <div className="text-xs text-slate-400 mb-1">Procesando</div>
-            <div className="text-xl font-bold text-blue-400">{stats.processing}</div>
+            <div className="text-xs text-muted-foreground mb-1">Procesando</div>
+            <div className="text-xl font-bold text-blue-600">{stats.processing}</div>
           </Card>
           <Card className="p-3 border-l-4 border-l-green-500">
-            <div className="text-xs text-slate-400 mb-1">Aceptadas</div>
-            <div className="text-xl font-bold text-green-400">{stats.accepted}</div>
+            <div className="text-xs text-muted-foreground mb-1">Aceptadas</div>
+            <div className="text-xl font-bold text-green-600">{stats.accepted}</div>
           </Card>
           <Card className="p-3 border-l-4 border-l-orange-500">
-            <div className="text-xs text-slate-400 mb-1">Ejecutando</div>
-            <div className="text-xl font-bold text-orange-400">{stats.executing}</div>
+            <div className="text-xs text-muted-foreground mb-1">Ejecutando</div>
+            <div className="text-xl font-bold text-orange-600">{stats.executing}</div>
           </Card>
           <Card className="p-3 border-l-4 border-l-emerald-500">
-            <div className="text-xs text-slate-400 mb-1">Completadas</div>
-            <div className="text-xl font-bold text-emerald-400">{stats.completed}</div>
+            <div className="text-xs text-muted-foreground mb-1">Completadas</div>
+            <div className="text-xl font-bold text-emerald-600">{stats.completed}</div>
           </Card>
           <Card className="p-3 border-l-4 border-l-red-500">
-            <div className="text-xs text-slate-400 mb-1">Fallidas</div>
-            <div className="text-xl font-bold text-red-400">{stats.failed}</div>
+            <div className="text-xs text-muted-foreground mb-1">Fallidas</div>
+            <div className="text-xl font-bold text-red-600">{stats.failed}</div>
           </Card>
         </div>
 
         {/* Filtros */}
-        <Card className="p-4 bg-slate-900/40 border-white/5">
+        <Card className="p-4 bg-slate-900/40 border-white/5 shadow-inner backdrop-blur-xl">
           <div className="space-y-4">
             <div className="flex gap-3">
               <div className="flex-1">

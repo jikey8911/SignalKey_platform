@@ -130,11 +130,11 @@ export default function Home() {
   );
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-950 p-4 text-slate-200">
+    <div className="min-h-screen flex items-center justify-center bg-slate-950 p-4">
       <div className="w-full max-w-md space-y-6">
         <div className="text-center space-y-2">
-          <h1 className="text-2xl font-bold text-white">SignaalKei Boot</h1>
-          <p className="text-slate-400">Verificando servicios del sistema...</p>
+          <h1 className="text-2xl font-bold text-white tracking-tighter italic uppercase">SignaalKei <span className="text-blue-500">Boot</span></h1>
+          <p className="text-slate-400 text-sm">Verificando servicios del sistema...</p>
         </div>
 
         <div className="space-y-3">

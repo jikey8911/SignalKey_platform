@@ -620,19 +620,19 @@ export default function Backtest() {
                   Exchange
                 </label>
                 {loadingExchanges ? (
-                  <div className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg bg-background">
+                  <div className="flex items-center gap-2 px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm">
                     <Loader2 className="animate-spin" size={16} />
-                    <span className="text-muted-foreground">Cargando...</span>
+                    <span className="text-slate-400">Cargando...</span>
                   </div>
                 ) : exchanges.length === 0 ? (
-                  <div className="px-4 py-2 border border-border rounded-lg bg-background text-muted-foreground">
+                  <div className="px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-slate-400">
                     No hay exchanges configurados
                   </div>
                 ) : (
                   <select
                     value={selectedExchange}
                     onChange={(e) => setSelectedExchange(e.target.value)}
-                    className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                    className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="">Seleccionar exchange</option>
                     {exchanges.map((ex: Exchange) => (
@@ -649,16 +649,16 @@ export default function Backtest() {
                   Mercado
                 </label>
                 {loadingMarkets ? (
-                  <div className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg bg-background">
+                  <div className="flex items-center gap-2 px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm">
                     <Loader2 className="animate-spin" size={16} />
-                    <span className="text-muted-foreground">Cargando...</span>
+                    <span className="text-slate-400">Cargando...</span>
                   </div>
                 ) : (
                   <select
                     value={selectedMarket}
                     onChange={(e) => setSelectedMarket(e.target.value)}
                     disabled={!selectedExchange || markets.length === 0}
-                    className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                    className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
                   >
                     {markets.map((market: string) => (
                       <option key={market} value={market}>
@@ -676,7 +676,7 @@ export default function Backtest() {
                 <select
                   value={timeframe}
                   onChange={(e) => setTimeframe(e.target.value)}
-                  className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="1m">1 minuto</option>
                   <option value="5m">5 minutos</option>
@@ -702,23 +702,23 @@ export default function Backtest() {
                       placeholder="Buscar símbolo..."
                       value={symbolSearch}
                       onChange={(e) => setSymbolSearch(e.target.value)}
-                      className="px-3 py-1 text-sm border border-white/10 rounded-md bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary w-40"
+                      className="px-3 py-1 text-sm border border-white/10 rounded-md bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500 w-40"
                     />
                   </div>
                 </div>
                 {loadingSymbols ? (
-                  <div className="flex items-center justify-center gap-2 p-8 border border-border rounded-lg bg-background">
+                  <div className="flex items-center justify-center gap-2 p-8 border border-white/10 rounded-lg bg-slate-900/40">
                     <Loader2 className="animate-spin" size={24} />
-                    <span className="text-muted-foreground">Cargando símbolos...</span>
+                    <span className="text-slate-400">Cargando símbolos...</span>
                   </div>
                 ) : symbols.length === 0 ? (
-                  <div className="p-4 border border-border rounded-lg bg-background text-muted-foreground text-center">
+                  <div className="p-4 border border-white/10 rounded-lg bg-slate-900/40 text-slate-400 text-center backdrop-blur-xl shadow-inner">
                     No hay símbolos disponibles
                   </div>
                 ) : (
-                  <div className="border border-border rounded-lg bg-background max-h-64 overflow-y-auto">
+                  <div className="border border-white/10 rounded-lg bg-slate-900/40 max-h-64 overflow-y-auto backdrop-blur-xl">
                     <table className="w-full text-sm">
-                      <thead className="sticky top-0 bg-muted border-b border-border">
+                      <thead className="sticky top-0 bg-slate-900 border-b border-white/10">
                         <tr>
                           <th className="text-left py-2 px-4 font-semibold">Símbolo</th>
                           <th className="text-right py-2 px-4 font-semibold">Precio</th>
@@ -769,7 +769,7 @@ export default function Backtest() {
                 onChange={(e) => setDays(parseInt(e.target.value))}
                 min="1"
                 max="365"
-                className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
 
@@ -783,7 +783,7 @@ export default function Backtest() {
                   type="number"
                   value={initialBalance}
                   onChange={(e) => setInitialBalance(parseFloat(e.target.value) || 0)}
-                  className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
               <div>
@@ -794,7 +794,7 @@ export default function Backtest() {
                   type="number"
                   value={tradeAmount}
                   onChange={(e) => setTradeAmount(parseFloat(e.target.value) || 0)}
-                  className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
             </div>
@@ -1081,12 +1081,12 @@ export default function Backtest() {
               )}
             </>
           ) : (
-            <Card className="p-16 text-center border-dashed border-2 bg-slate-500/5">
+            <Card className="p-16 text-center border-dashed border-white/5 bg-slate-900/40">
               <BarChart3 className="mx-auto mb-4 text-slate-500 opacity-20" size={64} />
-              <p className="text-xl font-bold text-slate-500">
+              <p className="text-xl font-bold text-slate-400">
                 Listo para el Torneo
               </p>
-              <p className="text-sm text-slate-600 max-w-sm mx-auto mt-2">
+              <p className="text-sm text-slate-500 max-w-sm mx-auto mt-2">
                 Selecciona un símbolo y ejecuta el backtesting para comparar todas las estrategias disponibles y encontrar la ganadora.
               </p>
             </Card>
@@ -1117,7 +1117,7 @@ export default function Backtest() {
                   <select
                     value={selectedExchange}
                     onChange={(e) => setSelectedExchange(e.target.value)}
-                    className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                    className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
                     <option value="">Seleccionar</option>
                     {exchanges.map((ex: Exchange) => (
@@ -1144,7 +1144,7 @@ export default function Backtest() {
                     value={selectedMarket}
                     onChange={(e) => setSelectedMarket(e.target.value)}
                     disabled={!selectedExchange}
-                    className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                    className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50"
                   >
                     {markets.map((market: string) => (
                       <option key={market} value={market}>
@@ -1163,7 +1163,7 @@ export default function Backtest() {
                 <select
                   value={timeframe}
                   onChange={(e) => setTimeframe(e.target.value)}
-                  className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   <option value="1m">1m</option>
                   <option value="5m">5m</option>
@@ -1185,7 +1185,7 @@ export default function Backtest() {
                   onChange={(e) => setDays(parseInt(e.target.value))}
                   min="1"
                   max="365"
-                  className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="w-full px-4 py-2 border border-white/10 rounded-lg bg-slate-900/50 backdrop-blur-sm text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
             </div>
@@ -1234,7 +1234,7 @@ export default function Backtest() {
               </div>
               <div className="max-h-[600px] overflow-y-auto">
                 <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-background border-b border-border z-10">
+                  <thead className="sticky top-0 bg-slate-900 border-b border-white/10 z-10">
                     <tr>
                       <th className="text-left py-3 px-4 font-semibold">Símbolo</th>
                       <th className="text-left py-3 px-4 font-semibold">Mejor Estrategia</th>

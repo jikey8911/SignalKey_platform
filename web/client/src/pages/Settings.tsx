@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 
 import { Eye, EyeOff, Save, Plus, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -243,12 +242,12 @@ export default function Settings() {
         {label}
       </label>
       <div className="relative">
-        <Input
+        <input
           type={showSecrets && type === 'password' ? 'text' : type}
           placeholder={placeholder}
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          className="pr-10"
+          className="w-full px-3 py-1.5 border border-white/10 rounded-lg bg-slate-950/50 backdrop-blur-sm text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
         />
         {type === 'password' && (
           <button
@@ -384,7 +383,7 @@ export default function Settings() {
                 </div>
 
                 {availableChannels.length > 0 && (
-                  <div className="max-h-60 overflow-y-auto border border-border rounded p-2 text-sm bg-background space-y-1">
+                  <div className="max-h-60 overflow-y-auto border border-white/10 rounded p-2 text-sm bg-slate-950/50 backdrop-blur-sm space-y-1">
                     {availableChannels.map((channel: any) => (
                       <label key={channel.id} className="flex items-center gap-2 p-1 hover:bg-muted/50 rounded cursor-pointer">
                         <input
@@ -661,7 +660,7 @@ export default function Settings() {
                   ...formData,
                   botStrategy: { ...formData.botStrategy, maxActiveBots: parseInt(e.target.value) }
                 })}
-                className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full px-3 py-1.5 border border-white/10 rounded-lg bg-slate-950/50 backdrop-blur-sm text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
               <p className="text-[10px] text-muted-foreground mt-1">Número máximo de bots que pueden estar activos simultáneamente</p>
             </div>
@@ -679,7 +678,7 @@ export default function Settings() {
                   ...formData,
                   botStrategy: { ...formData.botStrategy, tpLevels: parseInt(e.target.value) }
                 })}
-                className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full px-3 py-1.5 border border-white/10 rounded-lg bg-slate-950/50 backdrop-blur-sm text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
               <p className="text-[10px] text-muted-foreground mt-1">Número de niveles de TP para cada bot</p>
             </div>
@@ -700,7 +699,7 @@ export default function Settings() {
                   ...formData,
                   botStrategy: { ...formData.botStrategy, tpPercent: parseFloat(e.target.value) }
                 })}
-                className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full px-3 py-1.5 border border-white/10 rounded-lg bg-slate-950/50 backdrop-blur-sm text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
               <p className="text-[10px] text-muted-foreground mt-1">Porcentaje de cambio de precio para cada TP</p>
             </div>
@@ -719,7 +718,7 @@ export default function Settings() {
                   ...formData,
                   botStrategy: { ...formData.botStrategy, slPercent: parseFloat(e.target.value) }
                 })}
-                className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full px-3 py-1.5 border border-white/10 rounded-lg bg-slate-950/50 backdrop-blur-sm text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
               <p className="text-[10px] text-muted-foreground mt-1">Porcentaje de caída para Stop Loss</p>
             </div>
@@ -738,14 +737,14 @@ export default function Settings() {
                   ...formData,
                   botStrategy: { ...formData.botStrategy, sellPercentPerTP: parseFloat(e.target.value) }
                 })}
-                className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                className="w-full px-3 py-1.5 border border-white/10 rounded-lg bg-slate-950/50 backdrop-blur-sm text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
               <p className="text-[10px] text-muted-foreground mt-1">Porcentaje a vender en cada nivel de TP</p>
             </div>
           </div>
 
-          <div className="p-3 bg-muted rounded-lg">
-            <p className="text-xs text-muted-foreground">
+          <div className="p-3 bg-slate-900/40 rounded-lg border border-white/5">
+            <p className="text-xs text-slate-400">
               <strong>Ejemplo:</strong> Con 3 niveles de TP al 2% y 33.3% venta por nivel:
               Compra a $100 → TP1: $102 (vende 33.3%) → TP2: $104 (vende 33.3%) → TP3: $106 (vende 33.4%)
             </p>

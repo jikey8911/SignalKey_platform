@@ -111,7 +111,7 @@
 
   --border: oklch(1 0 0 / 0.15);
   /* Subtle white border */
-  --input: oklch(1 0 0 / 0.05);
+  --input: oklch(0.12 0.02 260);
   --ring: oklch(0.60 0.18 260);
 
   /* Sidebar Specifics */
