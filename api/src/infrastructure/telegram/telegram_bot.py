@@ -296,22 +296,66 @@ class LegacyTelegramBot:
     def __init__(self):
         self.api_id = Config.TELEGRAM_API_ID
         self.api_hash = Config.TELEGRAM_API_HASH
-        self.session_file = 'userbot_session'
+        # Ruta al archivo .session proporcionado por el usuario
+        self.session_file = 'api/src/infrastructure/telegram/userbot_session'
         self.client = None
         self.api_url = f"{Config.API_BASE_URL}/webhook/signal"
+        self.message_handler = None
 
         if not self.api_id or not self.api_hash:
             logger.warning("TELEGRAM_API_ID or TELEGRAM_API_HASH not set. Legacy bot will not start.")
     
-    async def start(self):
+    async def start(self, message_handler=None):
         """Inicia el bot legacy"""
+        if message_handler:
+            self.message_handler = message_handler
+
         if not self.api_id or not self.api_hash:
+            logger.error("Legacy Bot: Missing API credentials (ID/HASH)")
             return
 
-        logger.warning("Starting LEGACY Telegram bot - This is deprecated, users should configure their own bots")
-        # Implementación similar al bot original pero marcado como legacy
-        # Por ahora, simplemente no hacer nada para forzar a los usuarios a configurar sus bots
-        pass
+        logger.info(f"Starting LEGACY Telegram bot using session: {self.session_file}")
+
+        try:
+            # Asegurar que api_id sea int
+            api_id_int = int(self.api_id)
+            self.client = TelegramClient(self.session_file, api_id_int, self.api_hash)
+
+            @self.client.on(events.NewMessage)
+            async def handler(event):
+                try:
+                    chat_id = str(event.chat_id)
+                    text = event.message.message
+
+                    # Intentar obtener info del remitente para el log de consola
+                    sender_name = "Unknown"
+                    try:
+                        sender = await event.get_sender()
+                        sender_name = getattr(sender, 'username', '') or f"{getattr(sender, 'first_name', '')} {getattr(sender, 'last_name', '')}".strip()
+                    except: pass
+
+                    # REQUISITO: Mostrar todos los mensajes por consola (API logs)
+                    print(f"\n[TELEGRAM MESSAGE] From: {sender_name} ({chat_id}) | Content: {text}\n")
+                    logger.info(f"Global Bot received message from {chat_id}")
+
+                    if text and self.message_handler:
+                        signal_obj = TradingSignal(
+                            source=f"legacy_telegram_{chat_id}",
+                            raw_text=text
+                        )
+                        # Ejecutar procesamiento GLOBAL para todos los usuarios activos
+                        if asyncio.iscoroutinefunction(self.message_handler):
+                            asyncio.create_task(self.message_handler(signal_obj, user_id="ALL"))
+                        else:
+                            self.message_handler(signal_obj, user_id="ALL")
+                except Exception as e:
+                    logger.error(f"Error in legacy bot handler: {e}")
+
+            await self.client.start()
+            logger.info("LEGACY Telegram bot connected and listening")
+
+        except Exception as e:
+            logger.error(f"Failed to start Legacy Bot: {e}")
     
     async def stop(self):
         if self.client:

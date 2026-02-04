@@ -31,6 +31,9 @@ async def lifespan(app: FastAPI):
     bot_manager.signal_processor = process_signal_task
     
     try:
+        # Iniciar Bot Global (Legacy) con archivo de sesión
+        await bot_instance.start(message_handler=process_signal_task)
+
         await bot_manager.restart_all_bots(message_handler=process_signal_task)
         logger.info(f"Telegram Bot Manager started with {bot_manager.get_active_bots_count()} active bots")
         
@@ -202,9 +205,37 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
     Refactored using Hexagonal Architecture.
     Delegates to the ProcessSignalUseCase via the DI Container.
     """
-    logger.info(f"Procesando señal de {signal.source} para usuario {user_id} (Hexagonal)")
-    
     from api.src.infrastructure.di.container import container
+    use_case = container.get_process_signal_use_case()
+
+    # Soporte para "ALL": Procesar señal para todos los usuarios activos
+    if user_id == "ALL":
+        logger.info(f"Procesando señal GLOBAL de {signal.source} para TODOS los usuarios activos")
+        try:
+            # Buscar configuraciones que tengan el bot de telegram activado
+            configs_cursor = db.app_configs.find({"botTelegramActivate": True})
+            configs = await configs_cursor.to_list(length=100)
+
+            for config in configs:
+                try:
+                    user = await db.users.find_one({"_id": config.get("userId")})
+                    if user and user.get("openId"):
+                        target_id = user["openId"]
+                        logger.info(f"Broadcasting global signal to user: {target_id}")
+                        await use_case.execute(
+                            raw_text=signal.raw_text,
+                            source=signal.source,
+                            user_id=target_id,
+                            config=config
+                        )
+                except Exception as user_err:
+                    logger.error(f"Error processing global signal for a user: {user_err}")
+            return
+        except Exception as e:
+            logger.error(f"Error in global signal broadcast: {e}")
+            return
+
+    logger.info(f"Procesando señal de {signal.source} para usuario {user_id} (Hexagonal)")
     
     # Obtener config del usuario
     config = await get_app_config(user_id)
@@ -218,7 +249,6 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
         return
 
     # Ejecutar el caso de uso
-    use_case = container.get_process_signal_use_case()
     try:
         await use_case.execute(
             raw_text=signal.raw_text,
