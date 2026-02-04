@@ -37,28 +37,26 @@ class CcxtAdapter(IExchangePort):
             logger.error(f"Error creating custom session: {e}")
             return None
 
-    async def _get_client_for_user(self, user_id: str):
+    async def _get_client_for_user(self, user_id: str, exchange_id: Optional[str] = None):
         """
-        Retrieves the active exchange for a specific user and initializes/returns the CCXT client.
+        Retrieves the exchange client for a specific user.
+        If exchange_id is not provided, it uses the user's active exchange.
         Caches the client for subsequent calls.
         """
         try:
             # 1. Fetch user config
-            exchange_id = "binance" # Default
             config = await get_app_config(user_id)
             
-            if config:
-                # Look for 'active_exchange' or fallback to specific exchange status logic if needed
-                # Ideally, we should add 'activeExchange' to user config schema or infer it.
-                # For now, let's assume valid 'active_exchange' key in config or simple logic.
-                # Assuming schema: config['activeExchange'] = 'okx' OR checking 'exchanges' list
-                if 'activeExchange' in config:
-                     exchange_id = config['activeExchange']
-                elif 'exchanges' in config:
-                    # Find first active exchange
-                    active_ex = next((e for e in config['exchanges'] if e.get('isActive')), None)
-                    if active_ex:
-                        exchange_id = active_ex['exchangeId']
+            if not exchange_id:
+                exchange_id = "binance" # Default
+                if config:
+                    if 'activeExchange' in config:
+                         exchange_id = config['activeExchange']
+                    elif 'exchanges' in config:
+                        # Find first active exchange
+                        active_ex = next((e for e in config['exchanges'] if e.get('isActive')), None)
+                        if active_ex:
+                            exchange_id = active_ex['exchangeId']
             
             # 2. Check Cache
             cached_exchange_id = self.user_exchange_ids.get(user_id)
@@ -120,6 +118,39 @@ class CcxtAdapter(IExchangePort):
             logger.error(f"Failed to initialize exchange client for user {user_id}: {e}")
             # Fallback to generic binance instance (not cached per user to save resources)
             return await self._get_system_client()
+
+    async def _get_system_client_for_exchange(self, exchange_id: str):
+        """
+        Retrieves a system-wide client for a specific exchange.
+        """
+        exchange_id = exchange_id.lower()
+        if self._exchange_instance and self._current_exchange_id == exchange_id:
+            return self._exchange_instance
+
+        # Initialize new system-wide client for this exchange
+        logger.info(f"🔄 Switching System Exchange Adapter to: {exchange_id.upper()}")
+
+        if self._exchange_instance:
+            await self._exchange_instance.close()
+
+        exchange_class = getattr(ccxt, exchange_id)
+        self._exchange_instance = exchange_class({
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'spot',
+                'fetchCurrencies': False
+            }
+        })
+
+        session = self._create_custom_session()
+        if session:
+            self._exchange_instance.session = session
+
+        if exchange_id == 'okx':
+            self._exchange_instance.has['fetchCurrencies'] = False
+
+        self._current_exchange_id = exchange_id
+        return self._exchange_instance
 
     async def _get_system_client(self):
         """
@@ -264,12 +295,18 @@ class CcxtAdapter(IExchangePort):
              logger.error(f"Error fetching open orders for {user_id}: {e}")
              return []
 
-    async def get_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False, user_id: str = "default_user") -> pd.DataFrame:
+    async def get_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False, user_id: str = "default_user", exchange_id: Optional[str] = None) -> pd.DataFrame:
         """
-        Fetch historical data using the user's preferred exchange.
+        Fetch historical data using the user's preferred exchange or a specific one.
         """
         if user_id and user_id != "default_user":
-            client = await self._get_client_for_user(user_id)
+            client = await self._get_client_for_user(user_id, exchange_id=exchange_id)
+        elif exchange_id:
+            # System-wide but specific exchange
+            # (Note: we don't have a specific cache for this yet, so it might re-init system client)
+            # For simplicity, we can use _get_system_client logic or just create a temporary one
+            # Given this is for backtesting, performance is less critical than correctness
+            client = await self._get_system_client_for_exchange(exchange_id)
         else:
             client = await self._get_system_client()
         

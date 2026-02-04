@@ -23,6 +23,7 @@ class MongoDBSignalRepository(ISignalRepository):
             "confidence": signal.confidence,
             "reasoning": signal.reasoning,
             "riskScore": signal.riskScore,
+            "botId": ObjectId(signal.botId) if isinstance(signal.botId, str) and len(signal.botId) == 24 else signal.botId,
             "tradeId": signal.tradeId,
             "executionMessage": signal.executionMessage
         }
@@ -55,6 +56,13 @@ class MongoDBSignalRepository(ISignalRepository):
             signals.append(self._map_to_entity(doc))
         return signals
 
+    async def find_by_bot_id(self, bot_id: str) -> List[Signal]:
+        cursor = self.collection.find({"botId": ObjectId(bot_id)})
+        signals = []
+        async for doc in cursor:
+            signals.append(self._map_to_entity(doc))
+        return signals
+
     def _map_to_entity(self, doc: dict) -> Signal:
         return Signal(
             id=str(doc["_id"]),
@@ -69,6 +77,7 @@ class MongoDBSignalRepository(ISignalRepository):
             confidence=doc.get("confidence"),
             reasoning=doc.get("reasoning"),
             riskScore=doc.get("riskScore"),
+            botId=str(doc.get("botId")) if doc.get("botId") else None,
             tradeId=str(doc.get("tradeId")) if doc.get("tradeId") else None,
             executionMessage=doc.get("executionMessage")
         )

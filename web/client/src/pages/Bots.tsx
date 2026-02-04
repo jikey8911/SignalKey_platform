@@ -12,54 +12,62 @@ import { Button } from '@/components/ui/button';
 import { useSocketContext } from '@/contexts/SocketContext';
 import { toast } from 'react-hot-toast';
 import { CONFIG } from '@/config';
+import { CandlestickChart } from '@/components/ui/candlestick-chart';
 
 // --- MONITOR HÍBRIDO (Integrado con Socket Tarea 4.3 & 4.5) ---
 
 const ExecutionMonitor = ({ bot }: any) => {
     const { lastMessage } = useSocketContext();
-    const [signals, setSignals] = useState<any[]>([]);
+    const [liveSignals, setLiveSignals] = useState<any[]>([]);
+    const [historySignals, setHistorySignals] = useState<any[]>([]);
     const [candles, setCandles] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
 
-    // Fetch Initial Candles
+    // Fetch Initial Candles & Signal History
     useEffect(() => {
-        if (!bot?.symbol) return;
+        if (!bot?.id || !bot?.symbol) return;
 
-        const fetchCandles = async () => {
+        const fetchData = async () => {
             setLoading(true);
             try {
-                const res = await fetch(`http://localhost:8000/api/market/candles?symbol=${encodeURIComponent(bot.symbol)}&timeframe=${bot.timeframe || '1h'}&limit=50`);
-                if (res.ok) {
-                    const data = await res.json();
+                // Fetch Candles
+                const candleRes = await fetch(`${CONFIG.API_BASE_URL}/market/candles?symbol=${encodeURIComponent(bot.symbol)}&timeframe=${bot.timeframe || '1h'}&limit=100`);
+                if (candleRes.ok) {
+                    const data = await candleRes.json();
                     setCandles(data);
                 }
+
+                // Fetch History Signals (New Endpoint S9)
+                const signalRes = await fetch(`${CONFIG.API_BASE_URL}/bots/${bot.id}/signals`);
+                if (signalRes.ok) {
+                    const data = await signalRes.json();
+                    setHistorySignals(data);
+                }
             } catch (e) {
-                console.error("Error fetching candles", e);
+                console.error("Error fetching monitor data", e);
             } finally {
                 setLoading(false);
             }
         };
-        fetchCandles();
-    }, [bot?.symbol, bot?.timeframe]);
+        fetchData();
+        setLiveSignals([]); // Reset live signals when changing bot
+    }, [bot?.id, bot?.symbol, bot?.timeframe]);
 
     // Integración real: Añadir señal del socket a la lista visual
     useEffect(() => {
-        if (lastMessage && lastMessage.event === 'signal_update') {
+        if (lastMessage && (lastMessage.event === 'signal_update' || lastMessage.event === 'live_execution_signal')) {
             const signalData = lastMessage.data;
-            if (signalData?.bot_id === bot?.id || !bot) {
-                setSignals(prev => [signalData, ...prev].slice(0, 5));
+            if (signalData?.bot_id === bot?.id) {
+                setLiveSignals(prev => [signalData, ...prev].slice(0, 5));
+                // Also add to history for chart
+                setHistorySignals(prev => [...prev, signalData]);
             }
         }
-        // Also listen for bot updates to refresh candles or price potentially? 
-        // For now, we rely on the main list update for price
     }, [lastMessage, bot?.id]);
 
-    // Calcular min/max para escalar gráfico
-    const { min, max } = useMemo(() => {
-        if (!candles.length) return { min: 0, max: 100 };
-        const prices = candles.map(c => c.close);
-        return { min: Math.min(...prices), max: Math.max(...prices) };
-    }, [candles]);
+    const combinedSignals = useMemo(() => {
+        return [...historySignals];
+    }, [historySignals]);
 
     return (
         <Card className="overflow-hidden border-blue-500/20">
@@ -73,49 +81,39 @@ const ExecutionMonitor = ({ bot }: any) => {
                 </div>
                 <div className="flex items-center gap-2">
                     <Badge variant="outline" className="text-[10px]">{bot?.timeframe}</Badge>
-                    <Badge variant="success">WS Active</Badge>
+                    <Badge variant="success" className="bg-green-500/10 text-green-400 border-green-500/20">WS Active</Badge>
                 </div>
             </div>
 
             <div className="p-6">
-                <div className="relative h-64 w-full border-b border-white/5 mb-6 flex items-end gap-1 bg-slate-950/50 rounded-lg p-2">
-                    {loading && <div className="absolute inset-0 flex items-center justify-center text-slate-500">Loading Chart...</div>}
-
-                    {!loading && candles.map((c, i) => {
-                        const height = ((c.close - min) / (max - min)) * 100;
-                        const validHeight = isNaN(height) ? 50 : Math.max(1, height); // Fallback
-                        return (
-                            <div
-                                key={i}
-                                className={`flex-1 rounded-sm ${c.close >= c.open ? 'bg-green-500/50 hover:bg-green-400' : 'bg-red-500/50 hover:bg-red-400'} transition-all`}
-                                style={{ height: `${validHeight}%` }}
-                                title={`Time: ${new Date(c.time * 1000).toLocaleTimeString()} O:${c.open} C:${c.close}`}
-                            />
-                        );
-                    })}
-
-                    {/* Visual Overlay for Last Signal */}
-                    {signals.length > 0 && (
-                        <div className="absolute top-2 right-2 animate-bounce cursor-pointer" title={JSON.stringify(signals[0])}>
-                            <Badge variant={signals[0].type === 'LONG' || signals[0].side === 'buy' ? 'success' : 'destructive'}>
-                                {signals[0].type || signals[0].side} @ {signals[0].price?.toFixed(2)}
-                            </Badge>
+                <div className="mb-6">
+                    {loading ? (
+                        <div className="h-64 flex items-center justify-center bg-slate-950/50 rounded-lg border border-white/5 text-slate-500">
+                            Cargando datos del mercado...
                         </div>
+                    ) : (
+                        <CandlestickChart
+                            candles={candles}
+                            signals={combinedSignals}
+                            height={280}
+                        />
                     )}
                 </div>
 
                 <div className="space-y-2">
-                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Flujo de ejecución reciente (Socket.io)</p>
-                    {signals.length === 0 ? (
+                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Flujo de ejecución reciente</p>
+                    {liveSignals.length === 0 && historySignals.length === 0 ? (
                         <p className="text-xs text-slate-600 italic">Esperando señales del servidor...</p>
                     ) : (
-                        signals.map((sig, idx) => (
+                        [...liveSignals, ...historySignals].slice(0, 5).map((sig, idx) => (
                             <div key={idx} className="flex justify-between items-center text-xs p-2 bg-white/5 rounded-lg border border-white/5 animate-in slide-in-from-left-2">
-                                <span className={(sig.type === 'LONG' || sig.side === 'buy') ? 'text-green-400' : 'text-red-400'}>
-                                    ● {sig.type || sig.side}
+                                <span className={(sig.decision?.includes('BUY') || sig.type === 'LONG' || sig.side === 'buy') ? 'text-blue-400' : 'text-amber-400'}>
+                                    ● {sig.decision || sig.type || sig.side}
                                 </span>
                                 <span className="text-white font-mono">${sig.price?.toFixed(2)}</span>
-                                <span className="text-[10px] text-slate-500">{new Date().toLocaleTimeString()}</span>
+                                <span className="text-[10px] text-slate-500">
+                                    {new Date(sig.createdAt || Date.now()).toLocaleTimeString()}
+                                </span>
                             </div>
                         ))
                     )}

@@ -58,19 +58,21 @@ class BacktestService:
                 StrategyClass = getattr(module, class_name)
                 strategy = StrategyClass()
                 
-                # 2. Aplicar procesamiento (Cálculo de indicadores)
-                df_test = strategy.apply(df.copy()).dropna()
+                # 2. Aplicar procesamiento (Cálculo de indicadores y contexto S9)
+                df_test = self.prepare_data_for_model(df.copy(), strategy).dropna()
                 if df_test.empty:
                     continue
 
                 # 3. SINCRONIZACIÓN TOTAL
                 features = strategy.get_features()
-                missing = [c for c in features if c not in df_test.columns]
+                model_features = features + ['in_position', 'current_pnl']
+
+                missing = [c for c in model_features if c not in df_test.columns]
                 if missing:
                     self.logger.error(f"Contrato roto en {strat_name}: Faltan columnas {missing}")
                     continue
 
-                X = df_test[features]
+                X = df_test[model_features]
                 
                 # 4. Predicción y Cálculo de Precisión
                 predictions = model.predict(X)
@@ -305,9 +307,9 @@ class BacktestService:
         elif timeframe == '1m': limit = days * 1440
         limit += 100 # Buffer
         
-        self.logger.info(f"🌍 FETCHING REAL DATA via CCXT for {symbol} (Limit: {limit} candles, User: {user_id})")
-        # Use get_historical_data which now supports user-auth via _get_client_for_user
-        df = await self.exchange.get_historical_data(symbol, timeframe, limit=limit, user_id=user_id)
+        self.logger.info(f"🌍 FETCHING REAL DATA via CCXT for {symbol} (Limit: {limit} candles, User: {user_id}, Exchange: {exchange_id})")
+        # Use get_historical_data which now supports user-auth via _get_client_for_user and explicit exchange_id
+        df = await self.exchange.get_historical_data(symbol, timeframe, limit=limit, user_id=user_id, exchange_id=exchange_id)
         if df.empty:
             # Fallback to public if private fails or returns empty (though get_historical_data handles this)
             self.logger.warning("Empty data from auth client, retrying with public...")
@@ -624,21 +626,21 @@ class BacktestService:
         # Iteramos para reconstruir el estado que el modelo espera ver
         # Esto es crucial para que Random Forest no falle por falta de dimensiones
         for i in range(1, len(df)):
+            # 1. Actualizar estado basado en la señal de la vela anterior
+            prev_signal = df.iloc[i-1].get('signal')
+
+            if not in_pos and prev_signal == BaseStrategy.SIGNAL_BUY:
+                in_pos = True
+                avg_price = df.iloc[i]['close']
+            elif in_pos and prev_signal == BaseStrategy.SIGNAL_SELL:
+                in_pos = False
+                avg_price = 0.0
+
+            # 2. Aplicar estado a la vela actual
             if in_pos:
                 df.at[df.index[i], 'in_position'] = 1
                 current_price = df.iloc[i]['close']
                 if avg_price > 0:
                     df.at[df.index[i], 'current_pnl'] = (current_price - avg_price) / avg_price
-                
-                # Si hubo una señal de venta técnica en el paso anterior, reseteamos
-                # Ojo: Usamos 'signal' que genera strategy.apply() (la técnica pura)
-                if df.iloc[i-1].get('signal') == BaseStrategy.SIGNAL_SELL:
-                    in_pos = False
-                    avg_price = 0.0
-            else:
-                # Si hubo señal de compra técnica, iniciamos posición simulada
-                if df.iloc[i-1].get('signal') == BaseStrategy.SIGNAL_BUY:
-                    in_pos = True
-                    avg_price = df.iloc[i]['close']
                     
         return df

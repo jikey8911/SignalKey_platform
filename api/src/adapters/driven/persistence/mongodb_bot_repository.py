@@ -56,12 +56,14 @@ class MongoBotRepository:
         doc["id"] = str(doc["_id"])
         data = {k: v for k, v in doc.items() if k != "_id"}
         
-        # Manejo de fechas isoformat a datetime si es necesario
-        if isinstance(data.get('created_at'), str):
-            try:
-                data['created_at'] = datetime.fromisoformat(data['created_at'])
-            except:
-                pass
+        # Manejo de fechas isoformat a datetime para todos los campos de fecha conocidos
+        date_fields = ['created_at', 'updated_at', 'last_execution', 'last_signal_at']
+        for field in date_fields:
+            if isinstance(data.get(field), str):
+                try:
+                    data[field] = datetime.fromisoformat(data[field].replace('Z', '+00:00'))
+                except:
+                    pass
                 
         # Robust Mapping: Filter fields that are not in BotInstance constructor
         # This prevents crashes if DB has extra fields (e.g. from future versions or manual edits)

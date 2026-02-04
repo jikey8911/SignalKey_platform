@@ -32,6 +32,17 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
     bot_id = await repo.save(bot)
     return {"id": bot_id, "status": "created"}
 
+@router.get("/{bot_id}/signals")
+async def get_bot_signals(bot_id: str, current_user: dict = Depends(get_current_user)):
+    """
+    Recupera el historial de señales para un bot específico.
+    """
+    from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
+    signal_repo = MongoDBSignalRepository(db)
+
+    signals = await signal_repo.find_by_bot_id(bot_id)
+    return [s.to_dict() for s in signals]
+
 @router.get("/")
 async def list_user_bots(current_user: dict = Depends(get_current_user)): 
     user_id = current_user["openId"]
@@ -96,6 +107,27 @@ async def receive_external_signal(data: SignalWebhook):
         raise HTTPException(status_code=404, detail="Instancia de bot no encontrada")
 
     bot['id'] = str(bot['_id'])
+
+    # Persistir la señal en el historial (S9)
+    try:
+        from api.src.domain.models.signal import Signal, SignalStatus, Decision
+        from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
+        signal_repo = MongoDBSignalRepository(db)
+
+        new_sig = Signal(
+            id=None,
+            userId=bot['user_id'],
+            source="BOT_STRATEGY",
+            rawText=f"Signal {data.signal} at {data.price} for bot {data.bot_id}",
+            status=SignalStatus.EXECUTING,
+            createdAt=datetime.utcnow(),
+            symbol=bot['symbol'],
+            decision=Decision.BUY if data.signal == 1 else Decision.SELL,
+            botId=data.bot_id
+        )
+        await signal_repo.save(new_sig)
+    except Exception as e:
+        logger.error(f"Error persisting signal for bot {data.bot_id}: {e}")
     
     # 2. Procesar a través del motor dual
     result = await engine.process_signal(bot, {"signal": data.signal, "price": data.price})
