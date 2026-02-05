@@ -94,3 +94,4 @@ api/tests/temp_models/
 *.joblib
 
 **tests**
+**test**
