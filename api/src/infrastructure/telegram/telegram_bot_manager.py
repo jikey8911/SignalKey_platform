@@ -136,10 +136,18 @@ class TelegramBotManager:
             
             logger.info(f"Found {len(configs)} users with Telegram configured")
             
+            # Optimization: Fetch all users in one query
+            user_ids = [config.get("userId") for config in configs if config.get("userId")]
+            users_list = []
+            if user_ids:
+                users_list = await db.users.find({"_id": {"$in": user_ids}}).to_list(length=len(user_ids))
+
+            users_map = {user["_id"]: user for user in users_list}
+
             for config in configs:
                 try:
                     # Obtener el usuario
-                    user = await db.users.find_one({"_id": config.get("userId")})
+                    user = users_map.get(config.get("userId"))
                     if not user:
                         logger.warning(f"User not found for config {config.get('_id')}")
                         continue
