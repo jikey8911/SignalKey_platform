@@ -54,7 +54,10 @@ async def lifespan(app: FastAPI):
     monitor_service = MonitorService(cex_service=cex_service, dex_service=dex_service)
     monitor_task = asyncio.create_task(monitor_service.start_monitoring())
 
-    bot_monitor_task = asyncio.create_task(signal_bot_service.monitor_bots())
+    monitor_task = asyncio.create_task(monitor_service.start_monitoring())
+
+    # Start Bot Service (WebSockets & Monitoring)
+    await signal_bot_service.start()
     
     # --- TASK 5.2: Strategy Runner Service (Auto-Trading Loop) ---
     from api.src.application.services.strategy_runner_service import StrategyRunnerService
@@ -83,7 +86,8 @@ async def lifespan(app: FastAPI):
     await bot_manager.stop_all_bots()
     await monitor_service.stop_monitoring()
     monitor_task.cancel()
-    bot_monitor_task.cancel()
+    monitor_task.cancel()
+    await signal_bot_service.stop()
     await strategy_runner.stop()
     runner_task.cancel()
     await cex_service.close_all()
@@ -138,6 +142,8 @@ from api.src.adapters.driving.api.routers.websocket_router import router as webs
 from api.src.adapters.driving.api.routers.ml_router import router as ml_router
 from api.src.adapters.driving.api.routers.market_data_router import router as market_data_router
 from api.src.adapters.driving.api.routers.bot_router import router as bot_router
+from api.src.adapters.driving.api.routers.signal_router import router as signal_router
+from api.src.adapters.driving.api.routers.trade_router import router as trade_router
 
 app.include_router(auth_router)
 app.include_router(config_router)
@@ -147,6 +153,8 @@ app.include_router(websocket_router)
 app.include_router(ml_router)
 app.include_router(market_data_router)
 app.include_router(bot_router)
+app.include_router(signal_router)
+app.include_router(trade_router)
 
 # --- Endpoints --- #
 

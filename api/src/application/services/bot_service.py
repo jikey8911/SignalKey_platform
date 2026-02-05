@@ -6,6 +6,8 @@ from api.src.adapters.driven.persistence.mongodb import db, save_trade, update_v
 from api.src.application.services.cex_service import CEXService
 from api.src.application.services.dex_service import DEXService
 from api.src.domain.models.schemas import AnalysisResult, ExecutionResult
+from api.src.adapters.driven.exchange.stream_service import MarketStreamService
+from api.src.application.services.buffer_service import DataBufferService
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +15,20 @@ class SignalBotService:
     def __init__(self, cex_service: CEXService = None, dex_service: DEXService = None):
         self.cex_service = cex_service or CEXService()
         self.dex_service = dex_service or DEXService()
+        self.stream_service = MarketStreamService()
+        self.buffer_service = DataBufferService(stream_service=self.stream_service, cex_service=self.cex_service)
+        self.stream_service.add_listener(self.handle_market_update)
+
+    async def start(self):
+        """Starts the bot service, stream service, and initial monitoring."""
+        await self.stream_service.start()
+        await self.initialize_active_bots_monitoring()
+        logger.info("SignalBotService started.")
+
+    async def stop(self):
+        """Stops the bot service."""
+        await self.stream_service.stop()
+        logger.info("SignalBotService stopped.")
 
     async def can_activate_bot(self, user_id: str, config: Dict[str, Any]) -> bool:
         """Verifica si el usuario puede activar un nuevo bot basado en su límite."""
@@ -169,17 +185,27 @@ class SignalBotService:
 
         # --- SAVE OPERATION LOG ---
         if bot_id:
-            await db.bot_operations.insert_one({
+            op_doc = {
                 "botId": bot_id,
                 "tradeId": str(inserted_id),
                 "type": analysis.decision.upper(), # BUY/SELL
                 "price": entry_price,
                 "amount": amount,
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.utcnow().isoformat(),
                 "mode": "simulated" if demo_mode else "real",
                 "reason": "ENTRY"
-            })
+            }
+            await db.bot_operations.insert_one(op_doc)
+            from api.src.adapters.driven.notifications.socket_service import socket_service
+            await socket_service.emit_to_user(user_id, "operation_update", op_doc)
         # --------------------------
+
+        
+        # Subscribe to WebSocket updates for this symbol
+        # Assuming exchange is known or defaulting to 'binance' for now. 
+        # In a real scenario, this comes from bot config or exchange service.
+        exchange_id = config.get("exchange_id", "binance").lower()
+        await self.stream_service.subscribe_ticker(exchange_id, symbol)
 
         return ExecutionResult(
             success=True, 
@@ -276,16 +302,19 @@ class SignalBotService:
 
         # --- SAVE ACCUMULATE LOG ---
         if bot_id:
-            await db.bot_operations.insert_one({
+            op_doc = {
                 "botId": bot_id,
                 "tradeId": str(existing_bot["_id"]),
                 "type": side, # Same side accumulation
                 "price": execution_price,
                 "amount": amount_to_add,
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.utcnow().isoformat(),
                 "mode": "simulated" if demo_mode else "real",
                 "reason": "ACCUMULATE"
-            })
+            }
+            await db.bot_operations.insert_one(op_doc)
+            from api.src.adapters.driven.notifications.socket_service import socket_service
+            await socket_service.emit_to_user(user_id, "operation_update", op_doc)
         # ---------------------------
         
         return ExecutionResult(
@@ -344,16 +373,19 @@ class SignalBotService:
 
             # --- SAVE CLOSE LOG ---
             if bot_id:
-                await db.bot_operations.insert_one({
+                op_doc = {
                     "botId": bot_id,
                     "tradeId": str(existing_bot["_id"]),
                     "type": "SELL" if existing_bot["side"] == "BUY" else "BUY", # Opposite side
                     "price": current_price,
                     "amount": amount,
-                    "timestamp": datetime.utcnow(),
+                    "timestamp": datetime.utcnow().isoformat(),
                     "mode": "simulated",
                     "reason": "CLOSE_SIGNAL"
-                })
+                }
+                await db.bot_operations.insert_one(op_doc)
+                from api.src.adapters.driven.notifications.socket_service import socket_service
+                await socket_service.emit_to_user(user_id, "operation_update", op_doc)
             # ----------------------
             
             return ExecutionResult(success=True, message=f"Posición cerrada por señal opuesta. PnL: {pnl_pct:.2f}%")
@@ -369,39 +401,54 @@ class SignalBotService:
              logger.warning("Real CEX Close not fully implemented via Signal triggers yet.")
              return ExecutionResult(success=True, message="Bot marcado cerrado (Simulado), Ejecución real pendiente de impl.")
 
-    async def monitor_bots(self):
-        """Proceso en segundo plano para monitorear y actualizar bots activos."""
-        while True:
-            try:
-                active_bots = await db.trades.find({"status": "active"}).to_list(length=100)
-                
-                # Tiempo de espera por defecto
-                next_sleep = 60
-                
-                for bot in active_bots:
-                    # El proceso del tick ahora retorna la distancia mínima al objetivo (%)
-                    min_dist = await self._process_bot_tick(bot)
-                    
-                    # Ajustar el tiempo de espera del siguiente ciclo basado en la cercanía
-                    # de CUALQUIER bot a su objetivo
-                    if min_dist < 2.0:
-                        next_sleep = min(next_sleep, 5)
-                    elif min_dist < 5.0:
-                        next_sleep = min(next_sleep, 20)
-                
-                logger.debug(f"Monitor bots cycle complete. Sleeping for {next_sleep}s")
-                await asyncio.sleep(next_sleep)
-            except Exception as e:
-                logger.error(f"Error en monitor_bots: {e}")
-                await asyncio.sleep(60) 
+    async def initialize_active_bots_monitoring(self):
+        """Called on startup: subscribe to tickers for all active bots."""
+        active_bots = await db.trades.find({"status": "active"}).to_list(length=1000)
+        logger.info(f"Initializing WS monitoring for {len(active_bots)} active bots.")
+        for bot in active_bots:
+            # Detect exchange? Defaulting to binance for Sprint 1 prototype if not stored
+            # Ideally store 'exchangeId' in bot document
+            exchange_id = bot.get("exchangeId", "binance") 
+            symbol = bot["symbol"]
+            
+            # 1. Subscribe Ticker (Reaction)
+            await self.stream_service.subscribe_ticker(exchange_id, symbol)
+            
+            # 2. Initialize Buffer (History)
+            # Default timeframe 15m for now, ideally comes from bot config
+            timeframe = bot.get("timeframe", "15m") 
+            await self.buffer_service.initialize_buffer(exchange_id, symbol, timeframe)
 
-    async def _process_bot_tick(self, bot: Dict[str, Any]) -> float:
+    async def handle_market_update(self, event_type: str, data: Dict[str, Any]):
+        """Callback for WebSocket events."""
+        if event_type == "ticker_update":
+            symbol = data.get("symbol")
+            ticker = data.get("ticker", {})
+            last_price = ticker.get("last")
+            
+            if not symbol or not last_price:
+                return
+
+            # Find bots for this symbol
+            active_bots = await db.trades.find({"symbol": symbol, "status": "active"}).to_list(length=None)
+            
+            if not active_bots:
+                return
+                
+            # Process each bot with the new price info directly
+            for bot in active_bots:
+                await self._process_bot_tick(bot, current_price=last_price)
+
+    async def _process_bot_tick(self, bot: Dict[str, Any], current_price: float = None) -> float:
         """
         Actualiza el estado de un bot individual basado en el precio actual.
         Retorna la distancia porcentual mínima al objetivo más cercano (TP o SL).
         """
         symbol = bot["symbol"]
-        current_price = await self._get_current_price(bot)
+        
+        # Use provided price (WS) or fallback to fetch
+        if current_price is None:
+             current_price = await self._get_current_price(bot)
         
         if current_price <= 0:
             return 100.0 # No hay precio disponible, no aceleramos

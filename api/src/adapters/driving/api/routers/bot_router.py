@@ -47,6 +47,20 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
         amount=float(default_amount)
     )
     bot_id = await repo.save(bot)
+    
+    # Emitir evento de creación
+    await socket_service.emit_to_user(user_id, "bot_created", {
+        "id": bot_id,
+        "name": data.name,
+        "symbol": data.symbol,
+        "strategy_name": data.strategy_name,
+        "timeframe": data.timeframe,
+        "market_type": data.market_type,
+        "mode": data.mode,
+        "status": "active",
+        "amount": float(default_amount)
+    })
+    
     return {"id": bot_id, "status": "created"}
 
 def get_signal_repository():
@@ -114,6 +128,16 @@ async def toggle_bot_status(bot_id: str, status: str):
     if status not in ["active", "paused"]:
         raise HTTPException(status_code=400, detail="Invalid status")
     await repo.update_status(bot_id, status)
+    
+    # Emitir actualización de estado
+    bot_doc = await repo.collection.find_one({"_id": ObjectId(bot_id)})
+    if bot_doc:
+        u_id = bot_doc.get("userId")
+        await socket_service.emit_to_user(u_id, "bot_update", {
+            "id": bot_id,
+            "status": status
+        })
+        
     return {"message": f"Bot {status}"}
 
 from api.src.application.services.execution_engine import ExecutionEngine
@@ -148,6 +172,11 @@ async def receive_external_signal(data: SignalWebhook):
     return {"status": "processed", "execution": result}
 
 @router.delete("/{bot_id}")
-async def delete_bot(bot_id: str):
+async def delete_bot(bot_id: str, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["openId"]
     await repo.delete(bot_id)
+    
+    # Emitir evento de eliminación
+    await socket_service.emit_to_user(user_id, "bot_deleted", {"id": bot_id})
+    
     return {"message": "Bot deleted"}

@@ -143,13 +143,45 @@ class StrategyRunnerService:
                 
                 decision = prediction.get('decision', 'HOLD')
                 
-                # 7. Actuar sobre la señal (Entry or Exit)
+                # 7. Persistencia y Emisión de Señal (Tarea 4.3/4.5: Emitir HOLD y otros)
+                confidence = prediction.get('confidence', 0.85)
+                try:
+                    from api.src.domain.models.signal import Signal, SignalStatus, Decision, MarketType
+                    from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
+                    
+                    signal_repo = MongoDBSignalRepository(db)
+                    
+                    # Determinar estado
+                    sig_status = SignalStatus.EXECUTED if decision in ['BUY', 'SELL'] else SignalStatus.ACCEPTED
+                    if decision == 'HOLD':
+                         sig_status = SignalStatus.ACCEPTED # O un estado específico para HOLD si se desea
+                    
+                    sig_entity = Signal(
+                        id=None,
+                        userId=user_open_id,
+                        source=f"AUTO_STRATEGY_{strategy_name.upper()}",
+                        rawText=f"Auto generated signal {decision}",
+                        status=sig_status,
+                        createdAt=datetime.utcnow(),
+                        symbol=symbol,
+                        marketType=MarketType(bot.get('market_type', 'spot').upper()),
+                        decision=Decision(decision),
+                        confidence=confidence,
+                        reasoning=f"Strategy: {prediction.get('strategy_used')}",
+                        botId=str(bot.get('_id'))
+                    )
+                    
+                    await signal_repo.save(sig_entity)
+                    
+                    # --- WEBSOCKET EMISSION ---
+                    await socket_service.emit_to_user(user_open_id, "signal_update", sig_entity.to_dict())
+                    # --------------------------
+                    
+                except Exception as e:
+                    logger.error(f"Error saving/emitting signal: {e}")
+
+                # 8. Actuar si es una señal ejecutable
                 if decision in ['BUY', 'SELL']:
-                    # Simple Filter: If HOLD, do nothing.
-                    # MLService handles Logic: if in position, looks for Exit. If flat, looks for Entry.
-                    
-                    confidence = prediction.get('confidence', 0.85) 
-                    
                     analysis = AnalysisResult(
                         symbol=symbol,
                         decision=decision,
@@ -158,46 +190,10 @@ class StrategyRunnerService:
                         reasoning=f"Auto Strategy Runner ({prediction.get('strategy_used')})",
                         parameters={
                             "price": candles_list[-1]['close'],
-                            "amount": bot.get('amount') # Usar monto configurado en bot (si existe)
+                            "amount": bot.get('amount')
                         }
                     )
-                    
                     logger.info(f"🤖 AutoSignal: {decision} for {symbol} (User: {user_open_id})")
-                    
-                    # --- PERSISTENCIA DE SEÑAL (Tarea: Guardar todas las señales) ---
-                    try:
-                        from api.src.domain.models.signal import Signal, SignalStatus, Decision, MarketType
-                        from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
-                        
-                        signal_repo = MongoDBSignalRepository(db) # db should be available via imports
-                        
-                        sig_entity = Signal(
-                            id=None,
-                            userId=user_open_id, # Or ObjectId if repo expects it, usually repo handles conversation
-                            source=f"AUTO_STRATEGY_{strategy_name.upper()}",
-                            rawText=f"Auto generated signal {decision}",
-                            status=SignalStatus.EXECUTED, # Mark as executed/handling
-                            createdAt=datetime.utcnow(),
-                            symbol=symbol,
-                            marketType=MarketType(bot.get('market_type', 'spot').upper()),
-                            decision=Decision(decision),
-                            confidence=confidence,
-                            reasoning=f"Strategy: {prediction.get('strategy_used')}",
-                            botId=str(bot.get('_id'))
-                        )
-                        
-                        await signal_repo.save(sig_entity)
-                        logger.debug(f"Signal persisted: {sig_entity.id}")
-                        
-                        # --- WEBSOCKET EMISSION (Tarea: Emitir si cliente conectado) ---
-                        # socket_service.emit_to_user maneja internamente la verificación de conexión
-                        await socket_service.emit_to_user(user_open_id, "signal_update", sig_entity.to_dict())
-                        # -------------------------------------------------------------
-                        
-                    except Exception as e:
-                        logger.error(f"Error saving signal history: {e}")
-                    # -------------------------------------------------------------
-
                     await self.bot_service.activate_bot(analysis, user_open_id, config, bot_id=str(bot.get('_id')))
 
             except Exception as e:

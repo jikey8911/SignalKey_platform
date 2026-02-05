@@ -9,12 +9,9 @@ class MongoBotRepository:
     Repositorio sp2 para la persistencia de bots. 
     Permite recuperar bots activos para reanudar operaciones tras fallos del sistema.
     """
-    def __init__(self):
-        # Allow overriding via env vars, but default to localhost
-        self.uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-        self.db_name = os.getenv("MONGODB_DB", "signalkey_db")
-        self.client = AsyncIOMotorClient(self.uri)
-        self.db = self.client[self.db_name]
+    def __init__(self, db_adapter=None):
+        from api.src.adapters.driven.persistence.mongodb import db as db_global
+        self.db = db_adapter if db_adapter is not None else db_global
         self.collection = self.db["bot_instances"]
 
     async def save(self, bot: BotInstance) -> str:

@@ -245,7 +245,7 @@ class ExecutionEngine:
         # --- TAREA 4.3: NOTIFICACIÓN EN TIEMPO REAL (Socket) ---
         if self.socket and execution_result and execution_result.get('status') == 'executed':
             event_payload = {
-                "bot_id": str(bot_instance.get('_id', 'unknown')), # Ensure ID is string
+                "bot_id": str(bot_instance.get('_id', 'unknown')), 
                 "symbol": symbol,
                 "type": "LONG" if signal == BaseStrategy.SIGNAL_BUY else "SHORT",
                 "price": execution_result.get('price', price),
@@ -254,7 +254,7 @@ class ExecutionEngine:
                 "pnl_impact": execution_result.get('pnl', 0) 
             }
             # Emitimos el evento que el monitor híbrido en React capturará
-            await self.socket.emit("live_execution_signal", event_payload)
+            await self.socket.emit_to_user(str(bot_instance.get('user_id')), "live_execution_signal", event_payload)
             
         return execution_result or {"status": "executed", "details": execution_result}
 

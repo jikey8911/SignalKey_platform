@@ -397,8 +397,21 @@ const BotsPage = () => {
 
     // Also update on active_bot_update socket event if available
     useEffect(() => {
-        if (lastMessage && lastMessage.event === 'bot_update') {
+        if (!lastMessage) return;
+
+        if (lastMessage.event === 'bot_update') {
             setBots(prev => prev.map(b => b.id === lastMessage.data.id ? { ...b, ...lastMessage.data } : b));
+        } else if (lastMessage.event === 'bot_created') {
+            setBots(prev => [lastMessage.data, ...prev]);
+            toast.success(`Bot ${lastMessage.data.name} creado exitosamente`);
+        } else if (lastMessage.event === 'bot_deleted') {
+            setBots(prev => prev.filter(b => b.id !== lastMessage.data.id));
+            toast.info(`Bot eliminado`);
+        } else if (lastMessage.event === 'operation_update') {
+            const op = lastMessage.data;
+            toast.info(`Operación: ${op.type} en ${op.price}`, {
+                description: `${op.symbol} - ${op.reason}`
+            });
         }
     }, [lastMessage]);
 
