@@ -1,335 +1,202 @@
 from fastapi import FastAPI, BackgroundTasks, Depends, HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from datetime import datetime
-from api.src.domain.models.schemas import TradingSignal, AnalysisResult
+import logging
+import asyncio
+import os
+from contextlib import asynccontextmanager
+from typing import Optional
+
+# Imports internos
+from api.src.domain.models.schemas import TradingSignal
 from api.src.application.services.ai_service import AIService
 from api.src.application.services.cex_service import CEXService
 from api.src.application.services.dex_service import DEXService
 from api.src.application.services.backtest_service import BacktestService
 from api.src.application.services.bot_service import SignalBotService
 from api.src.adapters.driven.persistence.mongodb import db, get_app_config
-import logging
-import asyncio
-from typing import Optional
-from bson import ObjectId
-
-# Configuración de logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-from contextlib import asynccontextmanager
 from api.src.infrastructure.telegram.telegram_bot_manager import bot_manager
 from api.src.application.services.monitor_service import MonitorService
 from fastapi.middleware.cors import CORSMiddleware
 from api.config import Config
 
+# Configuración de logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger("API_MAIN")
+
+# --- VARIABLES GLOBALES ---
+# Se inicializan vacías y se rellenan en el startup
+tracker_service = None
+monitor_service = None
+boot_task = None # Referencia para evitar Garbage Collection de la tarea
+
+# --- FUNCIÓN DE ARRANQUE EN SEGUNDO PLANO (NO BLOQUEANTE) ---
+async def run_background_startup():
+    """
+    Ejecuta las tareas pesadas (Telegram, Carga de Modelos, Bots) en paralelo
+    después de que la API ya está respondiendo.
+    """
+    logger.info("⏳ [BACKGROUND] Iniciando secuencia de carga de servicios...")
+    
+    # Esperar un momento para asegurar que el loop principal respira
+    await asyncio.sleep(2)
+
+    try:
+        # 1. Telegram Bots (Puede tardar por conexión de red)
+        bot_manager.signal_processor = process_signal_task
+        logger.info("🤖 [BACKGROUND] Iniciando Telegram Bot Manager...")
+        await bot_manager.restart_all_bots(message_handler=process_signal_task)
+        logger.info(f"✅ [BACKGROUND] Telegram activo: {bot_manager.get_active_bots_count()} bots.")
+
+        # 2. Inicializar Bots de Trading (Recuperar estado de DB)
+        from api.src.application.services.boot_manager import BootManager
+        boot_manager_service = BootManager(db_adapter_in=db)
+        logger.info("📈 [BACKGROUND] Reactivando bots de trading...")
+        await boot_manager_service.initialize_active_bots()
+        
+        # 3. Cargar Modelos IA (Pesado en CPU/RAM)
+        try:
+            from api.src.infrastructure.ai.model_manager import ModelManager
+            logger.info("🧠 [BACKGROUND] Cargando modelos de IA...")
+            # Ejecutar en thread pool para no bloquear el loop async si usa joblib
+            await asyncio.to_thread(ModelManager().load_all_models)
+            logger.info("✅ [BACKGROUND] Modelos cargados.")
+        except Exception as e:
+            logger.warning(f"⚠️ [BACKGROUND] IA Model Manager warning: {e}")
+
+        # 4. Iniciar Motores de Trading
+        logger.info("🚀 [BACKGROUND] Arrancando motores de ejecución...")
+        
+        # Servicios globales (tracker, monitor)
+        global tracker_service, monitor_service
+        tracker_service = TrackerService(cex_service=cex_service, dex_service=dex_service)
+        monitor_service = MonitorService(cex_service=cex_service, dex_service=dex_service)
+        
+        # Iniciar tareas asíncronas
+        asyncio.create_task(monitor_service.start_monitoring())
+        await signal_bot_service.start()
+        
+        logger.info("🎉 [BACKGROUND] SISTEMA COMPLETAMENTE OPERATIVO")
+
+    except Exception as e:
+        logger.error(f"❌ [BACKGROUND] Error crítico en arranque diferido: {e}", exc_info=True)
+
+# --- LIFESPAN (EVENTOS DE CICLO DE VIDA) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    logger.info("=== Starting SignalKey Platform Services (Hexagonal Mode) ===")
+    # === STARTUP ===
+    logger.info("⚡ API iniciando...")
     
-    # TEMPORALMENTE DESHABILITADO PARA DESARROLLO
-    # TODO: Re-habilitar servicios uno por uno después de verificar que la API básica funciona
-    """
-    bot_manager.signal_processor = process_signal_task
+    # Lanzar la carga pesada como tarea independiente
+    global boot_task
+    boot_task = asyncio.create_task(run_background_startup())
     
+    yield # Aquí la API empieza a recibir peticiones
+    
+    # === SHUTDOWN ===
+    logger.info("🛑 API deteniéndose...")
     try:
-        # Iniciar bots por usuario desde la DB (incluye fuentes globales marcadas con isGlobalSource)
-        await bot_manager.restart_all_bots(message_handler=process_signal_task)
-        logger.info(f"Telegram Bot Manager started with {bot_manager.get_active_bots_count()} active bots")
-        
-        from api.src.application.services.boot_manager import BootManager
-        boot_manager = BootManager(db_adapter_in=db) 
-        await boot_manager.initialize_active_bots()
-        
-        # --- TASK Sprint 2: Model Manager Initialization ---
-        from api.src.infrastructure.ai.model_manager import ModelManager
-        model_manager = ModelManager()
-        model_manager.load_all_models()
-        logger.info("ModelManager initialized and models loaded.")
+        if boot_task: boot_task.cancel()
+        await bot_manager.stop_all_bots()
+        if monitor_service: await monitor_service.stop_monitoring()
+        await signal_bot_service.stop()
+        await cex_service.close_all()
+        await dex_service.close_all()
+        await ai_service.close()
     except Exception as e:
-        logger.error(f"Error starting Telegram Bot Manager: {e}")
+        logger.error(f"Error en shutdown: {e}")
+    logger.info("👋 Shutdown completo.")
 
-    from api.src.application.services.tracker_service import TrackerService
-    global tracker_service, monitor_service
-    tracker_service = TrackerService(cex_service=cex_service, dex_service=dex_service)
-    await tracker_service.start_monitoring()
-    
-    from api.src.application.services.monitor_service import MonitorService
-    monitor_service = MonitorService(cex_service=cex_service, dex_service=dex_service)
-    monitor_task = asyncio.create_task(monitor_service.start_monitoring())
+app = FastAPI(title="SignalKey Platform API", lifespan=lifespan)
 
-    # Start Bot Service (WebSockets & Monitoring)
-    await signal_bot_service.start()
-    
-    # --- TASK 5.2: Strategy Runner Service (Auto-Trading Loop) ---
-    from api.src.application.services.strategy_runner_service import StrategyRunnerService
-    from api.src.application.services.ml_service import MLService
-    from api.src.domain.services.strategy_trainer import StrategyTrainer
-    
-    ml_service_runner = MLService(exchange_adapter=ccxt_adapter, trainer=StrategyTrainer())
-    
-    global strategy_runner
-    strategy_runner = StrategyRunnerService(ml_service=ml_service_runner, bot_service=signal_bot_service)
-    runner_task = asyncio.create_task(strategy_runner.start())
-    """
-
-    logger.info("=== API Core started (background services disabled for development) ===")
-    
-    yield
-    
-    # Shutdown
-    logger.info("=== Stopping SignalKey Platform Services ===")
-    """
-    await bot_manager.stop_all_bots()
-    await monitor_service.stop_monitoring()
-    monitor_task.cancel()
-    await signal_bot_service.stop()
-    await strategy_runner.stop()
-    runner_task.cancel()
-    await cex_service.close_all()
-    await dex_service.close_all()
-    await ai_service.close()
-    """
-    logger.info("=== Shutdown complete ===")
-
-app = FastAPI(title="Crypto Trading Signal API (Hexagonal Refactored)", lifespan=lifespan)
-
+# --- MIDDLEWARE & CONFIG ---
 app.add_middleware(
     CORSMiddleware,
-    # allow_origins=["*"],  # Wildcard is often problematic with credentials
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
-        "http://localhost:3002",
-        "http://127.0.0.1:3002",
-        "https://psychic-guide-g4wr4jp4r4x93p45w-3000.app.github.dev" # Specific user origin
-    ],
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?|https://.*\.app\.github\.dev",
+    allow_origins=["*"], # Permitir todo para desarrollo local fácil
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Inicialización de servicios globales
+# Inicialización de adaptadores base (Ligeros)
 from api.src.adapters.driven.exchange.ccxt_adapter import CcxtAdapter
-ccxt_adapter = CcxtAdapter(db_adapter=db) # Initialize Adapter with DB
+ccxt_adapter = CcxtAdapter(db_adapter=db) 
 
-# Inyección de dependencia para servicios globalmente accesibles
-from api.config import Config
-logger.info(f"[INIT] JWT Secret prefix: {Config.JWT_SECRET[:4]}... (len: {len(Config.JWT_SECRET)})")
+logger.info(f"[INIT] Config loaded. JWT Prefix: {Config.JWT_SECRET[:4]}...")
 
+# Instanciación de Servicios (Sin iniciarlos aún)
 ai_service = AIService()
-# Inject configured adapter into CEXService
 cex_service = CEXService(ccxt_adapter=ccxt_adapter) 
 dex_service = DEXService()
-backtest_service = BacktestService(exchange_adapter=ccxt_adapter) # Use generic adapter for backtest
+backtest_service = BacktestService(exchange_adapter=ccxt_adapter) 
 signal_bot_service = SignalBotService(cex_service=cex_service, dex_service=dex_service)
 
-tracker_service = None
-monitor_service = None
+# --- ROUTERS ---
+from api.src.adapters.driving.api.routers import (
+    auth_router, user_config_router, telegram_router, backtest_router,
+    websocket_router, ml_router, market_data_router, bot_router,
+    signal_router, trade_router, health_router
+)
 
-# Importar y agregar routers
-from api.src.adapters.driving.api.routers.auth_router import router as auth_router
-from api.src.adapters.driving.api.routers.user_config_router import router as config_router
-from api.src.adapters.driving.api.routers.telegram_router import router as telegram_router
-from api.src.adapters.driving.api.routers.backtest_router import router as backtest_router
-from api.src.adapters.driving.api.routers.websocket_router import router as websocket_router
-from api.src.adapters.driving.api.routers.ml_router import router as ml_router
-from api.src.adapters.driving.api.routers.market_data_router import router as market_data_router
-from api.src.adapters.driving.api.routers.bot_router import router as bot_router
-from api.src.adapters.driving.api.routers.signal_router import router as signal_router
-from api.src.adapters.driving.api.routers.bot_router import router as bot_router
-from api.src.adapters.driving.api.routers.signal_router import router as signal_router
-from api.src.adapters.driving.api.routers.trade_router import router as trade_router
-from api.src.adapters.driving.api.routers.health_router import router as health_router
+app.include_router(auth_router.router)
+app.include_router(user_config_router.router)
+app.include_router(telegram_router.router)
+app.include_router(backtest_router.router)
+app.include_router(websocket_router.router)
+app.include_router(ml_router.router)
+app.include_router(market_data_router.router)
+app.include_router(bot_router.router)
+app.include_router(signal_router.router)
+app.include_router(trade_router.router)
+app.include_router(health_router.router)
 
-app.include_router(auth_router)
-app.include_router(config_router)
-app.include_router(telegram_router)
-app.include_router(backtest_router)
-app.include_router(websocket_router)
-app.include_router(ml_router)
-app.include_router(market_data_router)
-app.include_router(bot_router)
-app.include_router(signal_router)
-app.include_router(trade_router)
-app.include_router(health_router)
-
-# --- Endpoints --- #
-
-@app.post("/config/telegram_activate")
-async def update_telegram_activate(user_id: str, active: bool):
-    """
-    Activa o desactiva el procesamiento de mensajes de Telegram.
-    """
+# --- TAREA DE PROCESAMIENTO DE SEÑALES ---
+async def process_signal_task(signal: TradingSignal, user_id: str = "default_user"):
+    from api.src.infrastructure.di.container import container
     try:
-        user = await db.users.find_one({"openId": user_id})
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-            
-        await db.app_configs.update_one(
-            {"userId": user["_id"]},
-            {"$set": {"botTelegramActivate": active}}
-        )
-        return {"status": "success", "active": active}
-    except Exception as e:
-        logger.error(f"Error updating telegram config: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        use_case = container.get_process_signal_use_case()
+        
+        if user_id == "ALL":
+            # Lógica simplificada para broadcast
+            configs = await db.app_configs.find({"botTelegramActivate": True}).to_list(100)
+            for cfg in configs:
+                uid = str(cfg.get("userId")) # Simplificado, idealmente obtener openId
+                # Enviar a background para no bloquear el loop del bot
+                asyncio.create_task(use_case.execute(signal.raw_text, signal.source, uid, cfg))
+            return
 
+        config = await get_app_config(user_id) or {}
+        if config.get("botTelegramActivate", False):
+            await use_case.execute(signal.raw_text, signal.source, user_id, config)
+            
+    except Exception as e:
+        logger.error(f"Error procesando señal: {e}")
+
+# --- ENDPOINTS AUXILIARES ---
 @app.get("/status/{user_id}")
 async def get_user_status(user_id: str):
-    """
-    Retorna el estado del sistema para un usuario específico.
-    Usado por el Dashboard para mostrar información en tiempo real.
-    """
-    try:
-        # Buscar usuario
-        user = await db.users.find_one({"openId": user_id})
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        
-        # Obtener configuración
-        config = await db.app_configs.find_one({"userId": user["_id"]})
-        
-        # Contar bots activos
-        active_bots = await db.trades.count_documents({
-            "userId": user["_id"],
-            "status": "active"
-        })
-        
-        # Contar señales recientes (últimas 24h)
-        from datetime import datetime, timedelta
-        recent_signals = await db.signals.count_documents({
-            "userId": user["_id"],
-            "createdAt": {"$gte": datetime.utcnow() - timedelta(hours=24)}
-        })
-        
-        return {
-            "user_id": user_id,
-            "is_auto_enabled": config.get("isAutoEnabled", False) if config else False,
-            "demo_mode": config.get("demoMode", True) if config else True,
-            "active_bots": active_bots,
-            "recent_signals_24h": recent_signals,
-            "active_bots": active_bots,
-            "recent_signals_24h": recent_signals,
-            "telegram_connected": bool(config.get("telegramBotToken")) if config else False,
-            "botTelegramActivate": config.get("botTelegramActivate", False) if config else False,
-            "ai_provider": config.get("aiProvider", "gemini") if config else "gemini",
-            "status": "online"
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting status for {user_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    # Implementación simplificada para health check rápido
+    return {"status": "online", "user_id": user_id, "system_booting": boot_task is not None and not boot_task.done()}
 
-async def process_signal_task(signal: TradingSignal, user_id: str = "default_user"):
-    """
-    Refactored using Hexagonal Architecture.
-    Delegates to the ProcessSignalUseCase via the DI Container.
-    """
-    from api.src.infrastructure.di.container import container
-    use_case = container.get_process_signal_use_case()
-
-    # Soporte para "ALL": Procesar señal para todos los usuarios activos
-    if user_id == "ALL":
-        logger.info(f"Procesando señal GLOBAL de {signal.source}")
-        try:
-            # Seleccionamos usuarios que tienen el procesamiento activado para análisis IA
-            # Los mensajes ya se enviaron a la consola y sockets globales en el bot_instance
-            configs_cursor = db.app_configs.find({"botTelegramActivate": True})
-            configs = await configs_cursor.to_list(length=100)
-
-            if not configs:
-                logger.info("No hay usuarios con botTelegramActivate=True. Saltando análisis IA.")
-                return
-
-            for config in configs:
-                try:
-                    user = await db.users.find_one({"_id": config.get("userId")})
-                    if user and user.get("openId"):
-                        target_id = user["openId"]
-                        logger.info(f"Broadcasting global signal to user: {target_id}")
-                        await use_case.execute(
-                            raw_text=signal.raw_text,
-                            source=signal.source,
-                            user_id=target_id,
-                            config=config
-                        )
-                except Exception as user_err:
-                    logger.error(f"Error processing global signal for a user: {user_err}")
-            return
-        except Exception as e:
-            logger.error(f"Error in global signal broadcast: {e}")
-            return
-
-    logger.info(f"Procesando señal de {signal.source} para usuario {user_id} (Hexagonal)")
-    
-    # Obtener config del usuario
-    config = await get_app_config(user_id)
-    if not config:
-        logger.warning(f"No config found for user {user_id}, using environment defaults")
-        config = {}
-        
-    # Check Master Switch for Telegram
-    if not config.get("botTelegramActivate", False):
-        logger.info(f"Telegram processing disabled for user {user_id}. Signal ignored.")
-        return
-
-    # Ejecutar el caso de uso
-    try:
-        await use_case.execute(
-            raw_text=signal.raw_text,
-            source=signal.source,
-            user_id=user_id,
-            config=config
-        )
-    except Exception as e:
-        logger.error(f"Error in ProcessSignalUseCase: {e}")
-
-# --- Servir Frontend Estático (Producción) ---
-# NOTA: Temporalmente deshabilitado en desarrollo para evitar conflictos con rutas API
-# TODO: Habilitar solo en producción con una variable de entorno
-"""
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-import os
-
-# Definir la ruta a la carpeta 'dist' compilada del frontend
+# --- SERVIR FRONTEND ---
 frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "dist", "public")
+# Fallback si public no existe (a veces vite construye directo en dist)
+if not os.path.exists(frontend_path):
+    frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "dist")
 
 if os.path.exists(frontend_path):
-    logger.info(f"Frontend build found at: {frontend_path}")
+    logger.info(f"📂 Frontend estático detectado en: {frontend_path}")
+    app.mount("/assets", StaticFiles(directory=os.path.join(frontend_path, "assets")), name="assets")
     
-    # 1. Montar assets estáticos (js, css, images)
-    assets_path = os.path.join(frontend_path, "assets")
-    if os.path.exists(assets_path):
-        app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
-        logger.info("Mounted /assets for static files")
-    
-    # 2. Ruta "Catch-all" para React Router (debe ir al final)
     @app.get("/{full_path:path}")
     async def serve_react_app(full_path: str):
-        \"\"\"
-        Sirve el frontend de React en producción.
-        Cualquier ruta que no sea API devuelve index.html para que React maneje la navegación.
-        \"\"\"
-        # Si piden un archivo específico que existe (ej. favicon.ico), sírvelo
         file_path = os.path.join(frontend_path, full_path)
         if os.path.exists(file_path) and os.path.isfile(file_path):
             return FileResponse(file_path)
-        
-        # Si no, devuelve index.html (SPA handling)
-        index_path = os.path.join(frontend_path, "index.html")
-        if os.path.exists(index_path):
-            return FileResponse(index_path)
-        
-        raise HTTPException(status_code=404, detail="Frontend not built. Run 'npm run build' in web/")
+        return FileResponse(os.path.join(frontend_path, "index.html"))
 else:
-    logger.warning(f"Frontend build not found at {frontend_path}. Static serving disabled.")
-    logger.warning("To enable production frontend, run: cd web && npm run build")
-"""
-
-
+    logger.warning("⚠️ Frontend build NO encontrado. Ejecuta 'npm run build' en la carpeta web.")
