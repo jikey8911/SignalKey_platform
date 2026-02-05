@@ -27,51 +27,8 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("=== Starting SignalKey Platform Services (Hexagonal Mode) ===")
     
-    # TEMPORALMENTE DESHABILITADO PARA DESARROLLO
     # TODO: Re-habilitar servicios uno por uno después de verificar que la API básica funciona
-    """
-    bot_manager.signal_processor = process_signal_task
-    
-    try:
-        # Iniciar bots por usuario desde la DB (incluye fuentes globales marcadas con isGlobalSource)
-        await bot_manager.restart_all_bots(message_handler=process_signal_task)
-        logger.info(f"Telegram Bot Manager started with {bot_manager.get_active_bots_count()} active bots")
-        
-        from api.src.application.services.boot_manager import BootManager
-        boot_manager = BootManager(db_adapter_in=db) 
-        await boot_manager.initialize_active_bots()
-        
-        # --- TASK Sprint 2: Model Manager Initialization ---
-        from api.src.infrastructure.ai.model_manager import ModelManager
-        model_manager = ModelManager()
-        model_manager.load_all_models()
-        logger.info("ModelManager initialized and models loaded.")
-    except Exception as e:
-        logger.error(f"Error starting Telegram Bot Manager: {e}")
-
-    from api.src.application.services.tracker_service import TrackerService
-    global tracker_service, monitor_service
-    tracker_service = TrackerService(cex_service=cex_service, dex_service=dex_service)
-    await tracker_service.start_monitoring()
-    
-    from api.src.application.services.monitor_service import MonitorService
-    monitor_service = MonitorService(cex_service=cex_service, dex_service=dex_service)
-    monitor_task = asyncio.create_task(monitor_service.start_monitoring())
-
-    # Start Bot Service (WebSockets & Monitoring)
-    await signal_bot_service.start()
-    
-    # --- TASK 5.2: Strategy Runner Service (Auto-Trading Loop) ---
-    from api.src.application.services.strategy_runner_service import StrategyRunnerService
-    from api.src.application.services.ml_service import MLService
-    from api.src.domain.services.strategy_trainer import StrategyTrainer
-    
-    ml_service_runner = MLService(exchange_adapter=ccxt_adapter, trainer=StrategyTrainer())
-    
-    global strategy_runner
-    strategy_runner = StrategyRunnerService(ml_service=ml_service_runner, bot_service=signal_bot_service)
-    runner_task = asyncio.create_task(strategy_runner.start())
-    """
+    # Services are currently disabled for development/refactoring
 
     logger.info("=== API Core started (background services disabled for development) ===")
     
@@ -79,17 +36,6 @@ async def lifespan(app: FastAPI):
     
     # Shutdown
     logger.info("=== Stopping SignalKey Platform Services ===")
-    """
-    await bot_manager.stop_all_bots()
-    await monitor_service.stop_monitoring()
-    monitor_task.cancel()
-    await signal_bot_service.stop()
-    await strategy_runner.stop()
-    runner_task.cancel()
-    await cex_service.close_all()
-    await dex_service.close_all()
-    await ai_service.close()
-    """
     logger.info("=== Shutdown complete ===")
 
 app = FastAPI(title="Crypto Trading Signal API (Hexagonal Refactored)", lifespan=lifespan)
@@ -138,8 +84,6 @@ from api.src.adapters.driving.api.routers.backtest_router import router as backt
 from api.src.adapters.driving.api.routers.websocket_router import router as websocket_router
 from api.src.adapters.driving.api.routers.ml_router import router as ml_router
 from api.src.adapters.driving.api.routers.market_data_router import router as market_data_router
-from api.src.adapters.driving.api.routers.bot_router import router as bot_router
-from api.src.adapters.driving.api.routers.signal_router import router as signal_router
 from api.src.adapters.driving.api.routers.bot_router import router as bot_router
 from api.src.adapters.driving.api.routers.signal_router import router as signal_router
 from api.src.adapters.driving.api.routers.trade_router import router as trade_router
@@ -210,8 +154,6 @@ async def get_user_status(user_id: str):
             "user_id": user_id,
             "is_auto_enabled": config.get("isAutoEnabled", False) if config else False,
             "demo_mode": config.get("demoMode", True) if config else True,
-            "active_bots": active_bots,
-            "recent_signals_24h": recent_signals,
             "active_bots": active_bots,
             "recent_signals_24h": recent_signals,
             "telegram_connected": bool(config.get("telegramBotToken")) if config else False,
@@ -288,48 +230,3 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
         )
     except Exception as e:
         logger.error(f"Error in ProcessSignalUseCase: {e}")
-
-# --- Servir Frontend Estático (Producción) ---
-# NOTA: Temporalmente deshabilitado en desarrollo para evitar conflictos con rutas API
-# TODO: Habilitar solo en producción con una variable de entorno
-"""
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-import os
-
-# Definir la ruta a la carpeta 'dist' compilada del frontend
-frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "dist", "public")
-
-if os.path.exists(frontend_path):
-    logger.info(f"Frontend build found at: {frontend_path}")
-    
-    # 1. Montar assets estáticos (js, css, images)
-    assets_path = os.path.join(frontend_path, "assets")
-    if os.path.exists(assets_path):
-        app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
-        logger.info("Mounted /assets for static files")
-    
-    # 2. Ruta "Catch-all" para React Router (debe ir al final)
-    @app.get("/{full_path:path}")
-    async def serve_react_app(full_path: str):
-        \"\"\"
-        Sirve el frontend de React en producción.
-        Cualquier ruta que no sea API devuelve index.html para que React maneje la navegación.
-        \"\"\"
-        # Si piden un archivo específico que existe (ej. favicon.ico), sírvelo
-        file_path = os.path.join(frontend_path, full_path)
-        if os.path.exists(file_path) and os.path.isfile(file_path):
-            return FileResponse(file_path)
-        
-        # Si no, devuelve index.html (SPA handling)
-        index_path = os.path.join(frontend_path, "index.html")
-        if os.path.exists(index_path):
-            return FileResponse(index_path)
-        
-        raise HTTPException(status_code=404, detail="Frontend not built. Run 'npm run build' in web/")
-else:
-    logger.warning(f"Frontend build not found at {frontend_path}. Static serving disabled.")
-    logger.warning("To enable production frontend, run: cd web && npm run build")
-"""
-
-

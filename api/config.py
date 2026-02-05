@@ -37,4 +37,3 @@ class Config:
     # App Settings
     DEBUG = os.getenv("DEBUG", "True") == "True"
     DEMO_MODE = os.getenv("DEMO_MODE", "True") == "True"
-    PORT = int(os.getenv("PORT", 8000))

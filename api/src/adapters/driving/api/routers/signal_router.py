@@ -3,7 +3,7 @@ from typing import List, Optional
 from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
 from api.src.adapters.driven.persistence.mongodb import db, get_app_config
 from api.src.infrastructure.security.auth_deps import get_current_user
-from api.src.domain.models.signal import SignalStatus, Decision
+from api.src.domain.models.signal import SignalStatus, Decision, SignalAnalysis, MarketType
 from bson import ObjectId
 import logging
 
@@ -24,21 +24,14 @@ async def list_user_signals(
     Lista las señales para el usuario actual.
     """
     user_id = current_user["openId"]
-    # Nota: find_by_user en el repo espera ObjectId o string según implementación, 
-    # pero el repo usa ObjectId(user_id) si tiene 24 chars.
-    # OpenId no suele ser 24 chars hex, así que debemos buscar por el campo userId que coincida.
     
-    # El repo busca por userId. En la DB, signals tienen userId que es el openId o el ObjectId del usuario?
-    # En ProcessSignalUseCase.execute, se usa user_id (que es openId en main.py call).
+    # Use repository instead of direct DB access
+    signals = await signal_repo.find_by_user(user_id)
     
-    # Vamos a usar una búsqueda directa por ahora para asegurar compatiblidad con openId
-    cursor = db.trading_signals.find({"userId": user_id}).sort("createdAt", -1).limit(limit)
-    signals = []
-    async for doc in cursor:
-        doc["id"] = str(doc["_id"])
-        signals.append(doc)
+    # Sort locally by createdAt descending
+    signals.sort(key=lambda x: x.createdAt, reverse=True)
     
-    return _serialize_mongo(signals)
+    return [s.to_dict() for s in signals[:limit]]
 
 @router.post("/{signal_id}/approve")
 async def approve_signal(
@@ -59,9 +52,8 @@ async def approve_signal(
         raise HTTPException(status_code=403, detail="Not authorized to approve this signal")
 
     # Re-ejecutar lógica de bot_service
+    # Importación tardía para evitar ciclos con api.main
     from api.main import signal_bot_service
-    from api.src.domain.models.signal import SignalAnalysis, MarketingType # Error in import name in domain? No, it's MarketType
-    from api.src.domain.models.signal import MarketType
     
     # Crear análisis a partir de la señal
     analysis = SignalAnalysis(
@@ -92,12 +84,3 @@ async def approve_signal(
     except Exception as e:
         logger.error(f"Error approving signal {signal_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-def _serialize_mongo(obj):
-    if isinstance(obj, list):
-        return [_serialize_mongo(i) for i in obj]
-    if isinstance(obj, dict):
-        return {k: _serialize_mongo(v) for k, v in obj.items()}
-    if isinstance(obj, ObjectId):
-        return str(obj)
-    return obj

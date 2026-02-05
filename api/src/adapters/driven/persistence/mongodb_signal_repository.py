@@ -44,20 +44,29 @@ class MongoDBSignalRepository(ISignalRepository):
         return result.modified_count > 0
 
     async def find_by_id(self, signal_id: str) -> Optional[Signal]:
-        doc = await self.collection.find_one({"_id": ObjectId(signal_id)})
+        try:
+            oid = ObjectId(signal_id)
+        except:
+            return None
+
+        doc = await self.collection.find_one({"_id": oid})
         if not doc:
             return None
         return self._map_to_entity(doc)
 
     async def find_by_user(self, user_id: str) -> List[Signal]:
-        cursor = self.collection.find({"userId": ObjectId(user_id)})
+        # Handle ObjectId or string ID consistently with save method
+        query_id = ObjectId(user_id) if isinstance(user_id, str) and len(user_id) == 24 else user_id
+
+        cursor = self.collection.find({"userId": query_id})
         signals = []
         async for doc in cursor:
             signals.append(self._map_to_entity(doc))
         return signals
 
     async def find_by_bot_id(self, bot_id: str) -> List[Signal]:
-        cursor = self.collection.find({"botId": ObjectId(bot_id)})
+        query_id = ObjectId(bot_id) if isinstance(bot_id, str) and len(bot_id) == 24 else bot_id
+        cursor = self.collection.find({"botId": query_id})
         signals = []
         async for doc in cursor:
             signals.append(self._map_to_entity(doc))
