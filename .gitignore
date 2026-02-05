@@ -70,6 +70,8 @@ web/node_modules/
 # Tests & Coverage
 api/tests/
 web/tests/
+**/tests/**
+**/test/**
 .pytest_cache/
 api_test_results*.txt
 .coverage
@@ -80,6 +82,8 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .nox/
+test_report.md
+api_test_results.txt
 
 # App Data & Sessions
 sessions/
@@ -93,6 +97,5 @@ api/tests/temp_models/
 *.pkl
 *.joblib
 
+**test**
 **tests**
-/**test**
-api/tests/**
