@@ -135,9 +135,73 @@ class MarketStreamService:
                     "symbol": symbol,
                     "ticker": ticker
                 })
-            except ccxt.NetworkError as e:
-                logger.warning(f"Network error watching {symbol} on {exchange.id}: {e}. Retrying in 5s..")
-                await asyncio.sleep(5)
             except Exception as e:
                 logger.error(f"Error watching {symbol} on {exchange.id}: {e}")
                 await asyncio.sleep(5) # Prevent tight loop on error
+
+    async def subscribe_candles(self, exchange_id: str, symbol: str, timeframe: str):
+        """
+        Se suscribe al stream de velas (OHLCV).
+        """
+        # Clave única para evitar duplicados: binance_BTC/USDT_15m
+        stream_key = f"{exchange_id}_{symbol}_{timeframe}"
+        
+        if stream_key in self.tasks: # Use key check or better task naming check
+             # Check if task with this name exists
+            active_tasks = [t for t in self.tasks if not t.done()]
+            if any(t.get_name() == stream_key for t in active_tasks):
+                return
+
+        logger.info(f"🕯️ Suscribiendo a velas {timeframe} para {symbol}")
+        
+        async def candle_loop():
+            try:
+                # Determinar el exchange instance (asumiendo gestión dinámica)
+                if exchange_id not in self.exchanges:
+                    await self.initialize_exchange(exchange_id)
+                    
+                exchange = self.exchanges.get(exchange_id) 
+                if not exchange: return
+
+                while self.running:
+                    # CCXT watch_ohlcv devuelve una lista de velas. Tomamos la última.
+                    try:
+                        candles = await exchange.watch_ohlcv(symbol, timeframe)
+                        
+                        if candles:
+                            # La última vela suele ser la "actual en formación".
+                            # La penúltima es la "recién cerrada".
+                            # Estrategia: Enviamos la última para actualizar el precio actual,
+                            # pero el BotService decidirá si es nueva.
+                            latest_candle = candles[-1]
+                            
+                            event_data = {
+                                "exchange": exchange_id,
+                                "symbol": symbol,
+                                "timeframe": timeframe,
+                                "candle": {
+                                    "timestamp": latest_candle[0], # Unix Timestamp ms
+                                    "open": latest_candle[1],
+                                    "high": latest_candle[2],
+                                    "low": latest_candle[3],
+                                    "close": latest_candle[4],
+                                    "volume": latest_candle[5]
+                                }
+                            }
+                            # Emitir evento específico de vela
+                            await self.notify_listeners("candle_update", event_data)
+                    except ccxt.NetworkError as ne:
+                         logger.warning(f"Network error in candle stream {stream_key}: {ne}")
+                         await asyncio.sleep(5)
+                    except Exception as e:
+                         logger.error(f"Error in candle stream loop {stream_key}: {e}")
+                         await asyncio.sleep(5)
+                        
+            except Exception as e:
+                logger.error(f"Fatal error in stream de velas {stream_key}: {e}")
+                # Lógica de reconexión aquí...
+
+        task = asyncio.create_task(candle_loop())
+        task.set_name(stream_key)
+        self.tasks.append(task)
+

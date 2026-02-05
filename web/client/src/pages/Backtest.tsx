@@ -823,7 +823,8 @@ export default function Backtest() {
                             const res = await fetch(`${CONFIG.API_BASE_URL}/backtest/deploy_bot?` + new URLSearchParams({
                               symbol: results.symbol,
                               strategy: results.strategy_name || '',
-                              initial_balance: virtualBalance.toString()
+                              initial_balance: virtualBalance.toString(),
+                              timeframe: results.timeframe // Enviar timeframe del resultado
                             }), { method: 'POST' });
 
                             if (!res.ok) throw new Error("Fallo en la conexión");
@@ -1244,7 +1245,8 @@ export default function Backtest() {
                             const res = await fetch(`${CONFIG.API_BASE_URL}/backtest/deploy_bot?` + new URLSearchParams({
                               symbol: selectedResult.symbol,
                               strategy: selectedResult.strategy_name || '',
-                              initial_balance: virtualBalance.toString()
+                              initial_balance: virtualBalance.toString(),
+                              timeframe: selectedResult.timeframe // Enviar timeframe del modal
                             }), { method: 'POST' });
 
                             if (!res.ok) throw new Error("Fallo en la conexión");

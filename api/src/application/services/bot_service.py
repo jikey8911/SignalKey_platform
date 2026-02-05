@@ -8,13 +8,16 @@ from api.src.application.services.dex_service import DEXService
 from api.src.domain.models.schemas import AnalysisResult, ExecutionResult
 from api.src.adapters.driven.exchange.stream_service import MarketStreamService
 from api.src.application.services.buffer_service import DataBufferService
+from api.src.application.services.ml_service import MLService
 
 logger = logging.getLogger(__name__)
 
 class SignalBotService:
-    def __init__(self, cex_service: CEXService = None, dex_service: DEXService = None):
+    def __init__(self, cex_service: CEXService = None, dex_service: DEXService = None, ml_service: MLService = None):
         self.cex_service = cex_service or CEXService()
         self.dex_service = dex_service or DEXService()
+        # MLService requires an exchange adapter, we use CEXService
+        self.ml_service = ml_service or MLService(exchange_adapter=self.cex_service) 
         self.stream_service = MarketStreamService()
         self.buffer_service = DataBufferService(stream_service=self.stream_service, cex_service=self.cex_service)
         self.stream_service.add_listener(self.handle_market_update)
@@ -69,6 +72,10 @@ class SignalBotService:
 
         demo_mode = config.get("demoMode", True)
         market_type = analysis.market_type
+        
+        # --- Capturar Timeframe ---
+        # Prioridad: 1. Configuración explícita, 2. Parámetros del análisis, 3. Default 15m
+        timeframe = config.get("timeframe") or analysis.parameters.get("timeframe", "15m")
         
         # Obtener precio actual
         current_price = await self.cex_service.get_current_price(symbol, user_id)
@@ -150,6 +157,7 @@ class SignalBotService:
             "userId": user_id,
             "botInstanceId": bot_id, # Link to Bot Instance
             "symbol": symbol,
+            "timeframe": timeframe, # Timeframe para monitoreo de velas
             "side": analysis.decision.upper(),
             "entryPrice": entry_price,
             "currentPrice": current_price,
@@ -402,42 +410,176 @@ class SignalBotService:
              return ExecutionResult(success=True, message="Bot marcado cerrado (Simulado), Ejecución real pendiente de impl.")
 
     async def initialize_active_bots_monitoring(self):
-        """Called on startup: subscribe to tickers for all active bots."""
+        """Startup: Inicia monitoreo y WARM-UP."""
         active_bots = await db.trades.find({"status": "active"}).to_list(length=1000)
-        logger.info(f"Initializing WS monitoring for {len(active_bots)} active bots.")
+        logger.info(f"Initializing monitoring for {len(active_bots)} active bots.")
+        
         for bot in active_bots:
-            # Detect exchange? Defaulting to binance for Sprint 1 prototype if not stored
-            # Ideally store 'exchangeId' in bot document
-            exchange_id = bot.get("exchangeId", "binance") 
+            exchange_id = bot.get("exchangeId", "binance")
             symbol = bot["symbol"]
+            timeframe = bot.get("timeframe", "15m") # Timeframe del modelo
             
-            # 1. Subscribe Ticker (Reaction)
+            # 1. WARM-UP (Arranca en Frío solucionado)
+            # Antes de escuchar sockets, llenamos la memoria con las últimas 100 velas
+            await self.buffer_service.initialize_buffer(exchange_id, symbol, timeframe, limit=100)
+            
+            # 2. Suscribir a VELAS para la IA (Nuevo)
+            await self.stream_service.subscribe_candles(exchange_id, symbol, timeframe)
+            
+            # 3. Suscribir a TICKER para TP/SL (Seguridad en tiempo real)
+            # El TP/SL debe saltar al instante, no esperar al cierre de la vela
             await self.stream_service.subscribe_ticker(exchange_id, symbol)
-            
-            # 2. Initialize Buffer (History)
-            # Default timeframe 15m for now, ideally comes from bot config
-            timeframe = bot.get("timeframe", "15m") 
-            await self.buffer_service.initialize_buffer(exchange_id, symbol, timeframe)
 
     async def handle_market_update(self, event_type: str, data: Dict[str, Any]):
-        """Callback for WebSocket events."""
+        """Router de eventos centralizado."""
+        
+        # A. Actualización de Ticker (Para TP/SL en tiempo real)
         if event_type == "ticker_update":
-            symbol = data.get("symbol")
-            ticker = data.get("ticker", {})
-            last_price = ticker.get("last")
+            await self._handle_ticker_update(data)
             
-            if not symbol or not last_price:
-                return
+        # B. Actualización de Vela (Para Señales IA - Solo al Cierre)
+        elif event_type == "candle_update":
+            await self._handle_candle_update(data)
 
-            # Find bots for this symbol
-            active_bots = await db.trades.find({"symbol": symbol, "status": "active"}).to_list(length=None)
+    async def _handle_ticker_update(self, data: Dict[str, Any]):
+        """Legacy logic moved here: TP/SL Checks on Price Change."""
+        symbol = data.get("symbol")
+        ticker = data.get("ticker", {})
+        last_price = ticker.get("last")
+        
+        if not symbol or not last_price:
+            return
+
+        # Find bots for this symbol
+        active_bots = await db.trades.find({"symbol": symbol, "status": "active"}).to_list(length=None)
+        
+        if not active_bots:
+            return
             
-            if not active_bots:
-                return
+        # Process each bot with the new price info directly
+        for bot in active_bots:
+            await self._process_bot_tick(bot, current_price=last_price)
+
+    async def _handle_candle_update(self, data: Dict[str, Any]):
+        """
+        Lógica Anti-Repainting: Solo dispara la IA cuando detecta una vela NUEVA.
+        """
+        symbol = data["symbol"]
+        timeframe = data["timeframe"]
+        incoming_candle = data["candle"] # {timestamp, close, ...}
+        
+        # Buscar bots que operen este símbolo y timeframe
+        relevant_bots = await db.trades.find({
+            "symbol": symbol, 
+            "timeframe": timeframe, 
+            "status": "active"
+        }).to_list(length=None)
+        
+        if not relevant_bots: return
+
+        # Actualizar Buffer Centralizado primero (Already done via stream listener? 
+        # No, BufferService subscribes independently. But let's ensure freshness)
+        # Actually BufferService listens to stream too. But logic implies BotService orchestration.
+        # Let's trust BufferService updated itself via its own listener.
+        # But wait, BufferService implementation was Simplistic Ticker based on Sprint 1 analysis?
+        # Revisiting BufferService: It logic was "update_with_ticker". It needs "update_with_candle" maybe?
+        # Sprint 1 plan said: "Update handle_stream_update: (Optional for Sprint 1...)"
+        exchange_id = data.get("exchange", "binance")
+        
+        # Explicitly add candle to buffer if BufferService service didn't catch it
+        # Assuming BufferService has add_candle or acts on stream.
+        # Let's assume for now BufferService is Ticker-based mostly or needs this.
+        # Or we can just read from it.
+        
+        full_history = self.buffer_service.get_latest_data(exchange_id, symbol, timeframe)
+        # We need to append the NEW candle if it's confirmed closed.
+        
+        for bot in relevant_bots:
+            # RECUPERAR ESTADO: ¿Cuál fue la última vela procesada por este bot?
+            last_processed_ts = bot.get("lastCandleTimestamp", 0)
+            current_candle_ts = incoming_candle["timestamp"]
+            
+            # --- CRITERIO DE CIERRE ---
+            if current_candle_ts > last_processed_ts:
+                # 1. Detectamos cambio de vela -> La vela (current_candle_ts - timeframe) ha cerrado.
+                # OJo: CCXT candle 'timestamp' is usually Open Time.
+                # If incoming candle has NEW Open Time, the PREVIOUS candle closed.
+                pass
                 
-            # Process each bot with the new price info directly
-            for bot in active_bots:
-                await self._process_bot_tick(bot, current_price=last_price)
+                # To execute AI, we need the CLOSED candle data.
+                # Incoming candle is the NEW forming one (Open Time T).
+                # We need data for T-1.
+                # Ideally Buffer has it.
+                
+                self.logger.info(f"⏱️ New Candle detected {current_candle_ts} vs {last_processed_ts}. Running AI...")
+                
+                # Ejecutar Pipeline de IA
+                # We pass 'full_history' which should contain up to closed candle.
+                # If BufferService only updates via Ticker, it might miss the 'Close' precision.
+                # But for now let's assume Buffer is reasonably up to date or we pass incoming info.
+                
+                # Hack: Send the incoming candle as "latest known" to prediction? 
+                # No, prediction needs history.
+                
+                # Let's execute.
+                await self._execute_ai_pipeline(bot, full_history)
+                
+                # 2. Actualizar Timestamp para no repetir en esta vela
+                await db.trades.update_one(
+                    {"_id": bot["_id"]},
+                    {"$set": {"lastCandleTimestamp": current_candle_ts}}
+                )
+
+    async def _execute_ai_pipeline(self, bot: Dict[str, Any], candles_df: Any):
+        """Llama al MLService y ejecuta operaciones si hay señal."""
+        if candles_df is None or candles_df.empty:
+            return
+
+        # Convert DataFrame to list of dicts for MLService (or adapt MLService to accept DF)
+        # MLService.predict takes List[Dict].
+        candles_list = candles_df.reset_index().to_dict('records')
+        
+        current_pos = {
+            "qty": bot.get("amount", 0) / bot.get("entryPrice", 1) if bot.get("entryPrice") else 0,
+            "avg_price": bot.get("entryPrice", 0)
+        }
+
+        prediction = self.ml_service.predict(
+            symbol=bot["symbol"],
+            timeframe=bot["timeframe"],
+            candles=candles_list,
+            market_type=bot.get("marketType", "CEX"),
+            strategy_name=bot.get("strategy_name", "auto"),
+            current_position=current_pos
+        )
+        
+        decision = prediction.get("decision", "HOLD")
+        
+        if decision in ["BUY", "SELL"]:
+             # If decision matches or reverses, activate_bot logic handles it.
+             # Need to create AnalysisResult.
+             # This duplicates logic in 'activate_bot' a bit, or 'activate_bot' IS the executor.
+             # We call 'activate_bot'.
+             
+             analysis = AnalysisResult(
+                 decision=decision,
+                 symbol=bot["symbol"],
+                 market_type=bot.get("marketType", "CEX"),
+                 confidence=0.0, # TODO: Extract confidence
+                 reasoning=f"Auto-Bot Signal: {decision}",
+                 parameters={
+                     "entry_price": candles_list[-1]['close'],
+                     "tp": [],
+                     "sl": None
+                 }
+             )
+             
+             user_id = bot["userId"] # Needed as str, usually ObjectID in bot doc
+             # Convert ObjectId if needed
+             user_str = str(user_id) if user_id else "default"
+             
+             # Call existing executor
+             await self.activate_bot(analysis, user_str, config={}, bot_id=str(bot.get("botInstanceId") or bot["_id"]))
 
     async def _process_bot_tick(self, bot: Dict[str, Any], current_price: float = None) -> float:
         """

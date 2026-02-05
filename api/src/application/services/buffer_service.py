@@ -35,29 +35,23 @@ class DataBufferService:
         return f"{exchange_id}_{symbol}_{timeframe}"
 
     async def initialize_buffer(self, exchange_id: str, symbol: str, timeframe: str = '15m', limit: int = 100):
-        """Fetches initial history and sets up the buffer."""
+        """
+        WARM-UP: Descarga datos históricos REST para iniciar el buffer con datos.
+        Evita el problema de 'Cold Start' donde la IA no tiene RSI/EMA inicial.
+        """
         key = self.get_buffer_key(exchange_id, symbol, timeframe)
         
         async with self.lock:
-            if key in self.buffers:
+            # Si ya tiene datos, no sobreescribir (o verificar frescura)
+            if key in self.buffers and not self.buffers[key].empty:
                 return # Already initialized
 
-            logger.info(f"Initializing buffer for {symbol} ({timeframe})")
+            logger.info(f"🔥 Initializing buffer (Warm-up) for {symbol} ({timeframe})")
             
-            # 1. Fetch History via REST
-            # Assuming CEXService has a method that returns DataFrame or list of OHLCV
-            # Adapting to CEXService's get_historical_candles if available, or using ccxt adapter directly
             try:
-                # Need user_id for API keys? Using default or system keys for public data usually defined in adapter
-                # For Sprint 1, assuming public market data doesn't strictly need user keys for all exchanges 
-                # or we pass a generic system user.
-                # TODO: Refactor CEXService to allow public data fetch without user_id if possible
-                candles = await self.cex_service.ccxt_adapter.fetch_ohlcv(
-                    exchange_id=exchange_id, 
-                    symbol=symbol, 
-                    timeframe=timeframe, 
-                    limit=limit
-                )
+                # Usamos el CEX Service para la llamada REST síncrona/asíncrona inicial
+                # Assuming get_historical_candles returns list of [ts, o, h, l, c, v]
+                candles = await self.cex_service.get_historical_candles(exchange_id, symbol, timeframe, limit)
                 
                 if candles:
                     df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
