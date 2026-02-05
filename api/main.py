@@ -27,6 +27,9 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("=== Starting SignalKey Platform Services (Hexagonal Mode) ===")
     
+    # TEMPORALMENTE DESHABILITADO PARA DESARROLLO
+    # TODO: Re-habilitar servicios uno por uno después de verificar que la API básica funciona
+    """
     bot_manager.signal_processor = process_signal_task
     
     try:
@@ -35,8 +38,6 @@ async def lifespan(app: FastAPI):
         logger.info(f"Telegram Bot Manager started with {bot_manager.get_active_bots_count()} active bots")
         
         from api.src.application.services.boot_manager import BootManager
-        # Pasamos None como socket_service por ahora si no está disponible en scope global fácil o lo inyectamos después
-        # Nota: main.py tiene imports en desorden, idealmente socket_service vendría de router o container
         boot_manager = BootManager(db_adapter_in=db) 
         await boot_manager.initialize_active_bots()
         
@@ -45,7 +46,6 @@ async def lifespan(app: FastAPI):
         model_manager = ModelManager()
         model_manager.load_all_models()
         logger.info("ModelManager initialized and models loaded.")
-        # ----------------------------------------
     except Exception as e:
         logger.error(f"Error starting Telegram Bot Manager: {e}")
 
@@ -58,38 +58,30 @@ async def lifespan(app: FastAPI):
     monitor_service = MonitorService(cex_service=cex_service, dex_service=dex_service)
     monitor_task = asyncio.create_task(monitor_service.start_monitoring())
 
-    monitor_task = asyncio.create_task(monitor_service.start_monitoring())
-
     # Start Bot Service (WebSockets & Monitoring)
     await signal_bot_service.start()
     
     # --- TASK 5.2: Strategy Runner Service (Auto-Trading Loop) ---
     from api.src.application.services.strategy_runner_service import StrategyRunnerService
-    # Note: ML Service needs a trainer passed or uses default. Assuming default is fine for runner.
-    # We reuse global ai_service/ml_router service if available or instantiate fresh.
-    # Since we need access to 'ml_service', let's instantiate one or find where it is.
-    # It seems 'ml_service' is not instantiated globally in main explicitly for dependency injection 
-    # except probably inside 'ml_router' (not ideal) or we can create one here.
-    
     from api.src.application.services.ml_service import MLService
     from api.src.domain.services.strategy_trainer import StrategyTrainer
     
-    # Instantiate ML Service for Runner
     ml_service_runner = MLService(exchange_adapter=ccxt_adapter, trainer=StrategyTrainer())
     
     global strategy_runner
     strategy_runner = StrategyRunnerService(ml_service=ml_service_runner, bot_service=signal_bot_service)
     runner_task = asyncio.create_task(strategy_runner.start())
+    """
 
-    logger.info("=== All services are running in background ===")
+    logger.info("=== API Core started (background services disabled for development) ===")
     
     yield
     
     # Shutdown
     logger.info("=== Stopping SignalKey Platform Services ===")
+    """
     await bot_manager.stop_all_bots()
     await monitor_service.stop_monitoring()
-    monitor_task.cancel()
     monitor_task.cancel()
     await signal_bot_service.stop()
     await strategy_runner.stop()
@@ -97,6 +89,7 @@ async def lifespan(app: FastAPI):
     await cex_service.close_all()
     await dex_service.close_all()
     await ai_service.close()
+    """
     logger.info("=== Shutdown complete ===")
 
 app = FastAPI(title="Crypto Trading Signal API (Hexagonal Refactored)", lifespan=lifespan)
@@ -297,6 +290,9 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
         logger.error(f"Error in ProcessSignalUseCase: {e}")
 
 # --- Servir Frontend Estático (Producción) ---
+# NOTA: Temporalmente deshabilitado en desarrollo para evitar conflictos con rutas API
+# TODO: Habilitar solo en producción con una variable de entorno
+"""
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 import os
@@ -316,10 +312,10 @@ if os.path.exists(frontend_path):
     # 2. Ruta "Catch-all" para React Router (debe ir al final)
     @app.get("/{full_path:path}")
     async def serve_react_app(full_path: str):
-        """
+        \"\"\"
         Sirve el frontend de React en producción.
         Cualquier ruta que no sea API devuelve index.html para que React maneje la navegación.
-        """
+        \"\"\"
         # Si piden un archivo específico que existe (ej. favicon.ico), sírvelo
         file_path = os.path.join(frontend_path, full_path)
         if os.path.exists(file_path) and os.path.isfile(file_path):
@@ -334,4 +330,6 @@ if os.path.exists(frontend_path):
 else:
     logger.warning(f"Frontend build not found at {frontend_path}. Static serving disabled.")
     logger.warning("To enable production frontend, run: cd web && npm run build")
+"""
+
 
