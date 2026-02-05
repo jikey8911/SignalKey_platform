@@ -158,16 +158,45 @@ class ExecutionEngine:
         return {"status": "executed", **trade_log}
 
     async def _execute_real_trade(self, bot_instance, signal, price, amount, is_flip):
-        """Ejecuta un trade real vía CCXT con soporte para flipping."""
+        """Ejecuta un trade real vía CCXT corrigiendo cálculo de unidades."""
         symbol = bot_instance['symbol']
         side = 'buy' if signal == BaseStrategy.SIGNAL_BUY else 'sell'
         target_side = side.upper()
 
         from api.src.domain.entities.signal import SignalAnalysis, Decision, MarketType, TradingParameters
 
-        # En ejecución real, si es flip, la cantidad debe cubrir la posición anterior + la nueva
+        # 1. Calcular cuántas monedas queremos comprar/vender con el dinero (USDT)
+        # target_qty_base: Cantidad del activo base equivalente a la inversión deseada
+        # amount es en USDT (e.g. 50.0), price es el precio actual (e.g. 50000.0)
+        target_qty_base = amount / price 
+
+        # 2. Calcular tamaño total de la orden (Order Size)
         current_qty = bot_instance.get('position', {}).get('qty', 0.0)
-        exec_amount = amount + current_qty if is_flip else amount
+        
+        exec_qty = target_qty_base
+        
+        if is_flip:
+            # Si es FLIP, necesitamos cerrar lo anterior + abrir lo nuevo.
+            market_type = bot_instance.get('market_type', 'spot').upper()
+            
+            if market_type == 'FUTURES':
+                # En Futuros, para flipear Long->Short o viceversa con una sola orden,
+                # necesitamos vender (qty_actual + qty_nueva).
+                exec_qty = target_qty_base + current_qty
+            else:
+                # SPOT: No existe flip atómico de posición negativa.
+                # Si la señal es SELL (Flip Long->Short): Vendemos TODO lo que tenemos.
+                # Spot no permite abrir Short real con este motor simple.
+                if side == 'sell':
+                    exec_qty = current_qty # Vender toda la tenencia
+                else:
+                    exec_qty = target_qty_base # Compra normal (inversión nueva)
+
+        # Validar precisión mínima (simple 6 decimales para crypto)
+        exec_qty = float(f"{exec_qty:.6f}")
+        if exec_qty <= 0:
+             self.logger.warning(f"Trade skipped: Calculated qty is zero or negative ({exec_qty}) for {symbol}")
+             return {"status": "skipped", "reason": "qty_zero"}
 
         analysis = SignalAnalysis(
             symbol=symbol,
@@ -175,7 +204,7 @@ class ExecutionEngine:
             market_type=bot_instance.get('market_type', 'spot').upper(),
             confidence=0.9,
             reasoning=f"Automated Bot {'Flip' if is_flip else 'Signal'}: {bot_instance.get('strategy_name')}",
-            parameters=TradingParameters(amount=exec_amount)
+            parameters=TradingParameters(amount=exec_qty)
         )
 
         user_id = str(bot_instance.get('user_id', "default_user"))

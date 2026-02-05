@@ -235,10 +235,19 @@ class MLService:
             
         # Determinar decisión final
         decision = "HOLD"
+        strategy_used = strategy_name
+        
         if strategy_name != "auto":
             decision = final_results.get(strategy_name, {}).get("action", "HOLD")
         else:
-            decision = final_results.get(strategies[0], {}).get("action", "HOLD") if strategies else "HOLD"
+            # CORRECCIÓN: Usar target_strategies
+            if target_strategies:
+                # Por ahora tomamos la primera, pero aquí podrías filtrar por la que tenga mayor 'confidence'
+                best_strat = target_strategies[0] 
+                decision = final_results.get(best_strat, {}).get("action", "HOLD")
+                strategy_used = best_strat
+            else:
+                decision = "HOLD"
             
         return {
             "symbol": symbol,

@@ -24,7 +24,6 @@ class MarketStreamService:
         self.running = False
         self._initialized = True
         self.tasks: List[asyncio.Task] = []
-        self.tasks: List[asyncio.Task] = []
         self.loop = None
 
     def _get_loop(self):
