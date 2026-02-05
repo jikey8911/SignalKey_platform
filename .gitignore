@@ -92,3 +92,5 @@ api/tests/temp_models/
 .ipynb_checkpoints/
 *.pkl
 *.joblib
+
+**tests**
