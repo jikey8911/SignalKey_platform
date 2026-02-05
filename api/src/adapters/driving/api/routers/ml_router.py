@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from api.src.application.services.ml_service import MLService
 from api.src.application.services.cex_service import CEXService
+from api.src.infrastructure.ai.model_manager import ModelManager
 import logging
 
 logger = logging.getLogger(__name__)
@@ -131,3 +132,16 @@ async def train_global_redirect(request: BatchTrainRequest, background_tasks: Ba
 @router.post("/train-strategies")
 async def train_strategies_redirect(request: BatchTrainRequest, background_tasks: BackgroundTasks):
     return await train_all_strategies_endpoint(request, background_tasks)
+
+@router.post("/reload-models")
+async def reload_models():
+    """
+    Recarga en caliente todos los modelos .pkl desde el disco a la memoria RAM.
+    Útil después de entrenar nuevas estrategias sin reiniciar el servidor.
+    """
+    try:
+        ModelManager().load_all_models()
+        return {"status": "success", "message": "Models reloaded successfully"}
+    except Exception as e:
+        logger.error(f"Error reloading models: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

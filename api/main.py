@@ -34,13 +34,17 @@ async def lifespan(app: FastAPI):
         await bot_manager.restart_all_bots(message_handler=process_signal_task)
         logger.info(f"Telegram Bot Manager started with {bot_manager.get_active_bots_count()} active bots")
         
-        # --- TASK 7.2: Boot Manager Resilience ---
-        # Reemplaza la lógica anterior con el nuevo BootManager más robusto
         from api.src.application.services.boot_manager import BootManager
         # Pasamos None como socket_service por ahora si no está disponible en scope global fácil o lo inyectamos después
         # Nota: main.py tiene imports en desorden, idealmente socket_service vendría de router o container
         boot_manager = BootManager(db_adapter_in=db) 
         await boot_manager.initialize_active_bots()
+        
+        # --- TASK Sprint 2: Model Manager Initialization ---
+        from api.src.infrastructure.ai.model_manager import ModelManager
+        model_manager = ModelManager()
+        model_manager.load_all_models()
+        logger.info("ModelManager initialized and models loaded.")
         # ----------------------------------------
     except Exception as e:
         logger.error(f"Error starting Telegram Bot Manager: {e}")
@@ -143,7 +147,10 @@ from api.src.adapters.driving.api.routers.ml_router import router as ml_router
 from api.src.adapters.driving.api.routers.market_data_router import router as market_data_router
 from api.src.adapters.driving.api.routers.bot_router import router as bot_router
 from api.src.adapters.driving.api.routers.signal_router import router as signal_router
+from api.src.adapters.driving.api.routers.bot_router import router as bot_router
+from api.src.adapters.driving.api.routers.signal_router import router as signal_router
 from api.src.adapters.driving.api.routers.trade_router import router as trade_router
+from api.src.adapters.driving.api.routers.health_router import router as health_router
 
 app.include_router(auth_router)
 app.include_router(config_router)
@@ -155,6 +162,7 @@ app.include_router(market_data_router)
 app.include_router(bot_router)
 app.include_router(signal_router)
 app.include_router(trade_router)
+app.include_router(health_router)
 
 # --- Endpoints --- #
 

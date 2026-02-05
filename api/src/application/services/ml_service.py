@@ -23,6 +23,9 @@ class MLService:
         self.trainer = trainer or StrategyTrainer()
         self.logger = logging.getLogger("MLService")
         self.models_dir = "api/data/models"
+        # Import ModelManager (Singleton)
+        from api.src.infrastructure.ai.model_manager import ModelManager
+        self.model_manager = ModelManager()
 
     async def _fetch_training_data(
         self, 
@@ -74,13 +77,11 @@ class MLService:
         Ejecuta un backtest simulado para una estrategia específica usando su .pkl si existe.
         Calcula PnL acumulado, tasa de acierto y número de operaciones.
         """
-        model_path = os.path.join(self.models_dir, market_type.lower(), f"{strategy_name}.pkl")
-        if not os.path.exists(model_path):
-            return None
-            
         try:
-            # Load model and strategy
-            model = joblib.load(model_path)
+            # Load model and strategy from Memory
+            model = self.model_manager.get_model(strategy_name, market_type)
+            if not model:
+                return None
             StrategyClass = self.trainer.load_strategy_class(strategy_name, market_type)
             if not StrategyClass: return None
             
@@ -194,18 +195,10 @@ class MLService:
         
         for strat_name in target_strategies:
             try:
-                # Fallback path logic
-                model_dir_specific = os.path.join(self.models_dir, market_type.lower()).replace('\\', '/')
-                model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl").replace('\\', '/')
-                
-                if not os.path.exists(model_path):
-                     # Check root
-                     model_path_root = os.path.join(self.models_dir, f"{strat_name}.pkl")
-                     if os.path.exists(model_path_root):
-                         model_path = model_path_root
-                     else:
-                         continue
-                model = joblib.load(model_path)
+                # Optimized for Sprint 2: Load from Memory
+                model = self.model_manager.get_model(strat_name, market_type)
+                if not model:
+                    continue
                 
                 StrategyClass = self.trainer.load_strategy_class(strat_name, market_type)
                 if not StrategyClass: continue

@@ -10,6 +10,7 @@ from api.src.application.services.ml_service import MLService
 from api.src.application.services.bot_service import SignalBotService
 from api.src.domain.models.schemas import AnalysisResult, TradingSignal
 from api.src.adapters.driven.notifications.socket_service import socket_service
+from api.src.application.services.buffer_service import DataBufferService
 
 logger = logging.getLogger(__name__)
 
@@ -109,13 +110,21 @@ class StrategyRunnerService:
                              "status": {"$in": ["open", "active", "pending"]}
                          })
 
-                # 4. Obtener Datos de Mercado Recientes
-                candles_df = await self.ml_service.exchange.get_public_historical_data(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    limit=100,
-                    user_id=user_open_id
-                )
+                # 4. Obtener Datos de Mercado Recientes (Optimized via DataBuffer)
+                candles_df = None
+                buffer_data = DataBufferService().get_latest_data("binance", symbol, timeframe)  # Assuming binance for now or use bot.exchangeId
+                
+                if buffer_data is not None and len(buffer_data) >= 50:
+                    candles_df = buffer_data.tail(100) # Get last 100
+                
+                if candles_df is None or candles_df.empty:
+                     # Fallback to API if buffer empty or insufficient
+                     candles_df = await self.ml_service.exchange.get_public_historical_data(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        limit=100,
+                        user_id=user_open_id
+                    )
                 
                 if candles_df.empty:
                     continue

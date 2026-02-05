@@ -32,13 +32,31 @@ class ExecutionEngine:
         price = signal_data['price']
         is_alert = signal_data.get('is_alert', False) # Flag para ignorar Profit Guard
 
-        # Obtener monto de inversión (Tarea 3.3)
+        # 1. Obtener monto de inversión (Tarea 3.3 - Refactor Sprint 3)
+        # Prioridad 1: Monto configurado en el Bot (Validado por Schema)
+        # Prioridad 2: Límite global (Safety net)
+        
+        amount = bot_instance.get('amount', 10.0) 
+        
+        # Check Global Limits (Safety Net)
         config = await self.db.db["app_configs"].find_one({"userId": bot_instance.get('user_id')})
-        amount = 10.0
+        global_limit = 1000.0 # High default
         if config and 'investmentLimits' in config:
-            amount = config['investmentLimits'].get('cexMaxAmount', 10.0)
+             if bot_instance.get('market_type') in ['spot', 'cex']:
+                 global_limit = config['investmentLimits'].get('cexMaxAmount', 100.0)
+             else:
+                 global_limit = config['investmentLimits'].get('dexMaxAmount', 50.0)
 
-        # 1. Preparar datos de la posición actual
+        # Enforce Hard Limit
+        if amount > global_limit:
+            self.logger.warning(f"⚠️ Bot amount {amount} exceeds global limit {global_limit}. Capping.")
+            amount = global_limit
+
+        # 2. Risk & Balance Check
+        if not await self._check_risk_and_balance(bot_instance, amount, price):
+             return {"status": "blocked", "reason": "insufficient_balance_or_risk"}
+
+        # 3. Preparar datos de la posición actual
         current_pos = bot_instance.get('position', {'qty': 0, 'avg_price': 0})
         current_side = bot_instance.get('side') # "BUY" (Long) o "SELL" (Short)
         unrealized_pnl_pct = self._calculate_pnl(bot_instance, price)
@@ -284,6 +302,38 @@ class ExecutionEngine:
             return False
 
         return True
+
+    async def _check_risk_and_balance(self, bot_instance, amount, current_price):
+        """
+        Sprint 3: Valida saldo disponible y riesgo antes de operar.
+        """
+        mode = bot_instance.get('mode', 'simulated')
+        symbol = bot_instance['symbol']
+        user_id = bot_instance.get('user_id')
+        
+        if mode == 'simulated':
+            # En simulación, asumimos saldo infinito o trackeamos 'virtualBalances' en AppConfig
+            # Por simplicidad en Sprint 3, permitimos siempre en Sim
+            return True
+            
+        # Real Checks
+        try:
+            # Check Balance
+            # Assuming symbol like "BTC/USDT", quote is USDT
+            quote_currency = symbol.split('/')[1]
+            balances = await self.real_exchange.get_balance(str(user_id))
+            
+            available = balances.get(quote_currency, {}).get('free', 0.0)
+            
+            if available < amount:
+                self.logger.warning(f"❌ Insufficient Funds for {symbol}: Need {amount} {quote_currency}, Have {available}")
+                # Emitir alerta socket?
+                return False
+                
+            return True
+        except Exception as e:
+            self.logger.error(f"Error checking balance: {e}")
+            return False # Fail safe
 
     def _calculate_pnl(self, bot_instance, current_price):
         """Calcula PnL no realizado % basado en la posición actual."""

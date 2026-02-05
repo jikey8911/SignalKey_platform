@@ -688,8 +688,31 @@ class CcxtAdapter(IExchangePort):
                 await client.close()
 
     async def close_all(self):
+        """Close ALL managed instances: System, User-Specific, and Legacy."""
+        # 1. Close system instance
         if self._exchange_instance:
-            await self._exchange_instance.close()
+            try:
+                await self._exchange_instance.close()
+            except: pass
+
+        # 2. Close public instances
+        for instance in self.public_instances.values():
+            try:
+                await instance.close()
+            except: pass
+            
+        # 3. Close user-specific instances (CRITICAL for multi-exchange support)
+        for user_id, instance in self.user_instances.items():
+            try:
+                await instance.close()
+            except Exception as e:
+                logger.error(f"Error closing exchange for user {user_id}: {e}")
+        
+        # Clear caches
+        self.public_instances = {}
+        self.user_instances = {}
+        self.user_exchange_ids = {}
+        self._exchange_instance = None
 
 # Alias for backward compatibility if needed, 
 # though we will change main.py to use `CcxtAdapter`

@@ -107,3 +107,23 @@ class TradeSchema(BaseModel):
     createdAt: datetime = Field(default_factory=datetime.utcnow)
     executedAt: Optional[datetime] = None
     lastMonitoredAt: Optional[datetime] = None
+
+class BotInstanceSchema(BaseModel):
+    id: Optional[Any] = Field(alias="_id", default=None)
+    user_id: Any
+    name: str = "New Bot"
+    symbol: str
+    amount: float = Field(..., gt=0, description="Investment amount per trade. Mandatory.")
+    strategy_name: str = "auto"
+    timeframe: str = "15m"
+    market_type: str = "spot" # spot, future
+    status: str = "active" # active, paused, stopped
+    mode: str = "simulated" # simulated, real
+    side: Optional[str] = None # BUY, SELL
+    position: Optional[Dict[str, float]] = Field(default_factory=lambda: {"qty": 0.0, "avg_price": 0.0})
+    exchangeId: str = "binance"
+    createdAt: datetime = Field(default_factory=datetime.utcnow)
+    
+    class Config:
+        populate_by_name = True
+
