@@ -295,3 +295,43 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
         )
     except Exception as e:
         logger.error(f"Error in ProcessSignalUseCase: {e}")
+
+# --- Servir Frontend Estático (Producción) ---
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+import os
+
+# Definir la ruta a la carpeta 'dist' compilada del frontend
+frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "dist", "public")
+
+if os.path.exists(frontend_path):
+    logger.info(f"Frontend build found at: {frontend_path}")
+    
+    # 1. Montar assets estáticos (js, css, images)
+    assets_path = os.path.join(frontend_path, "assets")
+    if os.path.exists(assets_path):
+        app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
+        logger.info("Mounted /assets for static files")
+    
+    # 2. Ruta "Catch-all" para React Router (debe ir al final)
+    @app.get("/{full_path:path}")
+    async def serve_react_app(full_path: str):
+        """
+        Sirve el frontend de React en producción.
+        Cualquier ruta que no sea API devuelve index.html para que React maneje la navegación.
+        """
+        # Si piden un archivo específico que existe (ej. favicon.ico), sírvelo
+        file_path = os.path.join(frontend_path, full_path)
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        
+        # Si no, devuelve index.html (SPA handling)
+        index_path = os.path.join(frontend_path, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+        
+        raise HTTPException(status_code=404, detail="Frontend not built. Run 'npm run build' in web/")
+else:
+    logger.warning(f"Frontend build not found at {frontend_path}. Static serving disabled.")
+    logger.warning("To enable production frontend, run: cd web && npm run build")
+

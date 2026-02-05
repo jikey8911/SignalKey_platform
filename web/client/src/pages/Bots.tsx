@@ -421,7 +421,7 @@ const BotsPage = () => {
         e.stopPropagation();
         if (!confirm("Eliminar bot?")) return;
         try {
-            const res = await fetch(`http://localhost:8000/api/bots/${id}`, { method: 'DELETE' });
+            const res = await fetch(`${CONFIG.API_BASE_URL}/bots/${id}`, { method: 'DELETE' });
             if (res.ok) {
                 toast.success("Bot eliminado");
                 fetchBots();

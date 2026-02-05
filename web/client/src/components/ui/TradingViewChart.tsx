@@ -3,10 +3,8 @@ import {
     createChart,
     ColorType,
     IChartApi,
-    ISeriesApi,
     Time,
     SeriesMarker,
-    CandlestickSeries, // <--- Importante para v5
     CandlestickData
 } from 'lightweight-charts';
 
@@ -42,9 +40,7 @@ const toSeconds = (t: string | number): Time => {
 export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, height = 400 }) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
-
-    // CAMBIO V5: El tipo genérico ahora es la clase de la serie, no un string
-    const seriesRef = useRef<ISeriesApi<CandlestickSeries> | null>(null);
+    const seriesRef = useRef<any>(null);
 
     const formattedData = useMemo(() => {
         return [...data]
@@ -76,9 +72,9 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
                 size: 2
             } as SeriesMarker<Time>;
         }).sort((a, b) => (a.time as number) - (b.time as number));
-
     }, [trades, formattedData]);
 
+    // EFECTO 1: Crear y Destruir el Gráfico
     useEffect(() => {
         if (!chartContainerRef.current) return;
 
@@ -99,8 +95,7 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
             }
         });
 
-        // CAMBIO V5: Usar chart.addSeries(CandlestickSeries, opciones)
-        const candlestickSeries = chart.addSeries(CandlestickSeries, {
+        const candlestickSeries = (chart as any).addCandlestickSeries({
             upColor: '#22c55e',
             downColor: '#ef4444',
             borderVisible: false,
@@ -115,12 +110,14 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
 
         candlestickSeries.setData(formattedData);
 
+        // Asignamos las referencias
+        seriesRef.current = candlestickSeries;
+        chartRef.current = chart;
+
+        // Pintamos marcadores iniciales si existen
         if (markers.length > 0) {
             candlestickSeries.setMarkers(markers);
         }
-
-        seriesRef.current = candlestickSeries;
-        chartRef.current = chart;
 
         const handleResize = () => {
             chart.applyOptions({ width: chartContainerRef.current?.clientWidth || 0 });
@@ -128,15 +125,28 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
 
         window.addEventListener('resize', handleResize);
 
+        // CLEANUP CRÍTICO
         return () => {
             window.removeEventListener('resize', handleResize);
             chart.remove();
+            // IMPORTANTE: Limpiar referencias para evitar llamar métodos en objetos destruidos
+            chartRef.current = null;
+            seriesRef.current = null;
         };
-    }, [formattedData, colors, height]); // Agregué deps faltantes
+    }, [formattedData, colors, height]);
 
+    // EFECTO 2: Actualizar Marcadores Dinámicamente
     useEffect(() => {
-        if (seriesRef.current && markers.length > 0) {
-            seriesRef.current.setMarkers(markers);
+        // Verificamos que la serie exista ANTES de intentar usarla
+        if (seriesRef.current && markers) {
+            try {
+                // Validación defensiva extra por si acaso
+                if (typeof seriesRef.current.setMarkers === 'function') {
+                    seriesRef.current.setMarkers(markers);
+                }
+            } catch (e) {
+                console.warn("No se pudieron pintar los marcadores (gráfico posiblemente desmontado)", e);
+            }
         }
     }, [markers]);
 
