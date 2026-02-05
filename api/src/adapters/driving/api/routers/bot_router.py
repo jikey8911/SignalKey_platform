@@ -169,21 +169,6 @@ async def toggle_bot_status(bot_id: str, status: str):
             "status": status
         })
         
-@router.patch("/{bot_id}/status")
-async def toggle_bot_status(bot_id: str, status: str):
-    if status not in ["active", "paused"]:
-        raise HTTPException(status_code=400, detail="Invalid status")
-    await repo.update_status(bot_id, status)
-    
-    # Emitir actualización de estado
-    bot_doc = await repo.collection.find_one({"_id": ObjectId(bot_id)})
-    if bot_doc:
-        u_id = bot_doc.get("userId")
-        await socket_service.emit_to_user(u_id, "bot_update", {
-            "id": bot_id,
-            "status": status
-        })
-        
     return {"message": f"Bot {status}"}
 
 class UpdateBotSchema(BaseModel):

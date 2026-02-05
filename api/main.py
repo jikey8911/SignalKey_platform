@@ -9,6 +9,8 @@ from api.src.application.services.bot_service import SignalBotService
 from api.src.adapters.driven.persistence.mongodb import db, get_app_config
 import logging
 import asyncio
+import os
+import uvicorn
 from typing import Optional
 from bson import ObjectId
 
@@ -42,7 +44,6 @@ app = FastAPI(title="Crypto Trading Signal API (Hexagonal Refactored)", lifespan
 
 app.add_middleware(
     CORSMiddleware,
-    # allow_origins=["*"],  # Wildcard is often problematic with credentials
     allow_origins=[
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -230,3 +231,22 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
         )
     except Exception as e:
         logger.error(f"Error in ProcessSignalUseCase: {e}")
+
+if __name__ == "__main__":
+    port = Config.PORT
+    try:
+        uvicorn.run("api.main:app", host="0.0.0.0", port=port, reload=Config.DEBUG)
+    except OSError as e:
+        if e.errno == 10013 or "WinError 10013" in str(e):
+            logger.error(f"CRITICAL: Port {port} is restricted or already in use. [WinError 10013]")
+            logger.error("Suggestion: Change 'PORT' in .env to a different value (e.g., 8001 or 3001) or run as Administrator.")
+
+            # Optional: Try fallback port
+            fallback_port = port + 1
+            logger.info(f"Attempting fallback to port {fallback_port}...")
+            try:
+                uvicorn.run("api.main:app", host="0.0.0.0", port=fallback_port, reload=Config.DEBUG)
+            except Exception as fallback_e:
+                logger.error(f"Fallback failed: {fallback_e}")
+        else:
+            raise e
