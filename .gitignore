@@ -66,3 +66,29 @@ web/.env
 web/dist/
 web/build/
 web/node_modules/
+
+# Tests & Coverage
+api/tests/
+web/tests/
+.pytest_cache/
+api_test_results*.txt
+.coverage
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.nox/
+
+# App Data & Sessions
+sessions/
+api/data/models/
+api/data/backtests/
+temp_models/
+api/tests/temp_models/
+
+# ML/Data
+.ipynb_checkpoints/
+*.pkl
+*.joblib
