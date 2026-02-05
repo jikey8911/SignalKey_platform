@@ -1,6 +1,4 @@
 import { Switch, Route } from "wouter";
-import { queryClient } from "./lib/trpc";
-import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/sonner";
 import NotFound from "@/pages/NotFound";
 import Home from "@/pages/Home";
@@ -59,16 +57,14 @@ function Router() {
 function App() {
   return (
     <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <ThemeProvider>
-          <SocketProvider>
-            <TradingProvider>
-              <Router />
-              <Toaster position="top-right" />
-            </TradingProvider>
-          </SocketProvider>
-        </ThemeProvider>
-      </QueryClientProvider>
+      <ThemeProvider>
+        <SocketProvider>
+          <TradingProvider>
+            <Router />
+            <Toaster position="top-right" />
+          </TradingProvider>
+        </SocketProvider>
+      </ThemeProvider>
     </ErrorBoundary>
   );
 }

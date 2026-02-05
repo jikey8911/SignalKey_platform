@@ -1,8 +1,3 @@
-// web/vite.config.ts
-
-// 1. BORRA ESTA LÍNEA DE IMPORTACIÓN:
-// import { jsxLocPlugin } from "@builder.io/vite-plugin-jsx-loc"; 
-
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import fs from "node:fs";
@@ -10,7 +5,6 @@ import path from "path";
 import { defineConfig } from "vite";
 import { vitePluginManusRuntime } from "vite-plugin-manus-runtime";
 
-// 2. BORRA 'jsxLocPlugin()' DEL ARRAY:
 const plugins = [react(), tailwindcss(), vitePluginManusRuntime()];
 
 export default defineConfig({
@@ -43,9 +37,14 @@ export default defineConfig({
     ],
     proxy: {
       "/api": {
-        target: "http://localhost:8000",
+        target: "http://127.0.0.1:8000",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
+      },
+      "/ws": {
+        target: "ws://127.0.0.1:8000",
+        changeOrigin: true,
+        ws: true,
       },
     },
     fs: {

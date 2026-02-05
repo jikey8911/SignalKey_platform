@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import axios from "axios";
 import { useAuth } from "@/_core/hooks/useAuth";
-import { trpc } from "@/lib/trpc";
+import { useQueryClient } from "@tanstack/react-query";
 
 const formSchema = z.object({
     username: z.string().min(3, "Username must be at least 3 characters"),
@@ -22,7 +22,7 @@ export default function Login() {
     const [activeTab, setActiveTab] = useState("login");
     const [isLoading, setIsLoading] = useState(false);
     const { user, loading } = useAuth();
-    const utils = trpc.useUtils();
+    const queryClient = useQueryClient();
 
     // Redirect to home if already authenticated
     useEffect(() => {
@@ -52,7 +52,7 @@ export default function Login() {
             toast.success(activeTab === "login" ? "Login successful" : "Registration successful");
 
             // Invalidate auth cache to force refetch
-            await utils.auth.me.invalidate();
+            await queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
 
             // Redirect to home
             window.location.href = "/";

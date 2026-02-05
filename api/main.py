@@ -18,6 +18,7 @@ from api.src.application.services.bot_service import SignalBotService
 from api.src.adapters.driven.persistence.mongodb import db, get_app_config
 from api.src.infrastructure.telegram.telegram_bot_manager import bot_manager
 from api.src.application.services.monitor_service import MonitorService
+from api.src.application.services.tracker_service import TrackerService
 from fastapi.middleware.cors import CORSMiddleware
 from api.config import Config
 

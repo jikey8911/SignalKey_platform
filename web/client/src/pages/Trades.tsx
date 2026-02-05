@@ -1,11 +1,11 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { trpc } from '@/lib/trpc';
+import { fetchTrades } from '@/lib/api';
 import { TrendingUp, TrendingDown, Filter, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { useSocket } from '@/_core/hooks/useSocket';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 
 interface Trade {
   id: string;
@@ -26,7 +26,11 @@ interface Trade {
 export default function Trades() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
   const queryClient = useQueryClient();
-  const { data: bots, isLoading, refetch } = trpc.trading.getTrades.useQuery();
+  const { data: bots, isLoading, refetch } = useQuery({
+    queryKey: ['trades', user?.openId],
+    queryFn: () => fetchTrades(user?.openId),
+    enabled: !!user?.openId
+  });
   const [filterMarket, setFilterMarket] = useState<'all' | 'CEX' | 'DEX'>('all');
   const [filterSide, setFilterSide] = useState<'all' | 'BUY' | 'SELL'>('all');
   const [filterMode, setFilterMode] = useState<'all' | 'demo' | 'real'>('all');
@@ -39,7 +43,7 @@ export default function Trades() {
     if (lastMessage && (lastMessage.event === 'bot_update' || lastMessage.event === 'trade_update')) {
       const updatedData = lastMessage.data;
 
-      queryClient.setQueryData(['trading.getTrades'], (oldData: any[] | undefined) => {
+      queryClient.setQueryData(['trades', user?.openId], (oldData: any[] | undefined) => {
         if (!oldData) return [];
 
         return oldData.map(bot => {
@@ -53,7 +57,7 @@ export default function Trades() {
         });
       });
     }
-  }, [lastMessage, queryClient]);
+  }, [lastMessage, queryClient, user?.openId]);
 
   const filteredBots = useMemo(() => {
     if (!bots) return [];

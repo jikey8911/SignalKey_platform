@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { SignalsKeiLayout } from '@/components/SignalsKeiLayout';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { trpc } from '@/lib/trpc';
+import { fetchSignals } from '@/lib/api';
 import {
   AlertCircle,
   CheckCircle,
@@ -17,7 +17,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { useSocket } from '@/_core/hooks/useSocket';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { CONFIG } from '@/config';
 
@@ -38,7 +38,11 @@ interface Signal {
 export default function Signals() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
   const queryClient = useQueryClient();
-  const { data: signals, isLoading, refetch } = trpc.trading.getSignals.useQuery();
+  const { data: signals, isLoading, refetch } = useQuery({
+    queryKey: ['signals', user?.openId],
+    queryFn: () => fetchSignals(user?.openId),
+    enabled: !!user?.openId
+  });
   const [searchTerm, setSearchTerm] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'processing' | 'accepted' | 'rejected' | 'executing' | 'completed' | 'failed' | 'error'>('all');
   const [filterMarketType, setFilterMarketType] = useState<'all' | 'CEX' | 'DEX' | 'SPOT' | 'FUTURES'>('all');
@@ -52,7 +56,7 @@ export default function Signals() {
       const updatedSignal = lastMessage.data;
 
       // Actualizar el cache de react-query directamente para reflejar el cambio al instante
-      queryClient.setQueryData(['trading.getSignals'], (oldData: Signal[] | undefined) => {
+      queryClient.setQueryData(['signals', user?.openId], (oldData: Signal[] | undefined) => {
         if (!oldData) return [updatedSignal];
 
         const exists = oldData.find(s => s.id === updatedSignal.id);
@@ -65,7 +69,7 @@ export default function Signals() {
         }
       });
     }
-  }, [lastMessage, queryClient]);
+  }, [lastMessage, queryClient, user?.openId]);
 
   const getDecisionIcon = (decision: string) => {
     switch (decision) {
