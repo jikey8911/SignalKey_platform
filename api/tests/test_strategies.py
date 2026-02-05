@@ -7,9 +7,10 @@ import os
 # Asegurar que podemos importar api
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from api.strategies.rsi_reversion import RSIReversion
-from api.strategies.trend_ema import TrendEMA
-from api.strategies.volatility_breakout import VolatilityBreakout
+from api.src.domain.strategies.base import BaseStrategy
+from api.src.domain.strategies.spot.rsi_reversion import RsiReversion
+from api.src.domain.strategies.spot.trend_ema import TrendEma
+from api.src.domain.strategies.spot.volatility_breakout import VolatilityBreakout
 
 class TestStrategies(unittest.TestCase):
     def setUp(self):
@@ -32,7 +33,7 @@ class TestStrategies(unittest.TestCase):
         # Pandas TA necesita suficientes datos, así que modificamos el final
         self.df.iloc[-15:, self.df.columns.get_loc('close')] = np.linspace(50, 10, 15) # Bajada fuerte
         
-        strategy = RSIReversion(period=14, oversold=30)
+        strategy = RsiReversion(config={'rsi_period': 14, 'oversold': 30})
         
         # Test sin posición
         position_context = {
@@ -43,14 +44,15 @@ class TestStrategies(unittest.TestCase):
             'unrealized_pnl_pct': 0,
             'position_count': 0
         }
-        signal = strategy.get_signal(self.df, position_context)
+        df_res = strategy.apply(self.df, position_context)
+        last_signal = df_res['signal'].iloc[-1]
         
         # Debería dar BUY porque el RSI estará bajo
-        self.assertTrue(signal['signal'] in ['buy', 'hold', 'sell']) # Basic check
-        print(f"RSI Signal: {signal}")
+        self.assertTrue(last_signal in [BaseStrategy.SIGNAL_BUY, BaseStrategy.SIGNAL_WAIT, BaseStrategy.SIGNAL_SELL]) 
+        print(f"RSI Signal: {last_signal}")
 
     def test_trend_ema(self):
-        strategy = TrendEMA(fast=10, slow=20)
+        strategy = TrendEma(config={'fast': 10, 'slow': 20})
         position_context = {
             'has_position': False,
             'position_type': None,
@@ -59,11 +61,12 @@ class TestStrategies(unittest.TestCase):
             'unrealized_pnl_pct': 0,
             'position_count': 0
         }
-        signal = strategy.get_signal(self.df, position_context)
-        self.assertIn(signal['signal'], ['buy', 'sell', 'hold'])
+        df_res = strategy.apply(self.df, position_context)
+        last_signal = df_res['signal'].iloc[-1]
+        self.assertIn(last_signal, [BaseStrategy.SIGNAL_BUY, BaseStrategy.SIGNAL_SELL, BaseStrategy.SIGNAL_WAIT])
 
     def test_volatility_breakout(self):
-        strategy = VolatilityBreakout(period=20)
+        strategy = VolatilityBreakout(config={'period': 20})
         position_context = {
             'has_position': False,
             'position_type': None,
@@ -72,8 +75,9 @@ class TestStrategies(unittest.TestCase):
             'unrealized_pnl_pct': 0,
             'position_count': 0
         }
-        signal = strategy.get_signal(self.df, position_context)
-        self.assertIn(signal['signal'], ['buy', 'sell', 'hold'])
+        df_res = strategy.apply(self.df, position_context)
+        last_signal = df_res['signal'].iloc[-1]
+        self.assertIn(last_signal, [BaseStrategy.SIGNAL_BUY, BaseStrategy.SIGNAL_SELL, BaseStrategy.SIGNAL_WAIT])
 
 if __name__ == '__main__':
     unittest.main()

@@ -7,7 +7,7 @@ import os
 # Add project root to path (parent of 'api')
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
-from api.ml.strategy_trainer import StrategyTrainer
+from api.src.domain.services.strategy_trainer import StrategyTrainer
 
 class TestStrategyTrainerLogic(unittest.TestCase):
     def setUp(self):

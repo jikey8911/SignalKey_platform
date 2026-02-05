@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from api.src.application.services.backtest_service import BacktestService
-from api.strategies.rsi_reversion import RsiReversion as RSIReversion
+from api.src.domain.strategies.spot.rsi_reversion import RsiReversion as RSIReversion
 
 @pytest.mark.asyncio
 async def test_run_backtest_accumulation():

@@ -1,9 +1,9 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from api.bot.telegram_bot import TelegramUserBot
+from api.src.infrastructure.telegram.telegram_bot import TelegramUserBot
 from api.src.application.services.bot_service import SignalBotService
 from api.src.domain.models.schemas import AnalysisResult
-from api.core.domain.signal import Decision
+from api.src.domain.entities.signal import Decision
 
 @pytest.mark.asyncio
 async def test_telegram_bot_init():

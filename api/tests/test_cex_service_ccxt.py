@@ -1,7 +1,7 @@
 import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from api.services.cex_service import CEXService
+from api.src.application.services.cex_service import CEXService
 from api.src.domain.models.schemas import AnalysisResult
 import ccxt.async_support as ccxt
 
@@ -47,7 +47,7 @@ async def test_cex_service_get_current_price():
         "exchanges": [{"exchangeId": "okx", "isActive": True}]
     }
     
-    with patch('api.services.cex_service.get_app_config', AsyncMock(return_value=mock_config)):
+    with patch('api.src.application.services.cex_service.get_app_config', AsyncMock(return_value=mock_config)):
         with patch.object(cex, 'fetch_ticker_price', AsyncMock(return_value=50000.0)) as mock_fetch:
             price = await cex.get_current_price('BTC/USDT', 'user123')
             
@@ -74,7 +74,7 @@ async def test_cex_service_execute_trade_real_success():
         "exchanges": [{"exchangeId": "binance", "apiKey": "k", "secret": "s", "isActive": True}]
     }
     
-    with patch('api.services.cex_service.get_app_config', AsyncMock(return_value=mock_config)):
+    with patch('api.src.application.services.cex_service.get_app_config', AsyncMock(return_value=mock_config)):
         with patch('ccxt.async_support.binance') as mock_binance:
             instance = mock_binance.return_value
             instance.id = 'binance'

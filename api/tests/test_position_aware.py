@@ -5,10 +5,11 @@ import os
 # Add api to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from api.strategies.rsi_reversion import RSIReversion
-from api.strategies.trend_ema import TrendEMA
-from api.strategies.volatility_breakout import VolatilityBreakout
-from api.strategies.spot_intra_arbitrage import SpotIntraExchangeArbitrage
+from api.src.domain.strategies.base import BaseStrategy
+from api.src.domain.strategies.spot.rsi_reversion import RsiReversion
+from api.src.domain.strategies.spot.trend_ema import TrendEma
+from api.src.domain.strategies.spot.volatility_breakout import VolatilityBreakout
+from api.src.domain.strategies.spot.spot_intra_arbitrage import SpotIntraExchangeArbitrage
 import pandas as pd
 import numpy as np
 
@@ -27,13 +28,13 @@ class TestPositionAwareStrategies(unittest.TestCase):
     
     def test_rsi_long_entry(self):
         """Test RSI opens LONG when oversold"""
-        strategy = RSIReversion(oversold=30)
+        strategy = RsiReversion(config={'oversold': 30})
         ctx = {'has_position': False, 'position_type': None, 'avg_entry_price': 0, 
                'current_price': 50, 'unrealized_pnl_pct': 0, 'position_count': 0}
         
-        result = strategy.get_signal(self.df, ctx)
-        self.assertEqual(result['signal'], 'buy')
-        print(f"✅ RSI LONG entry: {result}")
+        df_res = strategy.apply(self.df, ctx)
+        self.assertEqual(df_res['signal'].iloc[-1], BaseStrategy.SIGNAL_BUY)
+        print(f"✅ RSI LONG entry: {df_res['signal'].iloc[-1]}")
     
     def test_rsi_short_entry(self):
         """Test RSI opens SHORT when overbought"""
@@ -41,17 +42,17 @@ class TestPositionAwareStrategies(unittest.TestCase):
         df_up = pd.DataFrame({
             'close': list(range(50, 100))
         })
-        strategy = RSIReversion(overbought=70)
+        strategy = RsiReversion(config={'overbought': 70})
         ctx = {'has_position': False, 'position_type': None, 'avg_entry_price': 0,
                'current_price': 99, 'unrealized_pnl_pct': 0, 'position_count': 0}
         
-        result = strategy.get_signal(df_up, ctx)
-        self.assertEqual(result['signal'], 'sell')
-        print(f"✅ RSI SHORT entry: {result}")
+        df_res = strategy.apply(df_up, ctx)
+        self.assertEqual(df_res['signal'].iloc[-1], BaseStrategy.SIGNAL_SELL)
+        print(f"✅ RSI SHORT entry: {df_res['signal'].iloc[-1]}")
     
     def test_rsi_no_sell_at_loss(self):
         """Test RSI doesn't close LONG position at loss"""
-        strategy = RSIReversion(overbought=70, min_profit=0.5)
+        strategy = RsiReversion(config={'overbought': 70, 'min_profit': 0.5})
         # Simulate LONG position at loss
         ctx = {'has_position': True, 'position_type': 'LONG', 'avg_entry_price': 100,
                'current_price': 95, 'unrealized_pnl_pct': -5.0, 'position_count': 1}
@@ -62,49 +63,49 @@ class TestPositionAwareStrategies(unittest.TestCase):
         # When RSI > 70 (Overbought), it implies a trend reversal (Short signal).
         # Even if we are in Loss, a Reversal signal is a valid exit/flip.
         # User instruction: "Close only on opposite signal". RSI > 70 IS an opposite signal to LONG.
-        result = strategy.get_signal(df_ob, ctx)
+        df_res = strategy.apply(df_ob, ctx)
         
-        self.assertEqual(result['signal'], 'sell')
-        print(f"✅ RSI Reversal Exit at Loss: {result}")
+        self.assertEqual(df_res['signal'].iloc[-1], BaseStrategy.SIGNAL_SELL)
+        print(f"✅ RSI Reversal Exit at Loss: {df_res['signal'].iloc[-1]}")
     
     def test_arbitrage_bidirectional(self):
         """Test arbitrage opens both LONG and SHORT"""
-        strategy = SpotIntraExchangeArbitrage(period=20, z_threshold=2.0)
+        strategy = SpotIntraExchangeArbitrage(config={'period': 20, 'z_threshold': 2.0})
         
         # Test LONG entry (undervalued)
         df_low = pd.DataFrame({'close': [100]*19 + [80]})
         ctx_no_pos = {'has_position': False, 'position_type': None, 'avg_entry_price': 0,
                       'current_price': 80, 'unrealized_pnl_pct': 0, 'position_count': 0}
-        result = strategy.get_signal(df_low, ctx_no_pos)
-        self.assertEqual(result['signal'], 'buy')
-        print(f"✅ Arbitrage LONG: {result}")
+        df_res = strategy.apply(df_low, ctx_no_pos)
+        self.assertEqual(df_res['signal'].iloc[-1], BaseStrategy.SIGNAL_BUY)
+        print(f"✅ Arbitrage LONG: {df_res['signal'].iloc[-1]}")
         
         # Test SHORT entry (overvalued)
         df_high = pd.DataFrame({'close': [100]*19 + [120]})
-        result = strategy.get_signal(df_high, ctx_no_pos)
-        self.assertEqual(result['signal'], 'sell')
-        print(f"✅ Arbitrage SHORT: {result}")
+        df_res = strategy.apply(df_high, ctx_no_pos)
+        self.assertEqual(df_res['signal'].iloc[-1], BaseStrategy.SIGNAL_SELL)
+        print(f"✅ Arbitrage SHORT: {df_res['signal'].iloc[-1]}")
     
     def test_trend_ema_bidirectional(self):
         """Test TrendEMA generates both buy and sell signals"""
-        strategy = TrendEMA(fast=5, slow=10)
+        strategy = TrendEma(config={'fast': 5, 'slow': 10})
         ctx = {'has_position': False, 'position_type': None, 'avg_entry_price': 0,
                'current_price': 50, 'unrealized_pnl_pct': 0, 'position_count': 0}
         
-        result = strategy.get_signal(self.df, ctx)
+        df_res = strategy.apply(self.df, ctx)
         # Should be either buy, sell, or hold
-        self.assertIn(result['signal'], ['buy', 'sell', 'hold'])
-        print(f"✅ TrendEMA signal: {result}")
+        self.assertIn(df_res['signal'].iloc[-1], [BaseStrategy.SIGNAL_BUY, BaseStrategy.SIGNAL_SELL, BaseStrategy.SIGNAL_WAIT])
+        print(f"✅ TrendEMA signal: {df_res['signal'].iloc[-1]}")
     
     def test_volatility_breakout_bidirectional(self):
         """Test VolatilityBreakout detects both upper and lower breakouts"""
-        strategy = VolatilityBreakout(period=20)
+        strategy = VolatilityBreakout(config={'period': 20})
         ctx = {'has_position': False, 'position_type': None, 'avg_entry_price': 0,
                'current_price': 50, 'unrealized_pnl_pct': 0, 'position_count': 0}
         
-        result = strategy.get_signal(self.df, ctx)
-        self.assertIn(result['signal'], ['buy', 'sell', 'hold'])
-        print(f"✅ Breakout signal: {result}")
+        df_res = strategy.apply(self.df, ctx)
+        self.assertIn(df_res['signal'].iloc[-1], [BaseStrategy.SIGNAL_BUY, BaseStrategy.SIGNAL_SELL, BaseStrategy.SIGNAL_WAIT])
+        print(f"✅ Breakout signal: {df_res['signal'].iloc[-1]}")
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

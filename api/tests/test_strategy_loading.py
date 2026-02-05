@@ -5,8 +5,8 @@ import os
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')))
 
-from api.strategies import load_strategies
-from api.strategies.base import BaseStrategy
+from api.src.domain.strategies import load_strategies
+from api.src.domain.strategies.base import BaseStrategy
 
 class TestStrategyLoading(unittest.TestCase):
     def test_dynamic_loading(self):

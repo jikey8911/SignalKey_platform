@@ -3,8 +3,8 @@ import asyncio
 from unittest.mock import Mock, AsyncMock, patch
 from datetime import datetime, timedelta
 from api.src.application.services.backtest_service import BacktestService
-from api.infrastructure.adapters.ai_adapter import AIAdapter
-from api.core.domain.signal import SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
+from api.src.infrastructure.adapters.ai.ai_adapter import AIAdapter
+from api.src.domain.entities.signal import SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
 
 
 class TestBacktestWithAI:
