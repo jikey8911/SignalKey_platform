@@ -209,6 +209,7 @@ async def deploy_bot(
     strategy: str,
     initial_balance: float = 1000.0,
     leverage: int = 1,
+    timeframe: str = "1h",
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -234,7 +235,7 @@ async def deploy_bot(
             name=f"{strategy} - {symbol} ({current_mode})",
             symbol=symbol,
             strategy_name=strategy,
-            timeframe="1h", # TODO: Pasar timeframe desde frontend
+            timeframe=timeframe,
             mode=current_mode,
             status="active",
             config={
