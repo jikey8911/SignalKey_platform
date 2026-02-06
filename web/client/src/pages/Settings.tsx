@@ -152,7 +152,6 @@ export default function Settings() {
               }
             });
           }
-        }
       } catch (e) {
         console.error("Error loading config:", e);
         toast.error("Error al cargar la configuración");

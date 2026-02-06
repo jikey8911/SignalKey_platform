@@ -5,7 +5,7 @@ import { useTrading } from '@/contexts/TradingContext';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { TrendingUp, TrendingDown, DollarSign, Zap } from 'lucide-react';
 import { useSocket } from '@/_core/hooks/useSocket';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
 import { CONFIG } from '@/config';
 import { Badge } from '@/components/ui/badge';
 import { fetchBalances, fetchTrades } from '@/lib/api';
