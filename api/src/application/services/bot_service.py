@@ -81,8 +81,12 @@ class SignalBotService:
             try:
                 # 1. Obtener precio actual (Prioridad: Buffer -> API)
                 symbol = bot["symbol"]
-                exchange_id = bot.get("exchangeId", "binance")
+                # Fix: Use stored exchange_id, fallback to user active exchange
+                exchange_id = bot.get("exchange_id") or bot.get("exchangeId") or "binance"
                 timeframe = bot.get("timeframe", "1m") # default low TF for price check
+
+                # Fix: Normalize user_id/userId access
+                user_id = bot.get("userId") or bot.get("user_id")
 
                 # Intentar leer del buffer primero (más rápido)
                 buffer_df = self.buffer_service.get_latest_data(exchange_id, symbol, timeframe)
@@ -92,7 +96,12 @@ class SignalBotService:
                     current_price = buffer_df.iloc[-1]['close']
                 else:
                     # Fallback a API REST si no hay buffer
-                    current_price = await self.cex_service.get_current_price(symbol, bot["userId"])
+                    # Using normalized user_id
+                    if user_id:
+                        current_price = await self.cex_service.get_current_price(symbol, user_id)
+                    else:
+                        logger.warning(f"Skipping price check for bot {bot.get('_id')}: Missing userId")
+                        continue
 
                 if current_price > 0:
                     # 2. Procesar Tick (Actualiza PnL, Check TP/SL, Emite Socket)
