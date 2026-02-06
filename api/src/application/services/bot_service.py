@@ -728,8 +728,11 @@ class SignalBotService:
             from api.src.adapters.driven.notifications.socket_service import socket_service
             user = await db.users.find_one({"_id": bot["userId"]})
             if user:
+                # Use botInstanceId if available (for trades linked to bots) to match frontend ID
+                frontend_id = str(bot.get("botInstanceId") or bot["_id"])
+
                 await socket_service.emit_to_user(user["openId"], "bot_update", {
-                    "id": str(bot["_id"]),
+                    "id": frontend_id,
                     "symbol": symbol,
                     "currentPrice": current_price,
                     "pnl": pnl,
