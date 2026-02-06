@@ -363,10 +363,24 @@ class BacktestService:
         
         from api.src.domain.strategies.base import BaseStrategy
 
-        for timestamp, row in df_processed.iterrows():
-            price = row['close']
-            signal = row['ai_signal']
+        # Iterate using range to access "next candle" for execution
+        # Fix Look-ahead bias: Signal at i executes at i+1 (Open)
+
+        for i in range(len(df_processed) - 1):
+            current_row = df_processed.iloc[i]
+            next_row = df_processed.iloc[i+1]
+
+            # Signal comes from the completed candle (i)
+            signal = current_row['ai_signal']
             
+            # Execution happens at the OPEN of the NEXT candle (i+1)
+            price = next_row['open']
+            timestamp = next_row.name # Timestamp of the trade is the open time of i+1
+
+            # Skip if signal is 0 (HOLD)
+            if signal == 0:
+                continue
+
             # --- Lógica de Inversión (Market Flip) ---
             if signal == BaseStrategy.SIGNAL_BUY: 
                 # Check for FLIP (Short -> Long)

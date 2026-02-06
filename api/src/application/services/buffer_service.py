@@ -75,6 +75,61 @@ class DataBufferService:
             # Ticker update: {'exchange': 'binance', 'symbol': 'BTC/USDT', 'ticker': {...}}
              await self.update_with_ticker(data)
 
+    async def update_with_candle(self, exchange_id: str, symbol: str, timeframe: str, candle_data: Dict):
+        """
+        Actualiza el buffer con una vela confirmada (Closed Candle).
+        Se llama desde el BotService cuando detecta 'candle_update'.
+        Garantiza que el buffer tenga la vela cerrada lista para la IA.
+        """
+        key = self.get_buffer_key(exchange_id, symbol, timeframe)
+
+        # candle_data expected: {'timestamp': ms, 'open': float, 'high': float, 'low': float, 'close': float, 'volume': float}
+        ts = candle_data.get('timestamp')
+        if not ts: return
+
+        new_ts = pd.to_datetime(ts, unit='ms')
+
+        async with self.lock:
+            if key not in self.buffers:
+                # Create new DF
+                df = pd.DataFrame([candle_data])
+                df['timestamp'] = new_ts
+                df.set_index('timestamp', inplace=True)
+                self.buffers[key] = df
+                return
+
+            df = self.buffers[key]
+            if df.empty:
+                # Should not happen if key in buffers usually, but safety check
+                 df = pd.DataFrame([candle_data])
+                 df['timestamp'] = new_ts
+                 df.set_index('timestamp', inplace=True)
+                 self.buffers[key] = df
+                 return
+
+            last_ts = df.index[-1]
+
+            if new_ts > last_ts:
+                # Append new candle
+                # Ensure columns match
+                new_row = pd.DataFrame([candle_data])
+                new_row['timestamp'] = new_ts
+                new_row.set_index('timestamp', inplace=True)
+
+                # Use pd.concat
+                self.buffers[key] = pd.concat([df, new_row])
+
+                # Keep buffer size manageable (e.g. last 500)
+                if len(self.buffers[key]) > 500:
+                    self.buffers[key] = self.buffers[key].iloc[-500:]
+
+            elif new_ts == last_ts:
+                # Update existing (Re-close / Correction)
+                # Map dict keys to columns
+                for col in ['open', 'high', 'low', 'close', 'volume']:
+                    if col in candle_data:
+                        df.at[new_ts, col] = candle_data[col]
+
     async def update_with_ticker(self, data: Dict):
         exchange_id = data.get("exchange")
         symbol = data.get("symbol")

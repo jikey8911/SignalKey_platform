@@ -54,6 +54,7 @@ async def test_run_backtest_accumulation():
     # Mock get_historical_data to return DataFrame
     df_data = pd.DataFrame(ohlcv_data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df_data['timestamp'] = pd.to_datetime(df_data['timestamp'], unit='ms')
+    df_data.set_index('timestamp', inplace=True) # Fix: Set DatetimeIndex to match real behavior
     mock_exchange.get_historical_data = AsyncMock(return_value=df_data)
 
     service = BacktestService(exchange_adapter=mock_exchange)
@@ -88,11 +89,12 @@ async def test_run_backtest_accumulation():
     print(f"✅ Backtest Finished. Trades found: {len(trades)}")
     
     buy_trades = [t for t in trades if t['type'] == 'BUY']
-    sell_trades = [t for t in trades if t['type'] == 'SELL_TO_CLOSE']
+    # In _simulate_with_reversal, closing a long is a SELL with label FLIP_CLOSE_LONG
+    sell_trades = [t for t in trades if t['type'] == 'SELL']
     
     print("\n--- Trade Log ---")
     for t in trades:
-        print(f"{t['time']} | {t['type']} | Price: {t['price']} | Amt: {t['amount']} | Pos#: {t.get('position_number', 'N/A')}")
+        print(f"{t['time']} | {t['type']} | Price: {t['price']} | Amt: {t['amount']} | Label: {t.get('label', 'N/A')}")
         
     # Assertions
     assert len(trades) > 0, "No trades executed"
@@ -101,11 +103,11 @@ async def test_run_backtest_accumulation():
     # With the drop pattern, RSI should stay low for a while
     assert len(buy_trades) >= 2, f"Expected accumulation (>=2 buys), got {len(buy_trades)}"
     
-    # Check Exit: Should have CLOSED the position
+    # Check Exit: Should have CLOSED the position (SELL trades)
     assert len(sell_trades) >= 1, "Position was not closed on reversal"
     
     # Check Profitability
-    final_balance = result['metrics']['final_balance']
+    final_balance = result['final_balance']
     print(f"Final Balance: {final_balance}")
     assert final_balance > 10000, "Strategy failed to profit on evident pump"
 

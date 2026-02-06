@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useMemo } from 'react';
+import React, { useEffect, useRef, useMemo, useState } from 'react';
 import {
     createChart,
     ColorType,
@@ -9,6 +9,7 @@ import {
     CandlestickSeries,
     createSeriesMarkers
 } from 'lightweight-charts';
+import { CONFIG } from '@/config';
 
 interface TradeMarker {
     time: number | string;
@@ -18,7 +19,7 @@ interface TradeMarker {
 }
 
 interface ChartProps {
-    data: { time: string | number; open: number; high: number; low: number; close: number }[];
+    data?: { time: string | number; open: number; high: number; low: number; close: number }[];
     trades?: TradeMarker[];
     colors?: {
         backgroundColor?: string;
@@ -28,6 +29,8 @@ interface ChartProps {
         areaBottomColor?: string;
     };
     height?: number;
+    symbol?: string;
+    timeframe?: string;
 }
 
 const toSeconds = (t: string | number): Time => {
@@ -39,17 +42,41 @@ const toSeconds = (t: string | number): Time => {
     return t as Time;
 };
 
-export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, height = 400 }) => {
+export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, height = 400, symbol, timeframe }) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
     const seriesRef = useRef<any>(null);
     const markersPrimitiveRef = useRef<any>(null);
 
+    // Internal state for self-fetched data
+    const [fetchedData, setFetchedData] = useState<any[]>([]);
+
+    // If data is provided via props, use it. Otherwise use fetchedData.
+    const activeData = (data && data.length > 0) ? data : fetchedData;
+
+    // EFECTO DE CARGA INTERNA (Sincronización solicitada)
+    useEffect(() => {
+        if (!symbol || !timeframe || (data && data.length > 0)) return;
+
+        const loadData = async () => {
+            try {
+                const res = await fetch(`${CONFIG.API_BASE_URL}/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=1000`);
+                if (res.ok) {
+                    const json = await res.json();
+                    setFetchedData(json);
+                }
+            } catch (e) {
+                console.error("Failed to fetch chart data internally", e);
+            }
+        };
+        loadData();
+    }, [symbol, timeframe, data]);
+
     const formattedData = useMemo(() => {
-        return [...data]
+        return [...activeData]
             .map(d => ({ ...d, time: toSeconds(d.time) }))
             .sort((a, b) => (a.time as number) - (b.time as number)) as CandlestickData<Time>[];
-    }, [data]);
+    }, [activeData]);
 
     const markers = useMemo(() => {
         if (!trades || trades.length === 0 || formattedData.length === 0) return [];
@@ -149,6 +176,37 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
             }
         }
     }, [markers]);
+
+    // EFECTO 3: Ajuste de Zoom (VisibleRange) por Timeframe
+    useEffect(() => {
+        if (!chartRef.current || formattedData.length === 0 || !timeframe) return;
+
+        // Parse Timeframe to Seconds
+        let secondsPerCandle = 3600; // default 1h
+        const unit = timeframe.slice(-1);
+        const val = parseInt(timeframe.slice(0, -1)) || 1;
+
+        if (unit === 'm') secondsPerCandle = val * 60;
+        if (unit === 'h') secondsPerCandle = val * 3600;
+        if (unit === 'd') secondsPerCandle = val * 86400;
+
+        // Show approx 100 candles
+        const visibleCandles = 100;
+        const rangeSeconds = secondsPerCandle * visibleCandles;
+
+        const lastTime = formattedData[formattedData.length - 1].time as number;
+        const fromTime = lastTime - rangeSeconds;
+
+        try {
+            chartRef.current.timeScale().setVisibleRange({
+                from: fromTime as Time,
+                to: lastTime as Time,
+            });
+        } catch (e) {
+            console.warn("Zoom adjustment failed", e);
+        }
+
+    }, [timeframe, formattedData]);
 
     return <div ref={chartContainerRef} className="w-full shadow-xl rounded-lg overflow-hidden border border-slate-800" />;
 };

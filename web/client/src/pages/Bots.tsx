@@ -10,6 +10,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useSocketContext } from '@/contexts/SocketContext';
+import { useTrading } from '@/contexts/TradingContext';
 import { toast } from 'react-hot-toast';
 import { CONFIG } from '@/config';
 import { TradingViewChart } from '@/components/ui/TradingViewChart';
@@ -96,6 +97,8 @@ const ExecutionMonitor = ({ bot }: any) => {
                     ) : (
                         <TradingViewChart
                             data={candles}
+                            symbol={bot?.symbol}
+                            timeframe={bot?.timeframe}
                             trades={combinedSignals.map(s => ({
                                 time: new Date(s.createdAt || Date.now()).getTime(),
                                 price: s.price,
@@ -363,6 +366,7 @@ const GlobalSignalTicker = () => {
 
 const BotsPage = () => {
     const { user } = useAuth();
+    const { setSelectedBot } = useTrading();
     const [bots, setBots] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -395,6 +399,13 @@ const BotsPage = () => {
         }
     }, [user?.openId]);
 
+    const activeBot = useMemo(() => bots.find(b => b.id === selectedId), [bots, selectedId]);
+
+    // Sync with Context
+    useEffect(() => {
+        setSelectedBot(activeBot || null);
+    }, [activeBot, setSelectedBot]);
+
     // Also update on active_bot_update socket event if available
     useEffect(() => {
         if (!lastMessage) return;
@@ -414,8 +425,6 @@ const BotsPage = () => {
             });
         }
     }, [lastMessage]);
-
-    const activeBot = useMemo(() => bots.find(b => b.id === selectedId), [bots, selectedId]);
 
     const handleDelete = async (e: React.MouseEvent, id: string) => {
         e.stopPropagation();

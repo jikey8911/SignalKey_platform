@@ -477,52 +477,39 @@ class SignalBotService:
         
         if not relevant_bots: return
 
-        # Actualizar Buffer Centralizado primero (Already done via stream listener? 
-        # No, BufferService subscribes independently. But let's ensure freshness)
-        # Actually BufferService listens to stream too. But logic implies BotService orchestration.
-        # Let's trust BufferService updated itself via its own listener.
-        # But wait, BufferService implementation was Simplistic Ticker based on Sprint 1 analysis?
-        # Revisiting BufferService: It logic was "update_with_ticker". It needs "update_with_candle" maybe?
-        # Sprint 1 plan said: "Update handle_stream_update: (Optional for Sprint 1...)"
         exchange_id = data.get("exchange", "binance")
         
-        # Explicitly add candle to buffer if BufferService service didn't catch it
-        # Assuming BufferService has add_candle or acts on stream.
-        # Let's assume for now BufferService is Ticker-based mostly or needs this.
-        # Or we can just read from it.
+        # 1. Actualizar Buffer con la vela entrante (que puede ser la nueva formándose)
+        await self.buffer_service.update_with_candle(exchange_id, symbol, timeframe, incoming_candle)
         
         full_history = self.buffer_service.get_latest_data(exchange_id, symbol, timeframe)
-        # We need to append the NEW candle if it's confirmed closed.
         
         for bot in relevant_bots:
             # RECUPERAR ESTADO: ¿Cuál fue la última vela procesada por este bot?
             last_processed_ts = bot.get("lastCandleTimestamp", 0)
             current_candle_ts = incoming_candle["timestamp"]
             
-            # --- CRITERIO DE CIERRE ---
+            # --- CRITERIO DE CIERRE: Detectamos nueva vela ---
             if current_candle_ts > last_processed_ts:
-                # 1. Detectamos cambio de vela -> La vela (current_candle_ts - timeframe) ha cerrado.
-                # OJo: CCXT candle 'timestamp' is usually Open Time.
-                # If incoming candle has NEW Open Time, the PREVIOUS candle closed.
-                pass
+                self.logger.info(f"⏱️ New Candle detected {current_candle_ts} vs {last_processed_ts} for {symbol}. Running AI on CLOSED candle...")
                 
-                # To execute AI, we need the CLOSED candle data.
-                # Incoming candle is the NEW forming one (Open Time T).
-                # We need data for T-1.
-                # Ideally Buffer has it.
+                # SOLUCIÓN LOOK-AHEAD / REPAINTING:
+                # incoming_candle es la nueva vela (Tiempo T, incompleta).
+                # Debemos predecir usando la historia hasta T-1 (Vela cerrada).
+                # full_history incluye T (porque acabamos de llamar a update_with_candle).
+                # Así que cortamos la última vela.
                 
-                self.logger.info(f"⏱️ New Candle detected {current_candle_ts} vs {last_processed_ts}. Running AI...")
-                
-                # Ejecutar Pipeline de IA
-                # We pass 'full_history' which should contain up to closed candle.
-                # If BufferService only updates via Ticker, it might miss the 'Close' precision.
-                # But for now let's assume Buffer is reasonably up to date or we pass incoming info.
-                
-                # Hack: Send the incoming candle as "latest known" to prediction? 
-                # No, prediction needs history.
-                
-                # Let's execute.
-                await self._execute_ai_pipeline(bot, full_history)
+                if full_history is not None and not full_history.empty:
+                    # Si el buffer tiene la nueva vela al final, la excluimos para la IA
+                    # Verificamos si el último timestamp coincide con current_candle_ts
+                    last_buffer_ts = full_history.index[-1].value // 10 ** 6 # ms
+
+                    history_for_ai = full_history
+                    if last_buffer_ts >= current_candle_ts:
+                         history_for_ai = full_history.iloc[:-1] # Excluir vela actual (forming)
+
+                    if not history_for_ai.empty:
+                         await self._execute_ai_pipeline(bot, history_for_ai)
                 
                 # 2. Actualizar Timestamp para no repetir en esta vela
                 await db.trades.update_one(
