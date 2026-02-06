@@ -71,6 +71,15 @@ async def get_app_config(user_id: str):
     # user_id can be the openId or the ObjectId string
     # First try by openId in users collection to get the ObjectId
     user = await db.users.find_one({"openId": user_id})
+
+    # If not found by openId, try by _id
+    if not user:
+        try:
+            if ObjectId.is_valid(user_id):
+                 user = await db.users.find_one({"_id": ObjectId(user_id)})
+        except Exception:
+            pass
+
     if not user:
         return None
     

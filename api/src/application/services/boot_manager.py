@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from bson import ObjectId
 from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
 from api.src.application.services.execution_engine import ExecutionEngine
 from api.src.adapters.driven.persistence.mongodb import db as db_adapter # Asumimos db global disponible
