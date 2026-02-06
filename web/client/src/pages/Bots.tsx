@@ -216,7 +216,7 @@ const BotInfoModule = ({ bot }: { bot: any }) => {
                     </div>
                     <div>
                         <p className="text-xs text-slate-500 mb-1">Precio Actual</p>
-                        <p className="text-xl font-mono text-white">${bot.current_price?.toFixed(4) || '---'}</p>
+                        <p className="text-xl font-mono text-white">${bot.currentPrice?.toFixed(4) || '---'}</p>
                     </div>
                 </div>
             </Card>
@@ -525,7 +525,7 @@ const BotsPage = () => {
                                             <Card className="p-6 bg-slate-900/50 border-white/5">
                                                 <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Precio Actual</p>
                                                 <h3 className="text-2xl font-mono text-white">
-                                                    ${activeBot.current_price?.toFixed(2) || '---'}
+                                                    ${activeBot.currentPrice?.toFixed(2) || '---'}
                                                 </h3>
                                             </Card>
                                             <Card className="p-6 bg-slate-900/50 border-white/5">
