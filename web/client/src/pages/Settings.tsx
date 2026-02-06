@@ -109,51 +109,51 @@ export default function Settings() {
         const config = await fetchConfig(authUser?.openId);
 
         if (config) {
-          setServerConfig(config);
-          setFormData({
-            demoMode: config.demoMode ?? true,
-            isAutoEnabled: config.isAutoEnabled ?? true,
-            aiProvider: config.aiProvider || 'gemini',
-            aiApiKey: config.aiApiKey || '',
-            geminiApiKey: config.geminiApiKey || '',
-            openaiApiKey: config.openaiApiKey || '',
-            perplexityApiKey: config.perplexityApiKey || '',
-            grokApiKey: config.grokApiKey || '',
-            zeroExApiKey: config.zeroExApiKey || '',
-            telegramBotToken: config.telegramBotToken || '',
-            telegramChatId: config.telegramChatId || '',
-            telegramChannels: config.telegramChannels || { allow: [], deny: [] },
-            exchanges: config.exchanges?.length ? config.exchanges : [{
-              exchangeId: 'binance',
-              apiKey: '',
-              secret: '',
-              password: '',
-              uid: '',
-              isActive: true
-            }],
-            dexConfig: {
-              walletPrivateKey: config.dexConfig?.walletPrivateKey || '',
-              rpcUrl: config.dexConfig?.rpcUrl || 'https://api.mainnet-beta.solana.com'
-            },
-            investmentLimits: {
-              cexMaxAmount: config.investmentLimits?.cexMaxAmount ?? 100,
-              dexMaxAmount: config.investmentLimits?.dexMaxAmount ?? 1
-            },
-            virtualBalances: {
-              cex: config.virtualBalances?.cex ?? 10000,
-              dex: config.virtualBalances?.dex ?? 10
-            },
-            botStrategy: {
-              maxActiveBots: config.botStrategy?.maxActiveBots ?? 5,
-              tpLevels: config.botStrategy?.tpLevels ?? 3,
-              tpPercent: config.botStrategy?.tpPercent ?? 2.0,
-              slPercent: config.botStrategy?.slPercent ?? 1.5,
-              sellPercentPerTP: config.botStrategy?.sellPercentPerTP ?? 33.3
-            }
-          });
+            setServerConfig(config);
+            setFormData({
+              demoMode: config.demoMode ?? true,
+              isAutoEnabled: config.isAutoEnabled ?? true,
+              aiProvider: config.aiProvider || 'gemini',
+              aiApiKey: config.aiApiKey || '',
+              geminiApiKey: config.geminiApiKey || '',
+              openaiApiKey: config.openaiApiKey || '',
+              perplexityApiKey: config.perplexityApiKey || '',
+              grokApiKey: config.grokApiKey || '',
+              zeroExApiKey: config.zeroExApiKey || '',
+              telegramBotToken: config.telegramBotToken || '',
+              telegramChatId: config.telegramChatId || '',
+              telegramChannels: config.telegramChannels || { allow: [], deny: [] },
+              exchanges: config.exchanges?.length ? config.exchanges : [{
+                exchangeId: 'binance',
+                apiKey: '',
+                secret: '',
+                password: '',
+                uid: '',
+                isActive: true
+              }],
+              dexConfig: {
+                walletPrivateKey: config.dexConfig?.walletPrivateKey || '',
+                rpcUrl: config.dexConfig?.rpcUrl || 'https://api.mainnet-beta.solana.com'
+              },
+              investmentLimits: {
+                cexMaxAmount: config.investmentLimits?.cexMaxAmount ?? 100,
+                dexMaxAmount: config.investmentLimits?.dexMaxAmount ?? 1
+              },
+              virtualBalances: {
+                cex: config.virtualBalances?.cex ?? 10000,
+                dex: config.virtualBalances?.dex ?? 10
+              },
+              botStrategy: {
+                maxActiveBots: config.botStrategy?.maxActiveBots ?? 5,
+                tpLevels: config.botStrategy?.tpLevels ?? 3,
+                tpPercent: config.botStrategy?.tpPercent ?? 2.0,
+                slPercent: config.botStrategy?.slPercent ?? 1.5,
+                sellPercentPerTP: config.botStrategy?.sellPercentPerTP ?? 33.3
+              }
+            });
+          }
         }
-      }
-      catch (e) {
+      } catch (e) {
         console.error("Error loading config:", e);
         toast.error("Error al cargar la configuración");
       } finally {

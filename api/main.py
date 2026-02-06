@@ -208,3 +208,16 @@ if os.path.exists(frontend_path):
         return FileResponse(os.path.join(frontend_path, "index.html"))
 else:
     logger.warning("⚠️ Frontend build NO encontrado. Ejecuta 'npm run build' en la carpeta web.")
+
+# --- BLOQUE DE EJECUCIÓN (SOLUCIONA EL CIERRE PREMATURO) ---
+if __name__ == "__main__":
+    import uvicorn
+    logger.info("🚀 Iniciando servidor Uvicorn...")
+    uvicorn.run(
+        "api.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=False,
+        workers=1,
+        log_level="info"
+    )
