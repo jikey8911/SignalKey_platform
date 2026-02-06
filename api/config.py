@@ -9,7 +9,7 @@ load_dotenv(dotenv_path=env_path)
 
 def get_default_db_name(uri):
     try:
-        parsed = parse_uri(uri)
+        parsed =parse_uri(uri)
         return parsed.get("database") or "signalkey_platform"
     except:
         return "signalkey_platform"
