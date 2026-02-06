@@ -18,6 +18,7 @@ from api.src.application.services.bot_service import SignalBotService
 from api.src.adapters.driven.persistence.mongodb import db, get_app_config
 from api.src.infrastructure.telegram.telegram_bot_manager import bot_manager
 from api.src.application.services.monitor_service import MonitorService
+from api.src.application.services.tracker_service import TrackerService
 from fastapi.middleware.cors import CORSMiddleware
 from api.config import Config
 
@@ -136,23 +137,30 @@ backtest_service = BacktestService(exchange_adapter=ccxt_adapter)
 signal_bot_service = SignalBotService(cex_service=cex_service, dex_service=dex_service)
 
 # --- ROUTERS ---
+from fastapi import APIRouter
 from api.src.adapters.driving.api.routers import (
     auth_router, user_config_router, telegram_router, backtest_router,
     websocket_router, ml_router, market_data_router, bot_router,
     signal_router, trade_router, health_router
 )
 
-app.include_router(auth_router.router)
-app.include_router(user_config_router.router)
-app.include_router(telegram_router.router)
-app.include_router(backtest_router.router)
+# API Router (prefix /api)
+api_router = APIRouter(prefix="/api")
+api_router.include_router(auth_router.router)
+api_router.include_router(user_config_router.router)
+api_router.include_router(telegram_router.router)
+api_router.include_router(backtest_router.router)
+api_router.include_router(ml_router.router)
+api_router.include_router(market_data_router.router)
+api_router.include_router(bot_router.router)
+api_router.include_router(signal_router.router)
+api_router.include_router(trade_router.router)
+api_router.include_router(health_router.router)
+
+app.include_router(api_router)
+
+# WebSocket Router (Root level /ws)
 app.include_router(websocket_router.router)
-app.include_router(ml_router.router)
-app.include_router(market_data_router.router)
-app.include_router(bot_router.router)
-app.include_router(signal_router.router)
-app.include_router(trade_router.router)
-app.include_router(health_router.router)
 
 # --- TAREA DE PROCESAMIENTO DE SEÑALES ---
 async def process_signal_task(signal: TradingSignal, user_id: str = "default_user"):
@@ -200,3 +208,16 @@ if os.path.exists(frontend_path):
         return FileResponse(os.path.join(frontend_path, "index.html"))
 else:
     logger.warning("⚠️ Frontend build NO encontrado. Ejecuta 'npm run build' en la carpeta web.")
+
+# --- BLOQUE DE EJECUCIÓN (SOLUCIONA EL CIERRE PREMATURO) ---
+if __name__ == "__main__":
+    import uvicorn
+    logger.info("🚀 Iniciando servidor Uvicorn...")
+    uvicorn.run(
+        "api.main:app",
+        host="0.0.0.0",
+        port=8000,
+        reload=False,
+        workers=1,
+        log_level="info"
+    )

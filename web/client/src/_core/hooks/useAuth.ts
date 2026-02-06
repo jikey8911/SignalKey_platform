@@ -1,6 +1,6 @@
 import { getLoginUrl } from "@/const";
-import { trpc } from "@/lib/trpc";
-import { TRPCClientError } from "@trpc/client";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { fetchUser, logout as apiLogout, ApiError } from "@/lib/api";
 import { useCallback, useEffect, useMemo } from "react";
 
 type UseAuthOptions = {
@@ -11,16 +11,19 @@ type UseAuthOptions = {
 export function useAuth(options?: UseAuthOptions) {
   const { redirectOnUnauthenticated = false, redirectPath = getLoginUrl() } =
     options ?? {};
-  const utils = trpc.useUtils();
+  const queryClient = useQueryClient();
 
-  const meQuery = trpc.auth.me.useQuery(undefined, {
+  const meQuery = useQuery({
+    queryKey: ['auth', 'me'],
+    queryFn: fetchUser,
     retry: false,
     refetchOnWindowFocus: false,
   });
 
-  const logoutMutation = trpc.auth.logout.useMutation({
+  const logoutMutation = useMutation({
+    mutationFn: apiLogout,
     onSuccess: () => {
-      utils.auth.me.setData(undefined, null);
+      queryClient.setQueryData(['auth', 'me'], null);
     },
   });
 
@@ -29,19 +32,19 @@ export function useAuth(options?: UseAuthOptions) {
       await logoutMutation.mutateAsync();
     } catch (error: unknown) {
       if (
-        error instanceof TRPCClientError &&
-        error.data?.code === "UNAUTHORIZED"
+        error instanceof ApiError &&
+        error.status === 401
       ) {
         return;
       }
       throw error;
     } finally {
-      utils.auth.me.setData(undefined, null);
-      await utils.auth.me.invalidate();
+      queryClient.setQueryData(['auth', 'me'], null);
+      await queryClient.invalidateQueries({ queryKey: ['auth', 'me'] });
       // Redirigir al login después de cerrar sesión
       window.location.href = getLoginUrl();
     }
-  }, [logoutMutation, utils]);
+  }, [logoutMutation, queryClient]);
 
   const state = useMemo(() => {
     localStorage.setItem(
@@ -66,7 +69,12 @@ export function useAuth(options?: UseAuthOptions) {
     if (!redirectOnUnauthenticated) return;
     if (meQuery.isLoading || logoutMutation.isPending) return;
     // No redirigir si hay un error del servidor (evitar bucles de recarga)
-    if (meQuery.isError && !((meQuery.error as any)?.data?.code === "UNAUTHORIZED")) return;
+    // Check if error is 401 (ApiError)
+    if (meQuery.isError) {
+       const isUnauthorized = (meQuery.error as any)?.status === 401;
+       if (!isUnauthorized) return;
+    }
+
     if (state.user) return;
     if (typeof window === "undefined") return;
     if (window.location.pathname === redirectPath) return;

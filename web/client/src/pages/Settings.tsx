@@ -8,12 +8,11 @@ import { CCXT_EXCHANGES } from '@/constants/exchanges';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { TelegramConfig } from '@/components/TelegramConfig';
 import { CONFIG } from '@/config';
+import { fetchConfig, updateConfig } from '@/lib/api';
 
 export default function Settings() {
   const { user: authUser } = useAuth({ redirectOnUnauthenticated: true });
 
-  // const { data: config, isLoading } = trpc.trading.getConfig.useQuery(); // REMOVED TRPC
-  // const updateConfigMutation = trpc.trading.updateConfig.useMutation(); // REMOVED TRPC
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [showSecrets, setShowSecrets] = useState(false);
@@ -104,18 +103,12 @@ export default function Settings() {
 
   // Load Config from REST API
   React.useEffect(() => {
-    const fetchConfig = async () => {
+    const loadConfig = async () => {
       try {
         setIsLoading(true);
-        const res = await fetch(`${CONFIG.API_BASE_URL}/config/`, {
-          credentials: 'include' // Important for Cookie Auth
-        });
+        const config = await fetchConfig(authUser?.openId);
 
-        if (res.ok) {
-          const data = await res.json();
-          const config = data.config; // API returns { config: ... }
-
-          if (config) {
+        if (config) {
             setServerConfig(config);
             setFormData({
               demoMode: config.demoMode ?? true,
@@ -169,7 +162,7 @@ export default function Settings() {
     };
 
     if (authUser) {
-      fetchConfig();
+      loadConfig();
     }
   }, [authUser]);
 
@@ -188,18 +181,8 @@ export default function Settings() {
       });
 
       setIsSaving(true);
-      // await updateConfigMutation.mutateAsync(formData); // REMOVED TRPC
 
-      const res = await fetch(`${CONFIG.API_BASE_URL}/config/`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(formData),
-        credentials: 'include'
-      });
-
-      if (!res.ok) throw new Error("Error saving config");
+      await updateConfig(authUser?.openId, formData);
 
       toast.success('Configuración guardada correctamente');
     } catch (error) {

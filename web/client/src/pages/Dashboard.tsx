@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Switch } from '@/components/ui/switch';
-import { trpc } from '@/lib/trpc';
 import { useTrading } from '@/contexts/TradingContext';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { TrendingUp, TrendingDown, DollarSign, Zap } from 'lucide-react';
@@ -9,6 +8,7 @@ import { useSocket } from '@/_core/hooks/useSocket';
 import { useQueryClient } from '@tanstack/react-query';
 import { CONFIG } from '@/config';
 import { Badge } from '@/components/ui/badge';
+import { fetchBalances, fetchTrades } from '@/lib/api';
 
 const MetaSelectorWidget = ({ user }: { user: any }) => {
   const [symbol, setSymbol] = useState('BTC/USDT');
@@ -120,8 +120,19 @@ export default function Dashboard() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
   const { demoMode } = useTrading();
   const queryClient = useQueryClient();
-  const { data: balances, isLoading: balancesLoading } = trpc.trading.getBalances.useQuery();
-  const { data: trades, isLoading: tradesLoading } = trpc.trading.getTrades.useQuery();
+
+  const { data: balances, isLoading: balancesLoading } = useQuery({
+    queryKey: ['balances', user?.openId],
+    queryFn: () => fetchBalances(user?.openId),
+    enabled: !!user?.openId
+  });
+
+  const { data: trades, isLoading: tradesLoading } = useQuery({
+    queryKey: ['trades', user?.openId],
+    queryFn: () => fetchTrades(user?.openId),
+    enabled: !!user?.openId
+  });
+
   const [connectionStatus, setConnectionStatus] = useState<any>(null);
   const { lastMessage } = useSocket(user?.openId);
 
@@ -173,7 +184,7 @@ export default function Dashboard() {
       setConnectionStatus(data);
     } else if (event === 'balance_update') {
       // Update balances cache
-      queryClient.setQueryData(['trading.getBalances'], (oldData: any[] | undefined) => {
+      queryClient.setQueryData(['balances', user?.openId], (oldData: any[] | undefined) => {
         if (!oldData) return [data];
         const exists = oldData.find(b => b.marketType === data.marketType && b.asset === data.asset);
         if (exists) {
@@ -184,7 +195,7 @@ export default function Dashboard() {
       });
     } else if (event === 'bot_update') {
       // Update trades cache
-      queryClient.setQueryData(['trading.getTrades'], (oldData: any[] | undefined) => {
+      queryClient.setQueryData(['trades', user?.openId], (oldData: any[] | undefined) => {
         if (!oldData) return [data];
         const exists = oldData.find(t => t.id === data.id);
         if (exists) {
@@ -194,7 +205,7 @@ export default function Dashboard() {
         }
       });
     }
-  }, [lastMessage, queryClient]);
+  }, [lastMessage, queryClient, user?.openId]);
 
   const stats = useMemo(() => {
     if (!trades || trades.length === 0) {
