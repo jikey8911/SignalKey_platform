@@ -63,11 +63,21 @@ class SignalBotService:
 
     async def _check_all_active_bots(self):
         """Itera sobre todos los bots activos y actualiza su estado."""
-        active_bots = await db.trades.find({"status": "active"}).to_list(length=1000)
-        if not active_bots:
+        # Fetch configurations (bot_instances) and active trades
+        active_instances = await db.bot_instances.find({"status": "active"}).to_list(length=1000)
+        active_trades = await db.trades.find({"status": "active"}).to_list(length=1000)
+
+        # We need to process both:
+        # 1. Active Trades: Update Price, Check TP/SL
+        # 2. Active Instances (waiting for entry): Update Price (Visual only)
+
+        # Combine list, prioritizing trades for logic
+        processing_list = active_trades + [b for b in active_instances if str(b["_id"]) not in [t.get("botInstanceId") for t in active_trades]]
+
+        if not processing_list:
             return
 
-        for bot in active_bots:
+        for bot in processing_list:
             try:
                 # 1. Obtener precio actual (Prioridad: Buffer -> API)
                 symbol = bot["symbol"]
@@ -469,10 +479,25 @@ class SignalBotService:
 
     async def initialize_active_bots_monitoring(self):
         """Startup: Inicia monitoreo y WARM-UP."""
-        active_bots = await db.trades.find({"status": "active"}).to_list(length=1000)
-        logger.info(f"Initializing monitoring for {len(active_bots)} active bots.")
-        
-        for bot in active_bots:
+        # Monitor both ACTIVE positions (trades) AND active bot configurations (bot_instances)
+        active_trades = await db.trades.find({"status": "active"}).to_list(length=1000)
+        active_instances = await db.bot_instances.find({"status": "active"}).to_list(length=1000)
+
+        # Merge to avoid duplicates if a bot has an active trade (prioritize trade state)
+        monitored_bots = {str(b["_id"]): b for b in active_instances}
+        for t in active_trades:
+            # Trade document usually has userId, symbol, etc. but might not match bot_instance ID structure 1:1 if legacy.
+            # Assuming trade has 'botInstanceId' link.
+            bot_id = t.get("botInstanceId")
+            if bot_id:
+                monitored_bots[bot_id] = t # Use trade state if active
+            else:
+                monitored_bots[str(t["_id"])] = t # Add standalone trade
+
+        active_list = list(monitored_bots.values())
+        logger.info(f"Initializing monitoring for {len(active_list)} active bots/trades.")
+
+        for bot in active_list:
             exchange_id = bot.get("exchangeId", "binance")
             symbol = bot["symbol"]
             timeframe = bot.get("timeframe", "15m") # Timeframe del modelo
@@ -703,8 +728,11 @@ class SignalBotService:
             from api.src.adapters.driven.notifications.socket_service import socket_service
             user = await db.users.find_one({"_id": bot["userId"]})
             if user:
+                # Use botInstanceId if available (for trades linked to bots) to match frontend ID
+                frontend_id = str(bot.get("botInstanceId") or bot["_id"])
+
                 await socket_service.emit_to_user(user["openId"], "bot_update", {
-                    "id": str(bot["_id"]),
+                    "id": frontend_id,
                     "symbol": symbol,
                     "currentPrice": current_price,
                     "pnl": pnl,
