@@ -5,7 +5,8 @@ import {
     IChartApi,
     Time,
     SeriesMarker,
-    CandlestickData
+    CandlestickData,
+    CandlestickSeries
 } from 'lightweight-charts';
 
 interface TradeMarker {
@@ -95,7 +96,7 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
             }
         });
 
-        const candlestickSeries = (chart as any).addCandlestickSeries({
+        const candlestickSeries = chart.addSeries(CandlestickSeries, {
             upColor: '#22c55e',
             downColor: '#ef4444',
             borderVisible: false,

@@ -2,17 +2,9 @@ import os
 from dotenv import load_dotenv
 
 from pathlib import Path
-from pymongo.uri_parser import parse_uri
 
 env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path)
-
-def get_default_db_name(uri):
-    try:
-        parsed = parse_uri(uri)
-        return parsed.get("database") or "signalkey_platform"
-    except:
-        return "signalkey_platform"
 
 class Config:
     # API Keys
@@ -27,7 +19,7 @@ class Config:
     PORT = int(os.getenv("PORT", 8000))
     API_BASE_URL = os.getenv("API_BASE_URL", f"http://localhost:{PORT}")
     MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-    MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", get_default_db_name(MONGODB_URI))
+    MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", "signalkey_platform")
     # CEX Config (Example for CCXT)
     EXCHANGE_ID = os.getenv("EXCHANGE_ID", "binance")
     CEX_API_KEY = os.getenv("CEX_API_KEY")

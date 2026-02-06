@@ -14,7 +14,7 @@ class BootManager:
     def __init__(self, db_adapter_in=None, socket_service=None):
         self.repo = MongoBotRepository()
         # Usamos el db_adapter pasado o el global si no se pasa (para compatibilidad)
-        final_db = db_adapter_in if db_adapter_in is not None else db_adapter
+        final_db = db_adapter_in if db_adapter_in else db_adapter
         self.engine = ExecutionEngine(final_db, socket_service)
 
     async def initialize_active_bots(self):
