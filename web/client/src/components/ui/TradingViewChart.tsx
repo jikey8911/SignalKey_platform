@@ -6,7 +6,8 @@ import {
     Time,
     SeriesMarker,
     CandlestickData,
-    CandlestickSeries
+    CandlestickSeries,
+    createSeriesMarkers
 } from 'lightweight-charts';
 
 interface TradeMarker {
@@ -42,6 +43,7 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
     const seriesRef = useRef<any>(null);
+    const markersPrimitiveRef = useRef<any>(null);
 
     const formattedData = useMemo(() => {
         return [...data]
@@ -116,9 +118,8 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
         chartRef.current = chart;
 
         // Pintamos marcadores iniciales si existen
-        if (markers.length > 0) {
-            candlestickSeries.setMarkers(markers);
-        }
+        const markersPrimitive = createSeriesMarkers(candlestickSeries, markers);
+        markersPrimitiveRef.current = markersPrimitive;
 
         const handleResize = () => {
             chart.applyOptions({ width: chartContainerRef.current?.clientWidth || 0 });
@@ -133,18 +134,16 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
             // IMPORTANTE: Limpiar referencias para evitar llamar métodos en objetos destruidos
             chartRef.current = null;
             seriesRef.current = null;
+            markersPrimitiveRef.current = null;
         };
     }, [formattedData, colors, height]);
 
     // EFECTO 2: Actualizar Marcadores Dinámicamente
     useEffect(() => {
-        // Verificamos que la serie exista ANTES de intentar usarla
-        if (seriesRef.current && markers) {
+        // Verificamos que el primitivo de marcadores exista ANTES de intentar usarlo
+        if (markersPrimitiveRef.current && markers) {
             try {
-                // Validación defensiva extra por si acaso
-                if (typeof seriesRef.current.setMarkers === 'function') {
-                    seriesRef.current.setMarkers(markers);
-                }
+                markersPrimitiveRef.current.setMarkers(markers);
             } catch (e) {
                 console.warn("No se pudieron pintar los marcadores (gráfico posiblemente desmontado)", e);
             }
