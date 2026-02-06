@@ -61,7 +61,7 @@ const ExecutionMonitor = ({ bot }: any) => {
         if (lastMessage && (lastMessage.event === 'signal_update' || lastMessage.event === 'live_execution_signal')) {
             const signalData = lastMessage.data;
             if (signalData?.bot_id === bot?.id) {
-                setLiveSignals(prev => [signalData, ...prev].slice(0, 10)); // Keep last 10
+                setLiveSignals(prev => [signalData, ...prev].slice(0, 5));
                 // Also add to history for chart
                 setHistorySignals(prev => [...prev, signalData]);
             }
@@ -115,13 +115,9 @@ const ExecutionMonitor = ({ bot }: any) => {
                     {liveSignals.length === 0 && historySignals.length === 0 ? (
                         <p className="text-xs text-slate-600 italic">Esperando señales del servidor...</p>
                     ) : (
-                        [...liveSignals, ...historySignals].slice(0, 10).map((sig, idx) => (
+                        [...liveSignals, ...historySignals].slice(0, 5).map((sig, idx) => (
                             <div key={idx} className="flex justify-between items-center text-xs p-2 bg-white/5 rounded-lg border border-white/5 animate-in slide-in-from-left-2">
-                                <span className={
-                                    (sig.decision?.includes('BUY') || sig.type === 'LONG' || sig.side === 'buy') ? 'text-blue-400' :
-                                    (sig.decision?.includes('SELL') || sig.type === 'SHORT' || sig.side === 'sell') ? 'text-amber-400' :
-                                    'text-slate-400'
-                                }>
+                                <span className={(sig.decision?.includes('BUY') || sig.type === 'LONG' || sig.side === 'buy') ? 'text-blue-400' : 'text-amber-400'}>
                                     ● {sig.decision || sig.type || sig.side}
                                 </span>
                                 <span className="text-white font-mono">${sig.price?.toFixed(2)}</span>
@@ -321,18 +317,16 @@ const GlobalSignalTicker = () => {
                 const newSig = lastMessage.data;
                 // Avoid duplicates if unique ID exists
                 if (prev.find(s => s.id === newSig.id && s.timestamp === newSig.timestamp)) return prev;
-                return [newSig, ...prev].slice(0, 10); // Keep last 10 as requested
+                return [newSig, ...prev].slice(0, 8); // Keep last 8
             });
         }
     }, [lastMessage]);
 
     if (globalSignals.length === 0) return (
-        <div className="rounded-2xl border border-white/5 bg-slate-900/60 backdrop-blur-xl shadow-2xl mb-6 p-4 border-dashed flex items-center justify-center gap-2 text-slate-500 text-xs">
-            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lucide lucide-activity w-4 h-4">
-                <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"></path>
-            </svg>
+        <Card className="mb-6 p-4 bg-slate-900/50 border-dashed border-white/10 flex items-center justify-center gap-2 text-slate-500 text-xs">
+            <Activity className="w-4 h-4" />
             Esperando señales de la red neuronal...
-        </div>
+        </Card>
     );
 
     return (
@@ -400,7 +394,8 @@ const BotsPage = () => {
     useEffect(() => {
         if (user?.openId) {
             fetchBots();
-            // Polling removed in favor of WebSocket updates
+            const interval = setInterval(fetchBots, 60000);
+            return () => clearInterval(interval);
         }
     }, [user?.openId]);
 

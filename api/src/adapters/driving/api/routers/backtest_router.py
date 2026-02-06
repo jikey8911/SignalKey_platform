@@ -208,7 +208,6 @@ async def deploy_bot(
     symbol: str,
     strategy: str,
     timeframe: str = "1h",
-    exchange_id: Optional[str] = "binance",
     initial_balance: float = 1000.0,
     leverage: int = 1,
     current_user: dict = Depends(get_current_user)
@@ -216,7 +215,6 @@ async def deploy_bot(
     """
     Crea un bot basado en una estrategia ganadora del backtest.
     Hereda el modo (Real/Simulado) de la configuración del usuario.
-    Permite especificar exchange_id (defaults to binance).
     """
     try:
         # Verificar usuario
@@ -228,10 +226,7 @@ async def deploy_bot(
         # Por defecto "simulated" si no existe config o flag
         current_mode = "real" if config.get("tradingMode") == "live" else "simulated"
         
-        # Si no se pasó exchange_id explícito, intentar usar el activo del usuario
-        if not exchange_id or exchange_id == "binance": # Default
-             if config.get("activeExchange"):
-                 exchange_id = config.get("activeExchange")
+        # TODO: Si es FULL REAL, validar API Keys aquí antes de guardar
 
         # Crear BotInstance
         new_bot = BotInstance(
@@ -243,12 +238,10 @@ async def deploy_bot(
             timeframe=timeframe,
             mode=current_mode,
             status="active",
-            exchange_id=exchange_id, # Persist exchange_id
             config={
                 "initial_balance": initial_balance,
                 "leverage": leverage,
-                "deployed_at": datetime.utcnow().isoformat(),
-                "exchange_id": exchange_id
+                "deployed_at": datetime.utcnow().isoformat()
             }
         )
         
