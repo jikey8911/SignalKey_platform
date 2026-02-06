@@ -798,6 +798,14 @@ export default function Backtest() {
                         <div className="pt-2">
                           <p className="text-[10px] text-muted-foreground uppercase font-bold mb-1">Parámetros</p>
                           <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                            <div className="flex justify-between border-b border-border/50 pb-1">
+                                <span className="text-muted-foreground">timeframe:</span>
+                                <span className="text-foreground">{results.timeframe}</span>
+                            </div>
+                            <div className="flex justify-between border-b border-border/50 pb-1">
+                                <span className="text-muted-foreground">symbol:</span>
+                                <span className="text-foreground">{results.symbol}</span>
+                            </div>
                             {Object.entries(results.botConfiguration.parameters || {}).map(([k, v]) => (
                               <div key={k} className="flex justify-between border-b border-border/50 pb-1">
                                 <span className="text-muted-foreground">{k}:</span>
