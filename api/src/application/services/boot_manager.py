@@ -29,20 +29,20 @@ class BootManager:
             active_bots = await self.repo.get_active_bots()
             
             if not active_bots:
-                logger.info("No se encontraron bots activos para recuperar.")
+                logger.info("No se encontraron bots activos para recuperar (status='active' en bot_instances).")
                 return
 
             count = 0
             for bot_entity in active_bots:
                 # Convertimos entidad a dict para el motor o lógica subsiguiente
                 bot_data = bot_entity.to_dict()
-                logger.info(f"Reactivando bot: {bot_data.get('name')} ({bot_data.get('symbol')})")
+                logger.info(f"Reactivando bot: {bot_data.get('name')} ({bot_data.get('symbol')}) - User: {bot_data.get('user_id')}")
                 
                 # Lanzar ciclo de monitoreo en background
                 asyncio.create_task(self.monitor_loop(bot_data))
                 count += 1
                 
-            logger.info(f"Se han reanudado {count} instancias exitosamente.")
+            logger.info(f"✅ Se han reanudado {count} instancias exitosamente.")
             
         except Exception as e:
             logger.error(f"Fallo crítico en la recuperación automática: {e}")
@@ -69,7 +69,16 @@ class BootManager:
                 # 1. Verificar si el autotrading sigue activo para el usuario
                 from api.src.adapters.driven.persistence.mongodb import get_app_config
                 config = await get_app_config(user_id)
-                if not config or not config.get('isAutoEnabled', True):
+
+                # Default behavior: If config is None (DB error/User not found), we assume autotrade is ENABLED to prevent stopping bots on temporary glitches,
+                # unless we are sure it is disabled.
+                is_auto_enabled = True
+                if config:
+                    is_auto_enabled = config.get('isAutoEnabled', True)
+                else:
+                    logger.warning(f"⚠️ No se pudo obtener config para usuario {user_id}. Asumiendo isAutoEnabled=True para bot {bot_id}.")
+
+                if not is_auto_enabled:
                     logger.info(f"⏸️ Autotrade desactivado globalmente para usuario {user_id}. Bot {bot_id} pausado.")
                     break
                 
