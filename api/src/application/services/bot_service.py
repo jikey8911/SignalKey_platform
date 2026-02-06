@@ -599,6 +599,45 @@ class SignalBotService:
         )
         
         decision = prediction.get("decision", "HOLD")
+        confidence = prediction.get("confidence", 0.0)
+
+        # --- PERSIST SIGNAL (ALL SIGNALS, INCLUDING HOLD) ---
+        try:
+            from api.src.domain.models.signal import Signal, SignalStatus, Decision, MarketType
+            from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
+
+            signal_repo = MongoDBSignalRepository(db)
+
+            # Determine mapped decision
+            mapped_decision = Decision.HOLD
+            if decision == "BUY": mapped_decision = Decision.BUY
+            elif decision == "SELL": mapped_decision = Decision.SELL
+
+            sig_entity = Signal(
+                id=None,
+                userId=bot["userId"],
+                source=f"AUTO_STRATEGY_{bot.get('strategy_name', 'AUTO').upper()}",
+                rawText=f"Signal {decision} (Conf: {confidence:.2f})",
+                status=SignalStatus.EXECUTED if decision in ['BUY', 'SELL'] else SignalStatus.PROCESSED,
+                createdAt=datetime.utcnow(),
+                symbol=bot["symbol"],
+                marketType=MarketType(bot.get('marketType', 'CEX').upper()),
+                decision=mapped_decision,
+                confidence=confidence,
+                reasoning=f"Bot Logic: {prediction.get('reasoning', 'No reasoning')}",
+                botId=str(bot.get("botInstanceId") or bot["_id"]),
+                price=candles_list[-1]['close'] if candles_list else 0.0
+            )
+
+            await signal_repo.save(sig_entity)
+
+            # Emit Signal Update via WebSocket
+            from api.src.adapters.driven.notifications.socket_service import socket_service
+            await socket_service.emit_to_user(str(bot["userId"]), "signal_update", sig_entity.to_dict())
+
+        except Exception as e:
+            logger.error(f"Error persisting/emitting signal for bot {bot['_id']}: {e}")
+        # ----------------------------------------------------
         
         if decision in ["BUY", "SELL"]:
              # If decision matches or reverses, activate_bot logic handles it.
