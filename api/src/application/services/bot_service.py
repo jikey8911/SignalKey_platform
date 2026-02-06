@@ -21,17 +21,75 @@ class SignalBotService:
         self.stream_service = MarketStreamService()
         self.buffer_service = DataBufferService(stream_service=self.stream_service, cex_service=self.cex_service)
         self.stream_service.add_listener(self.handle_market_update)
+        self._check_loop_task = None
 
     async def start(self):
         """Starts the bot service, stream service, and initial monitoring."""
         await self.stream_service.start()
         await self.initialize_active_bots_monitoring()
+
+        # Start periodic check loop (10s)
+        self._check_loop_task = asyncio.create_task(self._run_periodic_checks())
         logger.info("SignalBotService started.")
 
     async def stop(self):
         """Stops the bot service."""
+        if self._check_loop_task:
+            self._check_loop_task.cancel()
+            try:
+                await self._check_loop_task
+            except asyncio.CancelledError:
+                pass
+
         await self.stream_service.stop()
         logger.info("SignalBotService stopped.")
+
+    async def _run_periodic_checks(self):
+        """
+        Ciclo infinito que corre cada 10 segundos para:
+        1. Actualizar precios de todos los bots activos (Visual).
+        2. Verificar TP/SL (Funcional - Safety Net).
+        """
+        logger.info("🔄 Iniciando ciclo de monitoreo periódico (10s)...")
+        while True:
+            try:
+                await asyncio.sleep(10)
+                await self._check_all_active_bots()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error en ciclo de monitoreo: {e}")
+                await asyncio.sleep(5) # Backoff
+
+    async def _check_all_active_bots(self):
+        """Itera sobre todos los bots activos y actualiza su estado."""
+        active_bots = await db.trades.find({"status": "active"}).to_list(length=1000)
+        if not active_bots:
+            return
+
+        for bot in active_bots:
+            try:
+                # 1. Obtener precio actual (Prioridad: Buffer -> API)
+                symbol = bot["symbol"]
+                exchange_id = bot.get("exchangeId", "binance")
+                timeframe = bot.get("timeframe", "1m") # default low TF for price check
+
+                # Intentar leer del buffer primero (más rápido)
+                buffer_df = self.buffer_service.get_latest_data(exchange_id, symbol, timeframe)
+                current_price = 0.0
+
+                if buffer_df is not None and not buffer_df.empty:
+                    current_price = buffer_df.iloc[-1]['close']
+                else:
+                    # Fallback a API REST si no hay buffer
+                    current_price = await self.cex_service.get_current_price(symbol, bot["userId"])
+
+                if current_price > 0:
+                    # 2. Procesar Tick (Actualiza PnL, Check TP/SL, Emite Socket)
+                    await self._process_bot_tick(bot, current_price)
+
+            except Exception as e:
+                logger.error(f"Error checking bot {bot.get('_id')}: {e}")
 
     async def can_activate_bot(self, user_id: str, config: Dict[str, Any]) -> bool:
         """Verifica si el usuario puede activar un nuevo bot basado en su límite."""
