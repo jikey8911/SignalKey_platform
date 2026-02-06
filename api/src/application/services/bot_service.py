@@ -21,94 +21,17 @@ class SignalBotService:
         self.stream_service = MarketStreamService()
         self.buffer_service = DataBufferService(stream_service=self.stream_service, cex_service=self.cex_service)
         self.stream_service.add_listener(self.handle_market_update)
-        self._check_loop_task = None
 
     async def start(self):
         """Starts the bot service, stream service, and initial monitoring."""
         await self.stream_service.start()
         await self.initialize_active_bots_monitoring()
-
-        # Start periodic check loop (10s)
-        self._check_loop_task = asyncio.create_task(self._run_periodic_checks())
         logger.info("SignalBotService started.")
 
     async def stop(self):
         """Stops the bot service."""
-        if self._check_loop_task:
-            self._check_loop_task.cancel()
-            try:
-                await self._check_loop_task
-            except asyncio.CancelledError:
-                pass
-
         await self.stream_service.stop()
         logger.info("SignalBotService stopped.")
-
-    async def _run_periodic_checks(self):
-        """
-        Ciclo infinito que corre cada 10 segundos para:
-        1. Actualizar precios de todos los bots activos (Visual).
-        2. Verificar TP/SL (Funcional - Safety Net).
-        """
-        logger.info("🔄 Iniciando ciclo de monitoreo periódico (10s)...")
-        while True:
-            try:
-                await asyncio.sleep(10)
-                await self._check_all_active_bots()
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"Error en ciclo de monitoreo: {e}")
-                await asyncio.sleep(5) # Backoff
-
-    async def _check_all_active_bots(self):
-        """Itera sobre todos los bots activos y actualiza su estado."""
-        # Fetch configurations (bot_instances) and active trades
-        active_instances = await db.bot_instances.find({"status": "active"}).to_list(length=1000)
-        active_trades = await db.trades.find({"status": "active"}).to_list(length=1000)
-
-        # We need to process both:
-        # 1. Active Trades: Update Price, Check TP/SL
-        # 2. Active Instances (waiting for entry): Update Price (Visual only)
-
-        # Combine list, prioritizing trades for logic
-        processing_list = active_trades + [b for b in active_instances if str(b["_id"]) not in [t.get("botInstanceId") for t in active_trades]]
-
-        if not processing_list:
-            return
-
-        for bot in processing_list:
-            try:
-                # 1. Obtener precio actual (Prioridad: Buffer -> API)
-                symbol = bot["symbol"]
-                # Fix: Use stored exchange_id, fallback to user active exchange
-                exchange_id = bot.get("exchange_id") or bot.get("exchangeId") or "binance"
-                timeframe = bot.get("timeframe", "1m") # default low TF for price check
-
-                # Fix: Normalize user_id/userId access
-                user_id = bot.get("userId") or bot.get("user_id")
-
-                # Intentar leer del buffer primero (más rápido)
-                buffer_df = self.buffer_service.get_latest_data(exchange_id, symbol, timeframe)
-                current_price = 0.0
-
-                if buffer_df is not None and not buffer_df.empty:
-                    current_price = buffer_df.iloc[-1]['close']
-                else:
-                    # Fallback a API REST si no hay buffer
-                    # Using normalized user_id
-                    if user_id:
-                        current_price = await self.cex_service.get_current_price(symbol, user_id)
-                    else:
-                        logger.warning(f"Skipping price check for bot {bot.get('_id')}: Missing userId")
-                        continue
-
-                if current_price > 0:
-                    # 2. Procesar Tick (Actualiza PnL, Check TP/SL, Emite Socket)
-                    await self._process_bot_tick(bot, current_price)
-
-            except Exception as e:
-                logger.error(f"Error checking bot {bot.get('_id')}: {e}")
 
     async def can_activate_bot(self, user_id: str, config: Dict[str, Any]) -> bool:
         """Verifica si el usuario puede activar un nuevo bot basado en su límite."""
@@ -488,25 +411,10 @@ class SignalBotService:
 
     async def initialize_active_bots_monitoring(self):
         """Startup: Inicia monitoreo y WARM-UP."""
-        # Monitor both ACTIVE positions (trades) AND active bot configurations (bot_instances)
-        active_trades = await db.trades.find({"status": "active"}).to_list(length=1000)
-        active_instances = await db.bot_instances.find({"status": "active"}).to_list(length=1000)
+        active_bots = await db.trades.find({"status": "active"}).to_list(length=1000)
+        logger.info(f"Initializing monitoring for {len(active_bots)} active bots.")
 
-        # Merge to avoid duplicates if a bot has an active trade (prioritize trade state)
-        monitored_bots = {str(b["_id"]): b for b in active_instances}
-        for t in active_trades:
-            # Trade document usually has userId, symbol, etc. but might not match bot_instance ID structure 1:1 if legacy.
-            # Assuming trade has 'botInstanceId' link.
-            bot_id = t.get("botInstanceId")
-            if bot_id:
-                monitored_bots[bot_id] = t # Use trade state if active
-            else:
-                monitored_bots[str(t["_id"])] = t # Add standalone trade
-
-        active_list = list(monitored_bots.values())
-        logger.info(f"Initializing monitoring for {len(active_list)} active bots/trades.")
-
-        for bot in active_list:
+        for bot in active_bots:
             exchange_id = bot.get("exchangeId", "binance")
             symbol = bot["symbol"]
             timeframe = bot.get("timeframe", "15m") # Timeframe del modelo
@@ -633,45 +541,6 @@ class SignalBotService:
         )
         
         decision = prediction.get("decision", "HOLD")
-        confidence = prediction.get("confidence", 0.0)
-
-        # --- PERSIST SIGNAL (ALL SIGNALS, INCLUDING HOLD) ---
-        try:
-            from api.src.domain.models.signal import Signal, SignalStatus, Decision, MarketType
-            from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
-
-            signal_repo = MongoDBSignalRepository(db)
-
-            # Determine mapped decision
-            mapped_decision = Decision.HOLD
-            if decision == "BUY": mapped_decision = Decision.BUY
-            elif decision == "SELL": mapped_decision = Decision.SELL
-
-            sig_entity = Signal(
-                id=None,
-                userId=bot["userId"],
-                source=f"AUTO_STRATEGY_{bot.get('strategy_name', 'AUTO').upper()}",
-                rawText=f"Signal {decision} (Conf: {confidence:.2f})",
-                status=SignalStatus.EXECUTED if decision in ['BUY', 'SELL'] else SignalStatus.PROCESSED,
-                createdAt=datetime.utcnow(),
-                symbol=bot["symbol"],
-                marketType=MarketType(bot.get('marketType', 'CEX').upper()),
-                decision=mapped_decision,
-                confidence=confidence,
-                reasoning=f"Bot Logic: {prediction.get('reasoning', 'No reasoning')}",
-                botId=str(bot.get("botInstanceId") or bot["_id"]),
-                price=candles_list[-1]['close'] if candles_list else 0.0
-            )
-
-            await signal_repo.save(sig_entity)
-
-            # Emit Signal Update via WebSocket
-            from api.src.adapters.driven.notifications.socket_service import socket_service
-            await socket_service.emit_to_user(str(bot["userId"]), "signal_update", sig_entity.to_dict())
-
-        except Exception as e:
-            logger.error(f"Error persisting/emitting signal for bot {bot['_id']}: {e}")
-        # ----------------------------------------------------
         
         if decision in ["BUY", "SELL"]:
              # If decision matches or reverses, activate_bot logic handles it.
@@ -737,11 +606,8 @@ class SignalBotService:
             from api.src.adapters.driven.notifications.socket_service import socket_service
             user = await db.users.find_one({"_id": bot["userId"]})
             if user:
-                # Use botInstanceId if available (for trades linked to bots) to match frontend ID
-                frontend_id = str(bot.get("botInstanceId") or bot["_id"])
-
                 await socket_service.emit_to_user(user["openId"], "bot_update", {
-                    "id": frontend_id,
+                    "id": str(bot["_id"]),
                     "symbol": symbol,
                     "currentPrice": current_price,
                     "pnl": pnl,
