@@ -57,9 +57,26 @@ class TelegramUserBot:
                  
             # Eliminar límite para obtener TODOS los diálogos
             async for dialog in self.client.iter_dialogs():
+                # Determinar tipo
+                dialog_type = "unknown"
+                is_bot = False
+
+                if dialog.is_user:
+                    if hasattr(dialog.entity, 'bot') and dialog.entity.bot:
+                        dialog_type = "bot"
+                        is_bot = True
+                    else:
+                        dialog_type = "user"
+                elif dialog.is_channel:
+                    dialog_type = "channel"
+                elif dialog.is_group:
+                    dialog_type = "group"
+
                 dialogs.append({
                     "id": str(dialog.id), 
                     "name": dialog.name or "Sin Nombre",
+                    "type": dialog_type,
+                    "is_bot": is_bot,
                     "is_channel": dialog.is_channel,
                     "is_group": dialog.is_group,
                     "is_user": dialog.is_user,

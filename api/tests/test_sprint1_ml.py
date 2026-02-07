@@ -4,7 +4,7 @@ import numpy as np
 import os
 import shutil
 from unittest.mock import MagicMock, patch
-from api.ml.strategy_trainer import StrategyTrainer
+from api.src.domain.services.strategy_trainer import StrategyTrainer
 
 # Dummy Strategy for testing
 DUMMY_STRATEGY_CODE = """
@@ -66,7 +66,7 @@ def test_discovery(setup_strategies):
     # Instead, we will mock the methods of StrategyTrainer.
     pass
 
-@patch('api.ml.strategy_trainer.os.listdir')
+@patch('api.src.domain.services.strategy_trainer.os.listdir')
 def test_discover_strategies_mock(mock_listdir):
     mock_listdir.return_value = ['TestStrategy.py', 'base.py', '__init__.py']
     trainer = StrategyTrainer()
@@ -74,8 +74,9 @@ def test_discover_strategies_mock(mock_listdir):
     assert 'TestStrategy' in strategies
     assert 'base' not in strategies
     assert '__init__' not in strategies
+    assert '__pycache__' not in strategies
 
-@patch('api.ml.strategy_trainer.importlib.import_module')
+@patch('api.src.domain.services.strategy_trainer.importlib.import_module')
 def test_load_strategy_class(mock_import):
     trainer = StrategyTrainer()
     
@@ -90,10 +91,10 @@ def test_load_strategy_class(mock_import):
     
     cls = trainer.load_strategy_class('TestStrategy')
     assert cls == MockStrategy
-    mock_import.assert_called_with('api.strategies.TestStrategy')
+    mock_import.assert_called_with('api.src.domain.strategies.spot.TestStrategy')
 
-@patch('api.ml.strategy_trainer.joblib.dump')
-@patch('api.ml.strategy_trainer.StrategyTrainer.load_strategy_class')
+@patch('api.src.domain.services.strategy_trainer.joblib.dump')
+@patch('api.src.domain.services.strategy_trainer.StrategyTrainer.load_strategy_class')
 def test_train_agnostic_model(mock_load, mock_dump, mock_data):
     trainer = StrategyTrainer(models_dir="test_models")
     

@@ -2,17 +2,36 @@ import logging
 import asyncio
 from datetime import datetime
 from typing import Dict, Any, List
-from api.src.adapters.driven.persistence.mongodb import db, save_trade, update_virtual_balance
+from api.src.adapters.driven.persistence.mongodb import db, save_trade, update_virtual_balance, get_app_config
 from api.src.application.services.cex_service import CEXService
 from api.src.application.services.dex_service import DEXService
 from api.src.domain.models.schemas import AnalysisResult, ExecutionResult
+from api.src.adapters.driven.exchange.stream_service import MarketStreamService
+from api.src.application.services.buffer_service import DataBufferService
+from api.src.application.services.ml_service import MLService
 
 logger = logging.getLogger(__name__)
 
 class SignalBotService:
-    def __init__(self, cex_service: CEXService = None, dex_service: DEXService = None):
+    def __init__(self, cex_service: CEXService = None, dex_service: DEXService = None, ml_service: MLService = None):
         self.cex_service = cex_service or CEXService()
         self.dex_service = dex_service or DEXService()
+        # MLService requires an exchange adapter, we use CEXService
+        self.ml_service = ml_service or MLService(exchange_adapter=self.cex_service) 
+        self.stream_service = MarketStreamService()
+        self.buffer_service = DataBufferService(stream_service=self.stream_service, cex_service=self.cex_service)
+        self.stream_service.add_listener(self.handle_market_update)
+
+    async def start(self):
+        """Starts the bot service, stream service, and initial monitoring."""
+        await self.stream_service.start()
+        await self.initialize_active_bots_monitoring()
+        logger.info("SignalBotService started.")
+
+    async def stop(self):
+        """Stops the bot service."""
+        await self.stream_service.stop()
+        logger.info("SignalBotService stopped.")
 
     async def can_activate_bot(self, user_id: str, config: Dict[str, Any]) -> bool:
         """Verifica si el usuario puede activar un nuevo bot basado en su límite."""
@@ -23,7 +42,7 @@ class SignalBotService:
         })
         return active_bots_count < max_bots
 
-    async def activate_bot(self, analysis: AnalysisResult, user_id: str, config: Dict[str, Any]) -> ExecutionResult:
+    async def activate_bot(self, analysis: AnalysisResult, user_id: str, config: Dict[str, Any], bot_id: str = None) -> ExecutionResult:
         """Activa un bot para una señal aprobada, manejando acumulación o cierre."""
         symbol = self.cex_service._normalize_symbol(analysis.symbol)
         
@@ -42,10 +61,10 @@ class SignalBotService:
             
             if bot_side == signal_side:
                 # ACUMULACIÓN (Mismo lado)
-                return await self._accumulate_position(existing_bot, analysis, user_id, config)
+                return await self._accumulate_position(existing_bot, analysis, user_id, config, bot_id)
             else:
                 # CIERRE / REVERSO (Lado opuesto)
-                return await self._close_position_by_signal(existing_bot, analysis, user_id, config)
+                return await self._close_position_by_signal(existing_bot, analysis, user_id, config, bot_id)
 
         # 2. Si no existe, lógica standard de creación (Nuevo Bot)
         if not await self.can_activate_bot(user_id, config):
@@ -53,6 +72,10 @@ class SignalBotService:
 
         demo_mode = config.get("demoMode", True)
         market_type = analysis.market_type
+        
+        # --- Capturar Timeframe ---
+        # Prioridad: 1. Configuración explícita, 2. Parámetros del análisis, 3. Default 15m
+        timeframe = config.get("timeframe") or analysis.parameters.get("timeframe", "15m")
         
         # Obtener precio actual
         current_price = await self.cex_service.get_current_price(symbol, user_id)
@@ -132,7 +155,9 @@ class SignalBotService:
         # Bot Document
         bot_doc = {
             "userId": user_id,
+            "botInstanceId": bot_id, # Link to Bot Instance
             "symbol": symbol,
+            "timeframe": timeframe, # Timeframe para monitoreo de velas
             "side": analysis.decision.upper(),
             "entryPrice": entry_price,
             "currentPrice": current_price,
@@ -166,6 +191,30 @@ class SignalBotService:
         else:
             inserted_id = await save_trade(bot_doc)
 
+        # --- SAVE OPERATION LOG ---
+        if bot_id:
+            op_doc = {
+                "botId": bot_id,
+                "tradeId": str(inserted_id),
+                "type": analysis.decision.upper(), # BUY/SELL
+                "price": entry_price,
+                "amount": amount,
+                "timestamp": datetime.utcnow().isoformat(),
+                "mode": "simulated" if demo_mode else "real",
+                "reason": "ENTRY"
+            }
+            await db.bot_operations.insert_one(op_doc)
+            from api.src.adapters.driven.notifications.socket_service import socket_service
+            await socket_service.emit_to_user(user_id, "operation_update", op_doc)
+        # --------------------------
+
+        
+        # Subscribe to WebSocket updates for this symbol
+        # Assuming exchange is known or defaulting to 'binance' for now. 
+        # In a real scenario, this comes from bot config or exchange service.
+        exchange_id = config.get("exchange_id", "binance").lower()
+        await self.stream_service.subscribe_ticker(exchange_id, symbol)
+
         return ExecutionResult(
             success=True, 
             message=execution_result.message,
@@ -173,7 +222,7 @@ class SignalBotService:
             details={"botId": str(inserted_id), "execution": execution_result.details}
         )
 
-    async def _accumulate_position(self, existing_bot: Dict[str, Any], analysis: AnalysisResult, user_id: str, config: Dict[str, Any]) -> ExecutionResult:
+    async def _accumulate_position(self, existing_bot: Dict[str, Any], analysis: AnalysisResult, user_id: str, config: Dict[str, Any], bot_id: str = None) -> ExecutionResult:
         """Aumenta el tamaño de una posición existente (Dollar Cost Averaging)."""
         symbol = existing_bot['symbol']
         side = existing_bot['side'] # BUY/SELL
@@ -258,6 +307,23 @@ class SignalBotService:
                 "$push": {"history": history_entry}
             }
         )
+
+        # --- SAVE ACCUMULATE LOG ---
+        if bot_id:
+            op_doc = {
+                "botId": bot_id,
+                "tradeId": str(existing_bot["_id"]),
+                "type": side, # Same side accumulation
+                "price": execution_price,
+                "amount": amount_to_add,
+                "timestamp": datetime.utcnow().isoformat(),
+                "mode": "simulated" if demo_mode else "real",
+                "reason": "ACCUMULATE"
+            }
+            await db.bot_operations.insert_one(op_doc)
+            from api.src.adapters.driven.notifications.socket_service import socket_service
+            await socket_service.emit_to_user(user_id, "operation_update", op_doc)
+        # ---------------------------
         
         return ExecutionResult(
             success=True,
@@ -265,7 +331,7 @@ class SignalBotService:
             details={"new_entry": new_entry_price, "total_amount": total_amount}
         )
 
-    async def _close_position_by_signal(self, existing_bot: Dict[str, Any], analysis: AnalysisResult, user_id: str, config: Dict[str, Any]) -> ExecutionResult:
+    async def _close_position_by_signal(self, existing_bot: Dict[str, Any], analysis: AnalysisResult, user_id: str, config: Dict[str, Any], bot_id: str = None) -> ExecutionResult:
         """Cierra una posición existente debido a una señal opuesta."""
         symbol = existing_bot['symbol']
         current_price = await self.cex_service.get_current_price(symbol, user_id)
@@ -288,11 +354,6 @@ class SignalBotService:
             
             if existing_bot["side"] == "BUY":
                  # Vender lo que se compró
-                 value_now = (amount / existing_bot["entryPrice"]) * current_price # Assuming amount is in USDT
-                 # No, amount in bot is in USDT usually based on implementation lines 86 (min(suggested, max_amount))
-                 # Wait, line 235 in CEXService: "amount": amount (USDT).
-                 # So Coin Amount = Amount / EntryPrice
-                 
                  coin_amount = amount / existing_bot["entryPrice"]
                  revenue = coin_amount * current_price
                  await update_virtual_balance(user_id, "CEX", "USDT", revenue, is_relative=True)
@@ -301,10 +362,7 @@ class SignalBotService:
             else: # SELL/SHORT
                  # Buy to cover
                  # Profit if Price < Entry
-                 # Short PnL = (Entry - Close) / Entry
                  pnl_pct = ((existing_bot["entryPrice"] - current_price) / existing_bot["entryPrice"]) * 100
-                 # Balance effect: Return Margin + Profit
-                 # Simplified: user gets back Amount + ProfitValue
                  revenue = amount * (1 + (pnl_pct/100))
                  await update_virtual_balance(user_id, "CEX", "USDT", revenue, is_relative=True)
 
@@ -320,53 +378,313 @@ class SignalBotService:
                     }
                 }
             )
+
+            # --- SAVE CLOSE LOG ---
+            if bot_id:
+                op_doc = {
+                    "botId": bot_id,
+                    "tradeId": str(existing_bot["_id"]),
+                    "type": "SELL" if existing_bot["side"] == "BUY" else "BUY", # Opposite side
+                    "price": current_price,
+                    "amount": amount,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "mode": "simulated",
+                    "reason": "CLOSE_SIGNAL"
+                }
+                await db.bot_operations.insert_one(op_doc)
+                from api.src.adapters.driven.notifications.socket_service import socket_service
+                await socket_service.emit_to_user(user_id, "operation_update", op_doc)
+            # ----------------------
             
             return ExecutionResult(success=True, message=f"Posición cerrada por señal opuesta. PnL: {pnl_pct:.2f}%")
             
         else:
-             # REAL MODE
-             # Ejecutar orden opuesta
-             # Necesitamos CEXService para hacer 'create_order' reverso
-             # Podemos usar execute_trade con side opuesto y monto total??
-             # execute_trade usa lógica de limites... mejor usar exchange instance directo o methodo 'close_position' si existiera.
-             # Por ahora, simularemos cierre updateando DB pero loggeando que falta lógica CEX Real de cierre.
-             # TODO: Implementar Cierre Real en CEXService
-             logger.warning("Real CEX Close not fully implemented via Signal triggers yet.")
-             return ExecutionResult(success=True, message="Bot marcado cerrado (Simulado), Ejecución real pendiente de impl.")
+             # REAL MODE: CLOSE POSITION
+             # Determinar lado opuesto para cerrar
+             close_side = "SELL" if existing_bot["side"] == "BUY" else "BUY"
 
-    async def monitor_bots(self):
-        """Proceso en segundo plano para monitorear y actualizar bots activos."""
-        while True:
-            try:
-                active_bots = await db.trades.find({"status": "active"}).to_list(length=100)
-                
-                # Tiempo de espera por defecto
-                next_sleep = 60
-                
-                for bot in active_bots:
-                    # El proceso del tick ahora retorna la distancia mínima al objetivo (%)
-                    min_dist = await self._process_bot_tick(bot)
-                    
-                    # Ajustar el tiempo de espera del siguiente ciclo basado en la cercanía
-                    # de CUALQUIER bot a su objetivo
-                    if min_dist < 2.0:
-                        next_sleep = min(next_sleep, 5)
-                    elif min_dist < 5.0:
-                        next_sleep = min(next_sleep, 20)
-                
-                logger.debug(f"Monitor bots cycle complete. Sleeping for {next_sleep}s")
-                await asyncio.sleep(next_sleep)
-            except Exception as e:
-                logger.error(f"Error en monitor_bots: {e}")
-                await asyncio.sleep(60) 
+             logger.info(f"Closing REAL position for {symbol}. Side: {close_side}, Amount: {existing_bot['amount']}")
 
-    async def _process_bot_tick(self, bot: Dict[str, Any]) -> float:
+             # Crear análisis de cierre
+             close_analysis = AnalysisResult(
+                 decision=close_side,
+                 symbol=symbol,
+                 market_type=existing_bot.get("marketType", "CEX"),
+                 confidence=1.0,
+                 reasoning=f"Close Signal Triggered: {analysis.decision}",
+                 parameters={
+                     "amount": existing_bot["amount"],
+                     "entry_price": current_price, # Market order
+                     "leverage": existing_bot.get("leverage", 1)
+                 }
+             )
+
+             # Ejecutar cierre a través de CEXService (que delega a CCXTAdapter)
+             close_result = await self.cex_service.execute_trade(close_analysis, user_id)
+
+             if close_result.success:
+                 # Actualizar DB
+                 pnl = 0
+                 exit_price = current_price
+
+                 if close_result.details and "price" in close_result.details:
+                      exit_price = float(close_result.details["price"])
+                      entry_price = float(existing_bot["entryPrice"])
+                      if existing_bot["side"] == "BUY":
+                          pnl = ((exit_price - entry_price) / entry_price) * 100
+                      else:
+                          pnl = ((entry_price - exit_price) / entry_price) * 100
+
+                 await db.trades.update_one(
+                    {"_id": existing_bot["_id"]},
+                    {
+                        "$set": {
+                            "status": "closed",
+                            "exitPrice": exit_price,
+                            "pnl": pnl,
+                            "closeReason": f"Opposite Signal: {analysis.decision}",
+                            "executedAt": datetime.utcnow()
+                        }
+                    }
+                )
+                 return ExecutionResult(success=True, message=f"Posición REAL cerrada. PnL: {pnl:.2f}%")
+             else:
+                 return ExecutionResult(success=False, message=f"Fallo al cerrar posición REAL: {close_result.message}")
+
+    async def initialize_active_bots_monitoring(self):
+        """Startup: Inicia monitoreo y WARM-UP basado en INSTANCIAS DE BOTS (Estrategias) y TRADES activos."""
+
+        # 1. Recuperar Estrategias Activas (BotInstances) - Para generar señales de ENTRADA
+        active_instances = await db.bot_instances.find({"status": "active"}).to_list(length=1000)
+
+        # 2. Recuperar Trades Activos (Posiciones Abiertas) - Para gestionar SALIDA (TP/SL)
+        # Sincronizamos 'active' (SignalBotService) vs 'open' (MonitorService)
+        # MonitorService usa 'open', SignalBotService usaba 'active'. Unificamos consulta.
+        active_trades = await db.trades.find({"status": {"$in": ["active", "open"]}}).to_list(length=1000)
+
+        logger.info(f"Initializing monitoring for {len(active_instances)} active strategies and {len(active_trades)} active trades.")
+
+        # Set para evitar duplicar suscripciones
+        subscriptions = set()
+
+        # A. Procesar Estrategias (Entradas)
+        for bot in active_instances:
+            # FIX: Determinar Exchange Correcto
+            # Prioridad 1: 'exchangeId' (nuevo)
+            # Prioridad 2: 'exchange_id' (legacy/alternativo)
+            # Prioridad 3: Configuración del usuario
+            exchange_id = bot.get("exchangeId") or bot.get("exchange_id")
+
+            if not exchange_id:
+                # Fallback: Consultar configuración del usuario
+                try:
+                    # FIX: Handle bot document keys safely (user_id vs userId)
+                    u_id = bot.get("userId") or bot.get("user_id")
+                    if u_id:
+                        user_config = await get_app_config(u_id)
+                        # Busca en 'activeExchange' o primer exchange activo
+                        exchange_id = user_config.get("activeExchange")
+                        if not exchange_id and user_config.get("exchanges"):
+                             # Buscar el primer exchange activo
+                             active_ex = next((e for e in user_config["exchanges"] if e.get("isActive")), None)
+                             if active_ex:
+                                 exchange_id = active_ex["exchangeId"]
+
+                        if not exchange_id:
+                             exchange_id = "binance" # Default absoluto
+                    else:
+                        exchange_id = "binance"
+                except Exception as e:
+                    logger.warning(f"Error resolving exchange for bot {bot.get('_id')}: {e}")
+                    exchange_id = "binance"
+
+            exchange_id = exchange_id.lower()
+            logger.info(f"Using exchange '{exchange_id}' for bot {bot.get('name', 'Unknown')} ({bot.get('_id')})")
+
+            symbol = bot["symbol"]
+            timeframe = bot.get("timeframe", "15m")
+            
+            sub_key = f"{exchange_id}:{symbol}:{timeframe}"
+            if sub_key not in subscriptions:
+                # WARM-UP
+                try:
+                    await self.buffer_service.initialize_buffer(exchange_id, symbol, timeframe, limit=100)
+                except Exception as e:
+                    logger.error(f"Failed to initialize buffer for {sub_key}: {e}")
+
+                # Suscribir a VELAS para señales IA
+                await self.stream_service.subscribe_candles(exchange_id, symbol, timeframe)
+                subscriptions.add(sub_key)
+
+        # B. Procesar Trades (Salidas)
+        for trade in active_trades:
+            exchange_id = trade.get("exchangeId")
+            if not exchange_id:
+                # Fallback simple si no está en el trade
+                exchange_id = "binance"
+
+            symbol = trade["symbol"]
+            
+            # Suscribir a TICKER para TP/SL en tiempo real
+            await self.stream_service.subscribe_ticker(exchange_id, symbol)
+
+    async def handle_market_update(self, event_type: str, data: Dict[str, Any]):
+        """Router de eventos centralizado."""
+        
+        # A. Actualización de Ticker (Para TP/SL en tiempo real)
+        if event_type == "ticker_update":
+            await self._handle_ticker_update(data)
+            
+        # B. Actualización de Vela (Para Señales IA - Solo al Cierre)
+        elif event_type == "candle_update":
+            await self._handle_candle_update(data)
+
+    async def _handle_ticker_update(self, data: Dict[str, Any]):
+        """Legacy logic moved here: TP/SL Checks on Price Change."""
+        symbol = data.get("symbol")
+        ticker = data.get("ticker", {})
+        last_price = ticker.get("last")
+        
+        if not symbol or not last_price:
+            return
+
+        # Find bots for this symbol (Unified active/open)
+        active_bots = await db.trades.find({"symbol": symbol, "status": {"$in": ["active", "open"]}}).to_list(length=None)
+        
+        if not active_bots:
+            return
+            
+        # Process each bot with the new price info directly
+        for bot in active_bots:
+            await self._process_bot_tick(bot, current_price=last_price)
+
+    async def _handle_candle_update(self, data: Dict[str, Any]):
+        """
+        Lógica Anti-Repainting: Solo dispara la IA cuando detecta una vela NUEVA.
+        """
+        symbol = data["symbol"]
+        timeframe = data["timeframe"]
+        incoming_candle = data["candle"] # {timestamp, close, ...}
+        
+        # 1. Buscar ESTRATEGIAS (BotInstances) activas para este símbolo
+        relevant_instances = await db.bot_instances.find({
+            "symbol": symbol, 
+            "timeframe": timeframe, 
+            "status": "active"
+        }).to_list(length=None)
+        
+        if not relevant_instances: return
+
+        exchange_id = data.get("exchange", "binance")
+        
+        # 1. Actualizar Buffer con la vela entrante (que puede ser la nueva formándose)
+        await self.buffer_service.update_with_candle(exchange_id, symbol, timeframe, incoming_candle)
+        full_history = self.buffer_service.get_latest_data(exchange_id, symbol, timeframe)
+        
+        for instance in relevant_instances:
+            # RECUPERAR ESTADO DE LA ESTRATEGIA (no del trade)
+            last_processed_ts = instance.get("lastCandleTimestamp", 0)
+            current_candle_ts = incoming_candle["timestamp"]
+            
+            # --- CRITERIO DE CIERRE: Detectamos nueva vela ---
+            if current_candle_ts > last_processed_ts:
+                self.logger.info(f"⏱️ New Candle detected {current_candle_ts} vs {last_processed_ts} for {symbol}. Running AI on CLOSED candle...")
+                
+                # SOLUCIÓN LOOK-AHEAD / REPAINTING:
+                # incoming_candle es la nueva vela (Tiempo T, incompleta).
+                # Debemos predecir usando la historia hasta T-1 (Vela cerrada).
+                # full_history incluye T (porque acabamos de llamar a update_with_candle).
+                # Así que cortamos la última vela.
+                
+                if full_history is not None and not full_history.empty:
+                    # Si el buffer tiene la nueva vela al final, la excluimos para la IA
+                    # Verificamos si el último timestamp coincide con current_candle_ts
+                    last_buffer_ts = full_history.index[-1].value // 10 ** 6 # ms
+
+                    history_for_ai = full_history
+                    if last_buffer_ts >= current_candle_ts:
+                         history_for_ai = full_history.iloc[:-1] # Excluir vela actual (forming)
+
+                    if not history_for_ai.empty:
+                         await self._execute_ai_pipeline(instance, history_for_ai)
+                
+                # 2. Actualizar Timestamp DE LA INSTANCIA para no repetir en esta vela
+                await db.bot_instances.update_one(
+                    {"_id": instance["_id"]},
+                    {"$set": {"lastCandleTimestamp": current_candle_ts}}
+                )
+
+    async def _execute_ai_pipeline(self, instance: Dict[str, Any], candles_df: Any):
+        """Llama al MLService y ejecuta operaciones si hay señal."""
+        if candles_df is None or candles_df.empty:
+            return
+
+        # Convert DataFrame to list of dicts for MLService (or adapt MLService to accept DF)
+        # MLService.predict takes List[Dict].
+        candles_list = candles_df.reset_index().to_dict('records')
+        
+        # Obtener si hay posición abierta asociada para pasar al modelo (Optional)
+        # Aquí buscamos si hay un trade activo para esta instancia
+        active_trade = await db.trades.find_one({"botInstanceId": str(instance["_id"]), "status": "active"})
+
+        current_pos = {
+            "qty": 0.0,
+            "avg_price": 0.0
+        }
+
+        if active_trade:
+            current_pos = {
+                "qty": active_trade.get("amount", 0) / active_trade.get("entryPrice", 1) if active_trade.get("entryPrice") else 0,
+                "avg_price": active_trade.get("entryPrice", 0)
+            }
+
+        prediction = self.ml_service.predict(
+            symbol=instance["symbol"],
+            timeframe=instance["timeframe"],
+            candles=candles_list,
+            market_type=instance.get("marketType", "CEX"),
+            strategy_name=instance.get("strategy_name", "auto"),
+            current_position=current_pos
+        )
+        
+        decision = prediction.get("decision", "HOLD")
+        
+        if decision in ["BUY", "SELL"]:
+             # If decision matches or reverses, activate_bot logic handles it.
+             # Need to create AnalysisResult.
+             # This duplicates logic in 'activate_bot' a bit, or 'activate_bot' IS the executor.
+             # We call 'activate_bot'.
+             
+             analysis = AnalysisResult(
+                 decision=decision,
+                 symbol=instance["symbol"],
+                 market_type=instance.get("marketType", "CEX"),
+                 confidence=0.0, # TODO: Extract confidence
+                 reasoning=f"Auto-Bot Signal: {decision}",
+                 parameters={
+                     "entry_price": candles_list[-1]['close'],
+                     "tp": [],
+                     "sl": None
+                 }
+             )
+             
+             user_id = instance["userId"] # Needed as str, usually ObjectID in bot doc
+             # Convert ObjectId if needed
+             user_str = str(user_id) if user_id else "default"
+             
+             # Call existing executor
+             await self.activate_bot(analysis, user_str, config={}, bot_id=str(instance["_id"]))
+
+    async def _process_bot_tick(self, bot: Dict[str, Any], current_price: float = None) -> float:
         """
         Actualiza el estado de un bot individual basado en el precio actual.
         Retorna la distancia porcentual mínima al objetivo más cercano (TP o SL).
         """
         symbol = bot["symbol"]
-        current_price = await self._get_current_price(bot)
+        
+        # Use provided price (WS) or fallback to fetch
+        if current_price is None:
+             current_price = await self._get_current_price(bot)
         
         if current_price <= 0:
             return 100.0 # No hay precio disponible, no aceleramos

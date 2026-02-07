@@ -1,9 +1,9 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from api.services.cex_service import CEXService
-from api.services.dex_service import DEXService
+from api.src.application.services.cex_service import CEXService
+from api.src.application.services.dex_service import DEXService
 from api.src.domain.models.schemas import AnalysisResult, ExecutionResult
-from api.core.domain.signal import Decision
+from api.src.domain.models.signal import Decision
 
 @pytest.mark.asyncio
 async def test_cex_service_get_price():
@@ -17,7 +17,7 @@ async def test_cex_service_get_price():
 async def test_dex_service_0x_price():
     dex = DEXService()
     # Mock de get_app_config para evitar NoneType error
-    with patch('api.services.dex_service.get_app_config', new_callable=AsyncMock) as mock_config:
+    with patch('api.src.application.services.dex_service.get_app_config', new_callable=AsyncMock) as mock_config:
         mock_config.return_value = {"zeroExApiKey": "test_key"}
         
         # Mock del cliente httpx interno

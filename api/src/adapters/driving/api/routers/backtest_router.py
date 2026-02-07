@@ -207,6 +207,7 @@ async def run_backtest(
 async def deploy_bot(
     symbol: str,
     strategy: str,
+    timeframe: str = "1h",
     initial_balance: float = 1000.0,
     leverage: int = 1,
     current_user: dict = Depends(get_current_user)
@@ -226,7 +227,7 @@ async def deploy_bot(
         current_mode = "real" if config.get("tradingMode") == "live" else "simulated"
         
         # TODO: Si es FULL REAL, validar API Keys aquí antes de guardar
-        
+
         # Crear BotInstance
         new_bot = BotInstance(
             id=None,
@@ -234,7 +235,7 @@ async def deploy_bot(
             name=f"{strategy} - {symbol} ({current_mode})",
             symbol=symbol,
             strategy_name=strategy,
-            timeframe="1h", # TODO: Pasar timeframe desde frontend
+            timeframe=timeframe,
             mode=current_mode,
             status="active",
             config={
@@ -262,7 +263,7 @@ async def deploy_bot(
 
 
 @router.get("/ml_models")
-async def get_ml_models():
+async def get_ml_models(market: str = "spot"):
     """
     Obtiene la lista de modelos ML entrenados disponibles
     
@@ -272,7 +273,7 @@ async def get_ml_models():
     try:
         from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
         ml_service = MLService(exchange_adapter=ccxt_service)
-        models = await ml_service.get_models_status()
+        models = await ml_service.get_models_status(market_type=market)
         
         logger.info(f"Found {len(models)} trained ML models")
         return {"models": models}

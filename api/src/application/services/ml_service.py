@@ -23,6 +23,9 @@ class MLService:
         self.trainer = trainer or StrategyTrainer()
         self.logger = logging.getLogger("MLService")
         self.models_dir = "api/data/models"
+        # Import ModelManager (Singleton)
+        from api.src.infrastructure.ai.model_manager import ModelManager
+        self.model_manager = ModelManager()
 
     async def _fetch_training_data(
         self, 
@@ -74,13 +77,11 @@ class MLService:
         Ejecuta un backtest simulado para una estrategia específica usando su .pkl si existe.
         Calcula PnL acumulado, tasa de acierto y número de operaciones.
         """
-        model_path = os.path.join(self.models_dir, market_type.lower(), f"{strategy_name}.pkl")
-        if not os.path.exists(model_path):
-            return None
-            
         try:
-            # Load model and strategy
-            model = joblib.load(model_path)
+            # Load model and strategy from Memory
+            model = self.model_manager.get_model(strategy_name, market_type)
+            if not model:
+                return None
             StrategyClass = self.trainer.load_strategy_class(strategy_name, market_type)
             if not StrategyClass: return None
             
@@ -194,18 +195,10 @@ class MLService:
         
         for strat_name in target_strategies:
             try:
-                # Fallback path logic
-                model_dir_specific = os.path.join(self.models_dir, market_type.lower())
-                model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl")
-                
-                if not os.path.exists(model_path):
-                     # Check root
-                     model_path_root = os.path.join(self.models_dir, f"{strat_name}.pkl")
-                     if os.path.exists(model_path_root):
-                         model_path = model_path_root
-                     else:
-                         continue
-                model = joblib.load(model_path)
+                # Optimized for Sprint 2: Load from Memory
+                model = self.model_manager.get_model(strat_name, market_type)
+                if not model:
+                    continue
                 
                 StrategyClass = self.trainer.load_strategy_class(strat_name, market_type)
                 if not StrategyClass: continue
@@ -242,10 +235,19 @@ class MLService:
             
         # Determinar decisión final
         decision = "HOLD"
+        strategy_used = strategy_name
+        
         if strategy_name != "auto":
             decision = final_results.get(strategy_name, {}).get("action", "HOLD")
         else:
-            decision = final_results.get(strategies[0], {}).get("action", "HOLD") if strategies else "HOLD"
+            # CORRECCIÓN: Usar target_strategies
+            if target_strategies:
+                # Por ahora tomamos la primera, pero aquí podrías filtrar por la que tenga mayor 'confidence'
+                best_strat = target_strategies[0] 
+                decision = final_results.get(best_strat, {}).get("action", "HOLD")
+                strategy_used = best_strat
+            else:
+                decision = "HOLD"
             
         return {
             "symbol": symbol,
@@ -263,8 +265,8 @@ class MLService:
         
         for strat in strategies:
             # Check specific then root
-            model_path_specific = os.path.join(self.models_dir, market_type.lower(), f"{strat}.pkl")
-            model_path_root = os.path.join(self.models_dir, f"{strat}.pkl")
+            model_path_specific = os.path.join(self.models_dir, market_type.lower(), f"{strat}.pkl").replace('\\', '/')
+            model_path_root = os.path.join(self.models_dir, f"{strat}.pkl").replace('\\', '/')
             
             model_path = model_path_specific
             is_trained = os.path.exists(model_path)

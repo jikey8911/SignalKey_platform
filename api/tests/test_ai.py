@@ -1,21 +1,23 @@
 import pytest
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-from api.infrastructure.adapters.ai_adapter import AIAdapter
-from api.services.ai_service import AIService
-from api.core.domain.signal import RawSignal, Decision
+from api.src.infrastructure.adapters.ai.ai_adapter import AIAdapter
+from api.src.application.services.ai_service import AIService
+from api.src.domain.entities.signal import Decision
+from api.src.domain.models.signal import RawSignal
 
 @pytest.mark.asyncio
 async def test_ai_adapter_analyze_signal():
-    adapter = AIAdapter()
+    service = AIService()
+    adapter = AIAdapter(ai_service=service)
     raw_signal = RawSignal(source="test", text="Buy BTC at 50000")
     
     # Mock de los modelos de IA según el proveedor
-    with patch.object(adapter, '_call_gemini', new_callable=AsyncMock) as mock_gemini:
-        mock_gemini.return_value = "[]" # Simulamos una respuesta JSON vacía
-        results = await adapter.analyze_signal(raw_signal, {"aiProvider": "gemini"})
+    with patch.object(service, 'analyze_signal', new_callable=AsyncMock) as mock_analyze:
+        mock_analyze.return_value = [] # Simulamos una respuesta vacía
+        results = await adapter.analyze_signal("Buy BTC at 50000", {"aiProvider": "gemini"})
         assert results == []
-        mock_gemini.assert_called_once()
+        mock_analyze.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_ai_service_analyze_signal():
@@ -24,7 +26,7 @@ async def test_ai_service_analyze_signal():
     
     # Mock del adaptador
     with patch.object(service.adapter, 'analyze_signal', new_callable=AsyncMock) as mock_analyze:
-        from api.core.domain.signal import SignalAnalysis, Decision, MarketType
+        from api.src.domain.entities.signal import SignalAnalysis, Decision, MarketType
         mock_result = SignalAnalysis(
             decision=Decision.BUY,
             symbol="SOLUSDT",

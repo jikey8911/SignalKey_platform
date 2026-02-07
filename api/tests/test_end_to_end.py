@@ -10,7 +10,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from api.src.application.services.ml_service import MLService
-from api.services.cex_service import CEXService
+from api.src.application.services.cex_service import CEXService
 from unittest.mock import MagicMock, AsyncMock
 
 class TestEndToEnd(unittest.IsolatedAsyncioTestCase):

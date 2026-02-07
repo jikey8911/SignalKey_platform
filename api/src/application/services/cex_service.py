@@ -1,5 +1,6 @@
 import logging
 from api.src.domain.models.schemas import AnalysisResult, ExecutionResult
+from api.src.domain.entities.signal import SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
 from api.src.adapters.driven.persistence.mongodb import get_app_config, save_trade, update_virtual_balance, db
 from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
 import ccxt.async_support as ccxt # Para excepciones
@@ -276,49 +277,54 @@ class CEXService:
             if not exchange:
                 return ExecutionResult(success=False, message="Exchange no configurado para trading real")
 
-            # Lógica real con CCXT
-            logger.info(f"Ejecutando {side.upper()} REAL en {exchange.id} para {symbol} con monto {amount}")
-            
-            # Normalizar tipo de mercado (ccxt usa 'spot', 'swap', 'future', etc.)
-            market_type = 'spot' if analysis.market_type == 'SPOT' else 'swap'
-            
+            # DELEGACIÓN AL PUERTO (CCXTAdapter)
+            # Convertir AnalysisResult (App Schema) a SignalAnalysis (Domain Object)
             try:
-                # Asegurar que el mercado esté cargado
-                await exchange.load_markets()
+                domain_decision = Decision.BUY if side == 'buy' else Decision.SELL
+                domain_market = MarketType.SPOT if analysis.market_type == 'SPOT' else MarketType.FUTURES
                 
-                # Crear orden de mercado
-                params = {}
-                if market_type != 'spot' and analysis.parameters:
-                    leverage = analysis.parameters.get('leverage', 1)
-                    # Configurar apalancamiento si es futures/swap y el exchange lo soporta
-                    if hasattr(exchange, 'set_leverage'):
-                        try:
-                            await exchange.set_leverage(leverage, symbol)
-                        except Exception as lev_e:
-                            logger.warning(f"No se pudo establecer apalancamiento: {lev_e}")
+                # Convertir TP dicts a objetos TakeProfit
+                tp_list = []
+                if analysis.parameters and analysis.parameters.get('tp'):
+                    for tp_data in analysis.parameters.get('tp'):
+                        if isinstance(tp_data, dict):
+                            tp_list.append(TakeProfit(price=tp_data.get('price', 0), percent=tp_data.get('percent', 0)))
 
-                order = await exchange.create_order(
+                signal_analysis = SignalAnalysis(
                     symbol=symbol,
-                    type='market',
-                    side=side.lower(),
-                    amount=amount,
-                    params=params
+                    decision=domain_decision,
+                    market_type=domain_market,
+                    confidence=analysis.confidence,
+                    reasoning=analysis.reasoning,
+                    parameters=TradingParameters(
+                        amount=amount,
+                        leverage=analysis.parameters.get('leverage', 1) if analysis.parameters else 1,
+                        tp=tp_list,
+                        sl=analysis.parameters.get('sl') if analysis.parameters else None
+                    )
                 )
+
+                # Ejecutar a través del proveedor (Adapter)
+                logger.info(f"Delegando ejecución real a CCXTAdapter para {symbol}")
+                trade_result = await self.ccxt_provider.execute_trade(signal_analysis, user_id)
                 
-                logger.info(f"Orden real ejecutada con éxito: {order.get('id')}")
-                return ExecutionResult(
-                    success=True, 
-                    order_id=order.get('id'),
-                    message=f"Orden real {side.upper()} ejecutada en {exchange.id}",
-                    details=order
-                )
-            except ccxt.InsufficientFunds as e:
-                return ExecutionResult(success=False, message=f"Fondos insuficientes: {str(e)}")
-            except ccxt.InvalidOrder as e:
-                return ExecutionResult(success=False, message=f"Orden inválida: {str(e)}")
+                if trade_result.success:
+                    return ExecutionResult(
+                        success=True,
+                        order_id=trade_result.order_id,
+                        message=f"Orden real {side.upper()} ejecutada exitosamente",
+                        details={
+                            "price": trade_result.price,
+                            "amount": trade_result.amount,
+                            "timestamp": trade_result.timestamp
+                        }
+                    )
+                else:
+                    return ExecutionResult(success=False, message=f"Fallo en ejecución: {trade_result.error}")
+
             except Exception as e:
-                logger.error(f"Error ejecutanzo orden en {exchange.id}: {e}")
-                return ExecutionResult(success=False, message=f"Error en exchange: {str(e)}")
+                logger.error(f"Error delegando trade a CCXTAdapter: {e}")
+                return ExecutionResult(success=False, message=f"Error interno en delegación: {str(e)}")
 
         except Exception as e:
             logger.error(f"Error ejecutando trade en CEX: {e}")
@@ -366,3 +372,46 @@ class CEXService:
         except Exception as e:
             logger.error(f"Error CEXService.get_historical_data for {symbol}: {e}")
             return pd.DataFrame()
+
+    async def get_historical_candles(self, exchange_id: str, symbol: str, timeframe: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Método wrapper específico para obtener velas en formato lista de diccionarios (no DataFrame),
+        compatible con BufferService.
+        """
+        try:
+            # Obtener instancia pública si es solo para datos
+            exchange = await self.get_public_exchange_instance(exchange_id)
+            if not exchange:
+                # Fallback al provider default
+                exchange = await self.ccxt_provider.create_public_instance(exchange_id or "binance")
+
+            if not exchange:
+                logger.error(f"Cannot get candles: Exchange {exchange_id} not initialized")
+                return []
+
+            # Asegurar carga de mercados
+            if not exchange.markets:
+                try:
+                    await exchange.load_markets()
+                except Exception as me:
+                    logger.warning(f"Error loading markets in get_historical_candles: {me}")
+
+            # Obtener velas
+            ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+
+            # Formatear
+            candles = []
+            for candle in ohlcv:
+                candles.append({
+                    "timestamp": candle[0],
+                    "open": candle[1],
+                    "high": candle[2],
+                    "low": candle[3],
+                    "close": candle[4],
+                    "volume": candle[5]
+                })
+            return candles
+
+        except Exception as e:
+            logger.error(f"Error fetching historical candles for {symbol}: {e}")
+            return []

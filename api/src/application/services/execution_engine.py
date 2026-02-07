@@ -1,9 +1,8 @@
 import logging
 import asyncio
 from datetime import datetime
+from bson import ObjectId
 from api.src.application.services.simulation_service import SimulationService
-from api.src.application.services.simulation_service import SimulationService
-from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
 from api.src.domain.strategies.base import BaseStrategy
 
 class ExecutionEngine:
@@ -11,11 +10,19 @@ class ExecutionEngine:
     Motor central del Sprint 4. Orquesta la ejecución basándose en el modo (Real/Sim).
     Implementa la Tarea 4.3: Emisión de eventos para el monitoreo híbrido en tiempo real.
     """
-    def __init__(self, db_adapter, socket_service=None):
+    def __init__(self, db_adapter, socket_service=None, exchange_adapter=None):
         self.db = db_adapter
         self.socket = socket_service # Referencia para emitir eventos vía WebSockets hacia el frontend
         self.simulator = SimulationService(db_adapter)
-        self.real_exchange = ccxt_service
+
+        # Inyección de dependencia (Puerto)
+        if exchange_adapter:
+             self.real_exchange = exchange_adapter
+        else:
+             # Fallback temporal para evitar roturas si no se inyecta
+             from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+             self.real_exchange = ccxt_service
+
         self.logger = logging.getLogger("ExecutionEngine")
 
     async def process_signal(self, bot_instance, signal_data):
@@ -32,13 +39,31 @@ class ExecutionEngine:
         price = signal_data['price']
         is_alert = signal_data.get('is_alert', False) # Flag para ignorar Profit Guard
 
-        # Obtener monto de inversión (Tarea 3.3)
+        # 1. Obtener monto de inversión (Tarea 3.3 - Refactor Sprint 3)
+        # Prioridad 1: Monto configurado en el Bot (Validado por Schema)
+        # Prioridad 2: Límite global (Safety net)
+        
+        amount = bot_instance.get('amount', 10.0) 
+        
+        # Check Global Limits (Safety Net)
         config = await self.db.db["app_configs"].find_one({"userId": bot_instance.get('user_id')})
-        amount = 10.0
+        global_limit = 1000.0 # High default
         if config and 'investmentLimits' in config:
-            amount = config['investmentLimits'].get('cexMaxAmount', 10.0)
+             if bot_instance.get('market_type') in ['spot', 'cex']:
+                 global_limit = config['investmentLimits'].get('cexMaxAmount', 100.0)
+             else:
+                 global_limit = config['investmentLimits'].get('dexMaxAmount', 50.0)
 
-        # 1. Preparar datos de la posición actual
+        # Enforce Hard Limit
+        if amount > global_limit:
+            self.logger.warning(f"⚠️ Bot amount {amount} exceeds global limit {global_limit}. Capping.")
+            amount = global_limit
+
+        # 2. Risk & Balance Check
+        if not await self._check_risk_and_balance(bot_instance, amount, price):
+             return {"status": "blocked", "reason": "insufficient_balance_or_risk"}
+
+        # 3. Preparar datos de la posición actual
         current_pos = bot_instance.get('position', {'qty': 0, 'avg_price': 0})
         current_side = bot_instance.get('side') # "BUY" (Long) o "SELL" (Short)
         unrealized_pnl_pct = self._calculate_pnl(bot_instance, price)
@@ -140,16 +165,45 @@ class ExecutionEngine:
         return {"status": "executed", **trade_log}
 
     async def _execute_real_trade(self, bot_instance, signal, price, amount, is_flip):
-        """Ejecuta un trade real vía CCXT con soporte para flipping."""
+        """Ejecuta un trade real vía CCXT corrigiendo cálculo de unidades."""
         symbol = bot_instance['symbol']
         side = 'buy' if signal == BaseStrategy.SIGNAL_BUY else 'sell'
         target_side = side.upper()
 
         from api.src.domain.entities.signal import SignalAnalysis, Decision, MarketType, TradingParameters
 
-        # En ejecución real, si es flip, la cantidad debe cubrir la posición anterior + la nueva
+        # 1. Calcular cuántas monedas queremos comprar/vender con el dinero (USDT)
+        # target_qty_base: Cantidad del activo base equivalente a la inversión deseada
+        # amount es en USDT (e.g. 50.0), price es el precio actual (e.g. 50000.0)
+        target_qty_base = amount / price 
+
+        # 2. Calcular tamaño total de la orden (Order Size)
         current_qty = bot_instance.get('position', {}).get('qty', 0.0)
-        exec_amount = amount + current_qty if is_flip else amount
+        
+        exec_qty = target_qty_base
+        
+        if is_flip:
+            # Si es FLIP, necesitamos cerrar lo anterior + abrir lo nuevo.
+            market_type = bot_instance.get('market_type', 'spot').upper()
+            
+            if market_type == 'FUTURES':
+                # En Futuros, para flipear Long->Short o viceversa con una sola orden,
+                # necesitamos vender (qty_actual + qty_nueva).
+                exec_qty = target_qty_base + current_qty
+            else:
+                # SPOT: No existe flip atómico de posición negativa.
+                # Si la señal es SELL (Flip Long->Short): Vendemos TODO lo que tenemos.
+                # Spot no permite abrir Short real con este motor simple.
+                if side == 'sell':
+                    exec_qty = current_qty # Vender toda la tenencia
+                else:
+                    exec_qty = target_qty_base # Compra normal (inversión nueva)
+
+        # Validar precisión mínima (simple 6 decimales para crypto)
+        exec_qty = float(f"{exec_qty:.6f}")
+        if exec_qty <= 0:
+             self.logger.warning(f"Trade skipped: Calculated qty is zero or negative ({exec_qty}) for {symbol}")
+             return {"status": "skipped", "reason": "qty_zero"}
 
         analysis = SignalAnalysis(
             symbol=symbol,
@@ -157,7 +211,7 @@ class ExecutionEngine:
             market_type=bot_instance.get('market_type', 'spot').upper(),
             confidence=0.9,
             reasoning=f"Automated Bot {'Flip' if is_flip else 'Signal'}: {bot_instance.get('strategy_name')}",
-            parameters=TradingParameters(amount=exec_amount)
+            parameters=TradingParameters(amount=exec_qty)
         )
 
         user_id = str(bot_instance.get('user_id', "default_user"))
@@ -210,7 +264,7 @@ class ExecutionEngine:
 
         # --- TASK 6.3: NOTIFICACIONES TELEGRAM ---
         # Call Telegram Adapter to send alert
-        if execution_result and execution_result.get('status') in ['executed', 'closed']:
+        if exec_result and exec_result.get('status') in ['executed', 'closed']:
             try:
                 # Lazy import to avoid circular dep
                 from api.src.adapters.driven.notifications.telegram_adapter import TelegramAdapter
@@ -228,12 +282,12 @@ class ExecutionEngine:
                     
                     # Prepare data for alert
                     alert_data = {
-                        "symbol": symbol,
-                        "side": execution_result.get('side', 'unknown'),
-                        "price": execution_result.get('price', price),
-                        "amount": execution_result.get('amount', amount),
-                        "pnl": execution_result.get('pnl', 0),
-                        "is_simulated": execution_result.get('is_simulated', False),
+                        "symbol": bot_instance.get('symbol'),
+                        "side": exec_result.get('side', 'unknown'),
+                        "price": exec_result.get('price', 0),
+                        "amount": exec_result.get('amount', 0),
+                        "pnl": exec_result.get('pnl', 0),
+                        "is_simulated": exec_result.get('is_simulated', False),
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
                     
@@ -243,20 +297,20 @@ class ExecutionEngine:
                 self.logger.error(f"Error sending Telegram alert: {e}")
 
         # --- TAREA 4.3: NOTIFICACIÓN EN TIEMPO REAL (Socket) ---
-        if self.socket and execution_result and execution_result.get('status') == 'executed':
+        if self.socket and exec_result and exec_result.get('status') == 'executed':
             event_payload = {
-                "bot_id": str(bot_instance.get('_id', 'unknown')), # Ensure ID is string
-                "symbol": symbol,
-                "type": "LONG" if signal == BaseStrategy.SIGNAL_BUY else "SHORT",
-                "price": execution_result.get('price', price),
+                "bot_id": str(bot_instance.get('_id', 'unknown')), 
+                "symbol": bot_instance.get('symbol'),
+                "type": "LONG" if signal_data.get('signal') == BaseStrategy.SIGNAL_BUY else "SHORT",
+                "price": exec_result.get('price', signal_data.get('price')),
                 "timestamp": datetime.now().isoformat(),
-                "mode": mode,
-                "pnl_impact": execution_result.get('pnl', 0) 
+                "mode": bot_instance.get('mode'),
+                "pnl_impact": exec_result.get('pnl', 0)
             }
             # Emitimos el evento que el monitor híbrido en React capturará
-            await self.socket.emit("live_execution_signal", event_payload)
+            await self.socket.emit_to_user(str(bot_instance.get('user_id')), "live_execution_signal", event_payload)
             
-        return execution_result or {"status": "executed", "details": execution_result}
+        return exec_result or {"status": "executed", "details": exec_result}
 
     async def _apply_profit_guard(self, bot_instance, signal, current_price):
         """
@@ -284,6 +338,38 @@ class ExecutionEngine:
             return False
 
         return True
+
+    async def _check_risk_and_balance(self, bot_instance, amount, current_price):
+        """
+        Sprint 3: Valida saldo disponible y riesgo antes de operar.
+        """
+        mode = bot_instance.get('mode', 'simulated')
+        symbol = bot_instance['symbol']
+        user_id = bot_instance.get('user_id')
+        
+        if mode == 'simulated':
+            # En simulación, asumimos saldo infinito o trackeamos 'virtualBalances' en AppConfig
+            # Por simplicidad en Sprint 3, permitimos siempre en Sim
+            return True
+            
+        # Real Checks
+        try:
+            # Check Balance
+            # Assuming symbol like "BTC/USDT", quote is USDT
+            quote_currency = symbol.split('/')[1]
+            balances = await self.real_exchange.get_balance(str(user_id))
+            
+            available = balances.get(quote_currency, {}).get('free', 0.0)
+            
+            if available < amount:
+                self.logger.warning(f"❌ Insufficient Funds for {symbol}: Need {amount} {quote_currency}, Have {available}")
+                # Emitir alerta socket?
+                return False
+                
+            return True
+        except Exception as e:
+            self.logger.error(f"Error checking balance: {e}")
+            return False # Fail safe
 
     def _calculate_pnl(self, bot_instance, current_price):
         """Calcula PnL no realizado % basado en la posición actual."""

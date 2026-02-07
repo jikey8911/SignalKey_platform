@@ -617,6 +617,41 @@ class CcxtAdapter(IExchangePort):
             logger.error(f"Error fetching markets temp for {exchange_id}: {e}")
             return {}
 
+    async def test_connection_private(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None) -> bool:
+        """
+        Tests connection with provided credentials.
+        """
+        exchange_id = exchange_id.lower()
+        client = None
+        try:
+            exchange_class = getattr(ccxt, exchange_id)
+            config = {
+                'apiKey': api_key,
+                'secret': secret,
+                'enableRateLimit': True,
+                'options': {'defaultType': 'spot'}
+            }
+            if password:
+                config['password'] = password
+            if uid: 
+                 config['uid'] = uid
+            
+            client = exchange_class(config)
+            
+            # Windows DNS Fix
+            session = self._create_custom_session()
+            if session: client.session = session
+            
+            # Try a private endpoint (fetch_balance is usually good)
+            await client.fetch_balance()
+            return True
+        except Exception as e:
+            logger.error(f"Test connection failed for {exchange_id}: {e}")
+            return False
+        finally:
+             if client:
+                 await client.close()
+
     async def fetch_balance_private(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None) -> Dict[str, Any]:
         """
         Fetches balance using provided credentials directly (without persistent user referencing).
@@ -653,8 +688,31 @@ class CcxtAdapter(IExchangePort):
                 await client.close()
 
     async def close_all(self):
+        """Close ALL managed instances: System, User-Specific, and Legacy."""
+        # 1. Close system instance
         if self._exchange_instance:
-            await self._exchange_instance.close()
+            try:
+                await self._exchange_instance.close()
+            except: pass
+
+        # 2. Close public instances
+        for instance in self.public_instances.values():
+            try:
+                await instance.close()
+            except: pass
+            
+        # 3. Close user-specific instances (CRITICAL for multi-exchange support)
+        for user_id, instance in self.user_instances.items():
+            try:
+                await instance.close()
+            except Exception as e:
+                logger.error(f"Error closing exchange for user {user_id}: {e}")
+        
+        # Clear caches
+        self.public_instances = {}
+        self.user_instances = {}
+        self.user_exchange_ids = {}
+        self._exchange_instance = None
 
 # Alias for backward compatibility if needed, 
 # though we will change main.py to use `CcxtAdapter`

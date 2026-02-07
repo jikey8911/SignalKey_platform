@@ -1,6 +1,6 @@
 import os
 import logging
-from motor.motor_asyncio import AsyncIOMotorClient
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from bson import ObjectId
@@ -8,10 +8,27 @@ from bson import ObjectId
 from api.config import Config
 
 logger = logging.getLogger(__name__)
-logger.info(f"MongoDB: Connecting to {Config.MONGODB_URI[:50]}...")  # Solo primeros 50 chars por seguridad
 
+# Global instances (Singleton pattern)
+_client: Optional[AsyncIOMotorClient] = None
+_db: Optional[AsyncIOMotorDatabase] = None
+
+def get_database() -> AsyncIOMotorDatabase:
+    """Standardized way to get the database instance"""
+    global _client, _db
+    if _db is not None:
+        return _db
+    
+    if _client is None:
+        logger.info(f"MongoDB: Connecting to {Config.MONGODB_URI[:50]}...")
+        _client = AsyncIOMotorClient(Config.MONGODB_URI)
+    
+    _db = _client[Config.MONGODB_DB_NAME]
+    return _db
+
+# For legacy compatibility and quick access
 client = AsyncIOMotorClient(Config.MONGODB_URI)
-db = client[os.getenv("MONGODB_DB_NAME", "signalkey_platform")]
+db = client[Config.MONGODB_DB_NAME]
 
 class MongoModel:
     @classmethod
@@ -54,6 +71,15 @@ async def get_app_config(user_id: str):
     # user_id can be the openId or the ObjectId string
     # First try by openId in users collection to get the ObjectId
     user = await db.users.find_one({"openId": user_id})
+
+    # If not found by openId, try by _id
+    if not user:
+        try:
+            if ObjectId.is_valid(user_id):
+                 user = await db.users.find_one({"_id": ObjectId(user_id)})
+        except Exception:
+            pass
+
     if not user:
         return None
     

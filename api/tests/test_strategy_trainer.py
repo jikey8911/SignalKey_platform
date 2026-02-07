@@ -8,7 +8,7 @@ import os
 # Add api to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from api.ml.strategy_trainer import StrategyTrainer
+from api.src.domain.services.strategy_trainer import StrategyTrainer
 
 class TestStrategyTrainer(unittest.TestCase):
     def setUp(self):

@@ -3,36 +3,99 @@ from pydantic import BaseModel
 from typing import List, Optional
 from api.src.domain.entities.bot_instance import BotInstance
 from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
-from api.src.adapters.driven.persistence.mongodb import db 
+from api.src.adapters.driven.persistence.mongodb import db, get_app_config 
 from api.src.infrastructure.security.auth_deps import get_current_user
 
 router = APIRouter(prefix="/bots", tags=["Bot Management sp2"])
 repo = MongoBotRepository()
 
+from api.src.domain.models.schemas import BotInstanceSchema
+
 class CreateBotSchema(BaseModel):
-    name: str
+    name: str = "New Bot"
     symbol: str
-    strategy_name: str
-    timeframe: str
+    strategy_name: str = "auto"
+    timeframe: str = "15m"
     market_type: str = "spot"
     mode: str = "simulated"
+    amount: Optional[float] = None # Optional initial override, otherwise uses default
+    status: str = "active"
+    exchange_id: Optional[str] = "binance"
 
 @router.post("/")
 async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get_current_user)):
     user_id = current_user["openId"]
-    bot = BotInstance(
+    
+    # 1. Resolver Amount inicial con consistencia financiera
+    app_config = await get_app_config(user_id)
+    limit_amount = 0.0
+    
+    # Default limits based on user tier/config
+    if app_config:
+        limits = app_config.get('investmentLimits', {})
+        if data.market_type in ['spot', 'cex']:
+            limit_amount = limits.get('cexMaxAmount', 100.0)
+        else:
+            limit_amount = limits.get('dexMaxAmount', 50.0)
+    else:
+        limit_amount = 100.0 if data.market_type == 'spot' else 50.0
+
+    # Determinar monto final: Si el usuario manda uno, validamos que no exceda el límite global
+    # Si no manda, usamos el límite como default (o una fracción segura)
+    final_amount = data.amount if data.amount is not None else limit_amount
+    
+    # Validation (Financial Consistency)
+    if final_amount > limit_amount:
+         raise HTTPException(status_code=400, detail=f"Amount {final_amount} exceeds your limit of {limit_amount} for this market.")
+    
+    if final_amount <= 0:
+         raise HTTPException(status_code=400, detail="Amount must be positive.")
+
+    # 2. Crear instancia usando Schema para validación estricta
+    try:
+        new_bot_data = BotInstanceSchema(
+            user_id=user_id,
+            name=data.name,
+            symbol=data.symbol,
+            amount=final_amount,
+            strategy_name=data.strategy_name,
+            timeframe=data.timeframe,
+            market_type=data.market_type,
+            mode=data.mode,
+            status=data.status,
+            exchange_id=data.exchange_id or "binance"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Validation error: {e}")
+
+    # 3. Guardar en DB (convert pydantic to dict)
+    # Repo expects a 'BotInstance' entity or dict usually. 
+    # Adapting to what `repo.save` expects. The repo implementation seems to map kwargs.
+    # We'll construct the entity cleanly.
+    
+    bot_entity = BotInstance(
         id=None,
-        user_id=user_id, 
-        name=data.name,
-        symbol=data.symbol,
-        strategy_name=data.strategy_name,
-        timeframe=data.timeframe,
-        market_type=data.market_type,
-        mode=data.mode,
-        status="active" # Se crea activo para iniciar monitoreo
+        user_id=new_bot_data.user_id,
+        name=new_bot_data.name,
+        symbol=new_bot_data.symbol,
+        strategy_name=new_bot_data.strategy_name,
+        timeframe=new_bot_data.timeframe,
+        market_type=new_bot_data.market_type,
+        mode=new_bot_data.mode,
+        status=new_bot_data.status,
+        amount=new_bot_data.amount,
+        exchange_id=new_bot_data.exchange_id
     )
-    bot_id = await repo.save(bot)
-    return {"id": bot_id, "status": "created"}
+
+    bot_id = await repo.save(bot_entity)
+    
+    # Emitir evento de creación
+    await socket_service.emit_to_user(user_id, "bot_created", {
+        "id": bot_id,
+        **new_bot_data.dict(by_alias=True, exclude={'id'})
+    })
+    
+    return {"id": bot_id, "status": "created", "amount": final_amount}
 
 def get_signal_repository():
     from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
@@ -99,14 +162,90 @@ async def toggle_bot_status(bot_id: str, status: str):
     if status not in ["active", "paused"]:
         raise HTTPException(status_code=400, detail="Invalid status")
     await repo.update_status(bot_id, status)
+    
+    # Emitir actualización de estado
+    bot_doc = await repo.collection.find_one({"_id": ObjectId(bot_id)})
+    if bot_doc:
+        u_id = bot_doc.get("userId")
+        await socket_service.emit_to_user(u_id, "bot_update", {
+            "id": bot_id,
+            "status": status
+        })
+        
+@router.patch("/{bot_id}/status")
+async def toggle_bot_status(bot_id: str, status: str):
+    if status not in ["active", "paused"]:
+        raise HTTPException(status_code=400, detail="Invalid status")
+    await repo.update_status(bot_id, status)
+    
+    # Emitir actualización de estado
+    bot_doc = await repo.collection.find_one({"_id": ObjectId(bot_id)})
+    if bot_doc:
+        u_id = bot_doc.get("userId")
+        await socket_service.emit_to_user(u_id, "bot_update", {
+            "id": bot_id,
+            "status": status
+        })
+        
     return {"message": f"Bot {status}"}
+
+class UpdateBotSchema(BaseModel):
+    name: Optional[str] = None
+    strategy_name: Optional[str] = None
+    timeframe: Optional[str] = None
+    amount: Optional[float] = None
+    status: Optional[str] = None
+
+@router.put("/{bot_id}")
+async def update_bot(bot_id: str, data: UpdateBotSchema, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["openId"]
+    
+    # 1. Recuperar bot actual
+    existing_bot = await repo.collection.find_one({"_id": ObjectId(bot_id), "userId": user_id})
+    if not existing_bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    # 2. Validar Amount si se está actualizando
+    updates = {k: v for k, v in data.dict(exclude_unset=True).items()}
+    
+    if "amount" in updates:
+        new_amount = updates["amount"]
+        # Retrieve limits
+        app_config = await get_app_config(user_id)
+        limit_amount = 100.0
+        if app_config:
+             limits = app_config.get('investmentLimits', {})
+             market_type = existing_bot.get('market_type', 'spot')
+             if market_type in ['spot', 'cex']:
+                 limit_amount = limits.get('cexMaxAmount', 100.0)
+             else:
+                 limit_amount = limits.get('dexMaxAmount', 50.0)
+        
+        if new_amount > limit_amount:
+            raise HTTPException(status_code=400, detail=f"Amount {new_amount} exceeds limit of {limit_amount}")
+        if new_amount <= 0:
+            raise HTTPException(status_code=400, detail="Amount must be positive")
+
+    # 3. Actualizar
+    if updates:
+        await repo.collection.update_one({"_id": ObjectId(bot_id)}, {"$set": updates})
+        
+        # Emitir
+        await socket_service.emit_to_user(user_id, "bot_updated", {
+            "id": bot_id,
+            **updates
+        })
+        
+    return {"id": bot_id, "status": "updated", "updates": updates}
 
 from api.src.application.services.execution_engine import ExecutionEngine
 from bson import ObjectId
 from api.src.adapters.driven.notifications.socket_service import socket_service
+from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
 
 # Nota: Engine requiere el adaptador de DB para funcionar
-engine = ExecutionEngine(repo, socket_service) 
+# Corregido: Pasar 'db' (adaptador de persistencia global) y 'ccxt_service' (puerto de exchange)
+engine = ExecutionEngine(db, socket_service, exchange_adapter=ccxt_service)
 
 class SignalWebhook(BaseModel):
     bot_id: str
@@ -133,6 +272,11 @@ async def receive_external_signal(data: SignalWebhook):
     return {"status": "processed", "execution": result}
 
 @router.delete("/{bot_id}")
-async def delete_bot(bot_id: str):
+async def delete_bot(bot_id: str, current_user: dict = Depends(get_current_user)):
+    user_id = current_user["openId"]
     await repo.delete(bot_id)
+    
+    # Emitir evento de eliminación
+    await socket_service.emit_to_user(user_id, "bot_deleted", {"id": bot_id})
+    
     return {"message": "Bot deleted"}

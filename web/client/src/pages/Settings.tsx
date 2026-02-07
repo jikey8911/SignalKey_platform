@@ -2,18 +2,17 @@ import React, { useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 
-import { Eye, EyeOff, Save, Plus, Trash2 } from 'lucide-react';
+import { Eye, EyeOff, Save, Plus, Trash2, User, Bot, Megaphone, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { CCXT_EXCHANGES } from '@/constants/exchanges';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { TelegramConfig } from '@/components/TelegramConfig';
 import { CONFIG } from '@/config';
+import { fetchConfig, updateConfig } from '@/lib/api';
 
 export default function Settings() {
   const { user: authUser } = useAuth({ redirectOnUnauthenticated: true });
 
-  // const { data: config, isLoading } = trpc.trading.getConfig.useQuery(); // REMOVED TRPC
-  // const updateConfigMutation = trpc.trading.updateConfig.useMutation(); // REMOVED TRPC
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [showSecrets, setShowSecrets] = useState(false);
@@ -104,18 +103,12 @@ export default function Settings() {
 
   // Load Config from REST API
   React.useEffect(() => {
-    const fetchConfig = async () => {
+    const loadConfig = async () => {
       try {
         setIsLoading(true);
-        const res = await fetch(`${CONFIG.API_BASE_URL}/config/`, {
-          credentials: 'include' // Important for Cookie Auth
-        });
+        const config = await fetchConfig(authUser?.openId);
 
-        if (res.ok) {
-          const data = await res.json();
-          const config = data.config; // API returns { config: ... }
-
-          if (config) {
+        if (config) {
             setServerConfig(config);
             setFormData({
               demoMode: config.demoMode ?? true,
@@ -159,7 +152,6 @@ export default function Settings() {
               }
             });
           }
-        }
       } catch (e) {
         console.error("Error loading config:", e);
         toast.error("Error al cargar la configuración");
@@ -169,7 +161,7 @@ export default function Settings() {
     };
 
     if (authUser) {
-      fetchConfig();
+      loadConfig();
     }
   }, [authUser]);
 
@@ -188,18 +180,8 @@ export default function Settings() {
       });
 
       setIsSaving(true);
-      // await updateConfigMutation.mutateAsync(formData); // REMOVED TRPC
 
-      const res = await fetch(`${CONFIG.API_BASE_URL}/config/`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(formData),
-        credentials: 'include'
-      });
-
-      if (!res.ok) throw new Error("Error saving config");
+      await updateConfig(authUser?.openId, formData);
 
       toast.success('Configuración guardada correctamente');
     } catch (error) {
@@ -363,7 +345,7 @@ export default function Settings() {
                         return;
                       }
                       try {
-                        const res = await fetch(`${CONFIG.API_BASE_URL}/telegram/dialogs/${authUser.openId}`);
+                        const res = await fetch(`${CONFIG.API_BASE_URL}/telegram/dialogs`);
                         const data = await res.json();
                         const dialogs = data.dialogs;
                         if (Array.isArray(dialogs)) {
@@ -385,7 +367,7 @@ export default function Settings() {
                 {availableChannels.length > 0 && (
                   <div className="max-h-60 overflow-y-auto border border-border rounded p-2 text-sm bg-background space-y-1">
                     {availableChannels.map((channel: any) => (
-                      <label key={channel.id} className="flex items-center gap-2 p-1 hover:bg-muted/50 rounded cursor-pointer">
+                      <label key={channel.id} className="flex items-center gap-2 p-1 hover:bg-muted/50 rounded cursor-pointer w-full">
                         <input
                           type="checkbox"
                           checked={formData.telegramChannels.allow.includes(channel.id)}
@@ -398,9 +380,20 @@ export default function Settings() {
                               telegramChannels: { ...formData.telegramChannels, allow: newAllow }
                             });
                           }}
-                          className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4"
+                          className="rounded border-gray-300 text-primary focus:ring-primary h-4 w-4 mr-2"
                         />
-                        <span className="truncate">{channel.name || "Sin Nombre"} <span className="text-xs text-muted-foreground">({channel.id})</span></span>
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                           {/* Icon based on type */}
+                           {channel.type === 'bot' || channel.is_bot ? <Bot size={14} className="text-blue-500 shrink-0" /> :
+                            channel.type === 'channel' ? <Megaphone size={14} className="text-orange-500 shrink-0" /> :
+                            channel.type === 'group' ? <Users size={14} className="text-green-500 shrink-0" /> :
+                            <User size={14} className="text-gray-500 shrink-0" />
+                           }
+                           <div className="truncate flex flex-col">
+                             <span className="font-medium truncate text-xs">{channel.name || "Sin Nombre"}</span>
+                             <span className="text-[10px] text-muted-foreground truncate">{channel.type?.toUpperCase() || 'UNKNOWN'} • {channel.id}</span>
+                           </div>
+                        </div>
                       </label>
                     ))}
                   </div>

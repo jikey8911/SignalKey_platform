@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 from api.src.application.services.ml_service import MLService
 from api.src.application.services.cex_service import CEXService
+from api.src.infrastructure.ai.model_manager import ModelManager
 import logging
 
 logger = logging.getLogger(__name__)
@@ -77,21 +78,21 @@ async def train_all_strategies_endpoint(request: BatchTrainRequest, background_t
         return {"status": "started (fallback)", "message": f"Training started (fallback)"}
 
 @router.get("/models")
-async def get_models():
+async def get_models(market: str = "spot"):
     """Retorna la lista de estrategias/modelos disponibles"""
     # Use generic service for models list
-    models = await MLService(exchange_adapter=CEXService()).get_available_models()
+    models = await MLService(exchange_adapter=CEXService()).get_available_models(market_type=market)
     return [{"id": m, "status": "Ready", "type": "RandomForest"} for m in models]
 
 @router.get("/strategies")
-async def get_available_strategies():
+async def get_available_strategies(market: str = "spot"):
     """
     Retorna la lista de estrategias disponibles desde api/strategies.
     Útil para mostrar en el inventario .pkl del frontend.
     """
     try:
         from api.src.domain.strategies import load_strategies
-        strategies_dict, strategies_list = load_strategies()
+        strategies_dict, strategies_list = load_strategies(market_type=market)
         
         # Return list of strategy names
         strategy_names = [s.__class__.__name__ for s in strategies_list]
@@ -131,3 +132,16 @@ async def train_global_redirect(request: BatchTrainRequest, background_tasks: Ba
 @router.post("/train-strategies")
 async def train_strategies_redirect(request: BatchTrainRequest, background_tasks: BackgroundTasks):
     return await train_all_strategies_endpoint(request, background_tasks)
+
+@router.post("/reload-models")
+async def reload_models():
+    """
+    Recarga en caliente todos los modelos .pkl desde el disco a la memoria RAM.
+    Útil después de entrenar nuevas estrategias sin reiniciar el servidor.
+    """
+    try:
+        ModelManager().load_all_models()
+        return {"status": "success", "message": "Models reloaded successfully"}
+    except Exception as e:
+        logger.error(f"Error reloading models: {e}")
+        raise HTTPException(status_code=500, detail=str(e))

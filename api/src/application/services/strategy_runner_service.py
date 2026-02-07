@@ -9,6 +9,8 @@ from api.src.adapters.driven.persistence.mongodb import db, get_app_config
 from api.src.application.services.ml_service import MLService
 from api.src.application.services.bot_service import SignalBotService
 from api.src.domain.models.schemas import AnalysisResult, TradingSignal
+from api.src.adapters.driven.notifications.socket_service import socket_service
+from api.src.application.services.buffer_service import DataBufferService
 
 logger = logging.getLogger(__name__)
 
@@ -49,18 +51,9 @@ class StrategyRunnerService:
         logger.info("🛑 StrategyRunnerService Detenido.")
 
     async def _run_cycle(self):
-        # 1. Obtener Bots Activos (que no estén cerrados, obviously)
-        # Nota: Buscamos bots marcados como 'active'.
-        # Idealmente iteraríamos por *Configuraciones* de Bot, pero en este MVP
-        # los bots activos en 'trades' actúan como instancias persistentes de monitoreo.
-        # Si queremos que el bot genere NUEVAS señales (flipping, re-entry), debemos mirar también
-        # los bots que están en estado "active" (monitoreando salida) O configuraciones de usuario.
-        
-        # Para simplificar: Iteramos sobre todos los documentos en 'trades' con status 'active'.
-        # Esto asume que un "Bot Instance" se mantiene vivo para recibir nuevas señales 
-        # (p.ej. para invertir posición).
-        
-        cursor = db.trades.find({"status": "active"})
+        # 1. Obtener Bots Activos (Configuraciones de Bot)
+        # Iteramos sobre todas las instancias de bot marcadas como 'active'
+        cursor = db.bot_instances.find({"status": "active"})
         active_bots = await cursor.to_list(length=100)
         
         if not active_bots:
@@ -73,85 +66,144 @@ class StrategyRunnerService:
         for bot in active_bots:
             try:
                 symbol = bot.get('symbol')
-                user_id_obj = bot.get('userId') # ObjectId
-                strategy_name = bot.get('strategy_name', 'auto') # Asumir nombre estrategia guardado
+                user_open_id = bot.get('user_id') # BotInstance stores openId directly usually, let's verify
+                # MongoBotRepository saves user_id which comes from current_user["openId"] in bot_router.py
+                # So here 'user_id' IS the openId.
+                
+                strategy_name = bot.get('strategy_name', 'auto')
                 timeframe = bot.get('timeframe', '1h')
                 
                 # Evitar procesar mismo símbolo/usuario múltiples veces si hay duplicados
-                bot_key = f"{user_id_obj}_{symbol}"
+                bot_key = f"{user_open_id}_{symbol}"
                 if bot_key in processed_symbols: continue
                 processed_symbols.add(bot_key)
 
-                # 2. Obtener Usuario y Config
-                user = await db.users.find_one({"_id": user_id_obj})
-                if not user: continue
-                user_open_id = user['openId']
-
+                # 2. Obtener Configuración de App del Usuario
                 config = await get_app_config(user_open_id)
                 if not config or not config.get('isAutoEnabled', False):
                     # Skip si auto trading global deshabilitado para usuario
                     continue
 
-                # 3. Obtener Datos de Mercado Recientes (ML Service usa exchange adapter inside)
-                # Necesitamos pasar las velas al predict.
-                # MLService.predict espera `candles`.
+                # 3. Verificar estado actual (¿Tiene trade abierto este bot?)
+                # Buscamos trade activo para este usuario y símbolo
+                # Nota: Asumimos un trade activo por símbolo/bot por ahora.
+                current_trade = await db.trades.find_one({
+                    "userId": config.get("userId"), # Trade usa ObjectId reference usually?
+                    # Wait, saving trade uses config["userId"] which is ObjectId string or obj? 
+                    # Let's check save_trade in CEXService. It uses config["userId"].
+                    # config["userId"] comes from user["_id"].
+                    # So we need user's ObjectId.
+                    
+                    # Alternative: We can search by symbol and status="open" / "active" and correlate.
+                    # Let's look up user to get _id
+                     "symbol": symbol,
+                     "status": {"$in": ["open", "active", "pending"]}
+                })
                 
-                # Fetch candles via Exchange Adapter (accediendo via MLService.exchange)
-                # Usamos el exchange configurado del usuario
-                candles_df = await self.ml_service.exchange.get_public_historical_data(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    limit=100, # Necesitamos suficientes para features
-                    user_id=user_open_id
-                )
+                # If we didn't find by userId in config, maybe we need to fetch user first to be sure
+                if not current_trade:
+                     user_doc = await db.users.find_one({"openId": user_open_id})
+                     if user_doc:
+                         current_trade = await db.trades.find_one({
+                             "userId": user_doc["_id"], # ObjectId
+                             "symbol": symbol,
+                             "status": {"$in": ["open", "active", "pending"]}
+                         })
+
+                # 4. Obtener Datos de Mercado Recientes (Optimized via DataBuffer)
+                candles_df = None
+                buffer_data = DataBufferService().get_latest_data("binance", symbol, timeframe)  # Assuming binance for now or use bot.exchangeId
+                
+                if buffer_data is not None and len(buffer_data) >= 50:
+                    candles_df = buffer_data.tail(100) # Get last 100
+                
+                if candles_df is None or candles_df.empty:
+                     # Fallback to API if buffer empty or insufficient
+                     candles_df = await self.ml_service.exchange.get_public_historical_data(
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        limit=100,
+                        user_id=user_open_id
+                    )
                 
                 if candles_df.empty:
                     continue
 
-                # Convertir DF a lista de dicts para predict
                 candles_list = candles_df.reset_index().to_dict('records')
-                # Renombrar timestamp si necesario (MLService espera dicts)
                 
-                # 4. Ejecutar Predicción
-                current_position = {
-                    "qty": bot.get('amount', 0), # Simplificado
-                    "avg_price": bot.get('entryPrice', 0),
-                    "side": bot.get('side')
-                }
+                # 5. Configurar Posición Actual para el Modelo
+                current_position = None
+                if current_trade:
+                    current_position = {
+                        "qty": current_trade.get('amount', 0),
+                        "avg_price": current_trade.get('entryPrice', 0),
+                        "side": current_trade.get('side', 'BUY') # Default to BUY side (Long) if unsure, usually 'BUY' or 'SELL'
+                    }
                 
+                # 6. Ejecutar Predicción
                 prediction = self.ml_service.predict(
                     symbol=symbol,
                     timeframe=timeframe,
                     candles=candles_list,
-                    market_type=bot.get('marketType', 'spot'),
-                    strategy_name='auto', # O bot.strategy_name si existiera
+                    market_type=bot.get('market_type', 'spot'),
+                    strategy_name=strategy_name,
                     current_position=current_position
                 )
                 
                 decision = prediction.get('decision', 'HOLD')
                 
-                # 5. Actuar sobre la señal
+                # 7. Persistencia y Emisión de Señal (Tarea 4.3/4.5: Emitir HOLD y otros)
+                confidence = prediction.get('confidence', 0.85)
+                try:
+                    from api.src.domain.models.signal import Signal, SignalStatus, Decision, MarketType
+                    from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
+                    
+                    signal_repo = MongoDBSignalRepository(db)
+                    
+                    # Determinar estado
+                    sig_status = SignalStatus.EXECUTED if decision in ['BUY', 'SELL'] else SignalStatus.ACCEPTED
+                    if decision == 'HOLD':
+                         sig_status = SignalStatus.ACCEPTED # O un estado específico para HOLD si se desea
+                    
+                    sig_entity = Signal(
+                        id=None,
+                        userId=user_open_id,
+                        source=f"AUTO_STRATEGY_{strategy_name.upper()}",
+                        rawText=f"Auto generated signal {decision}",
+                        status=sig_status,
+                        createdAt=datetime.utcnow(),
+                        symbol=symbol,
+                        marketType=MarketType(bot.get('market_type', 'spot').upper()),
+                        decision=Decision(decision),
+                        confidence=confidence,
+                        reasoning=f"Strategy: {prediction.get('strategy_used')}",
+                        botId=str(bot.get('_id'))
+                    )
+                    
+                    await signal_repo.save(sig_entity)
+                    
+                    # --- WEBSOCKET EMISSION ---
+                    await socket_service.emit_to_user(user_open_id, "signal_update", sig_entity.to_dict())
+                    # --------------------------
+                    
+                except Exception as e:
+                    logger.error(f"Error saving/emitting signal: {e}")
+
+                # 8. Actuar si es una señal ejecutable
                 if decision in ['BUY', 'SELL']:
-                    confidence = 0.85 # Placeholder, MLService debería retornarlo
-                    
-                    # Verificar si la decisión difiere del estado actual o es re-entry
-                    # SignalBotService.activate_bot maneja la lógica de "Exists -> Accumulate/Close"
-                    
                     analysis = AnalysisResult(
                         symbol=symbol,
                         decision=decision,
-                        market_type=bot.get('marketType', 'spot'),
+                        market_type=bot.get('market_type', 'spot'),
                         confidence=confidence,
                         reasoning=f"Auto Strategy Runner ({prediction.get('strategy_used')})",
                         parameters={
-                            "price": candles_list[-1]['close'], # Precio actual aprox
-                            "amount": bot.get('amount') # Usar monto del bot o default config
+                            "price": candles_list[-1]['close'],
+                            "amount": bot.get('amount')
                         }
                     )
-                    
                     logger.info(f"🤖 AutoSignal: {decision} for {symbol} (User: {user_open_id})")
-                    
-                    await self.bot_service.activate_bot(analysis, user_open_id, config)
+                    await self.bot_service.activate_bot(analysis, user_open_id, config, bot_id=str(bot.get('_id')))
 
             except Exception as e:
                 logger.error(f"Error procesando bot {bot.get('_id')}: {e}")

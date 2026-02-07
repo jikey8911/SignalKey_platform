@@ -5,7 +5,6 @@ import { Play, BarChart3, TrendingUp, TrendingDown, Loader2, Trophy, BrainCircui
 import { toast } from 'sonner';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { Badge } from '@/components/ui/badge';
-import { trpc } from '@/lib/trpc';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
@@ -74,6 +73,20 @@ interface Symbol {
   priceChangePercent: number;
   volume: number;
 }
+
+// TradingView Chart Wrapper for Backtest
+const BacktestChart = ({ candles, trades }: { candles: Candle[]; trades: Trade[] }) => (
+  <TradingViewChart
+    data={candles}
+    trades={trades.map(t => ({
+      time: t.time,
+      price: t.price,
+      side: t.side,
+      label: t.label
+    }))}
+    height={400}
+  />
+);
 
 export default function Backtest() {
   const { user } = useAuth();
@@ -390,9 +403,17 @@ export default function Backtest() {
 
       const data = await response.json();
 
+      // Robust time normalization helper
+      const normalizeTime = (t: any): number => {
+        if (typeof t === 'string') return new Date(t).getTime();
+        // If less than 20000000000 (year 2603), it's likely seconds, convert to MS
+        if (typeof t === 'number' && t < 20000000000) return t * 1000;
+        return t; // Already MS
+      };
+
       // Transformar datos del backend al formato del frontend
       const transformedTrades: Trade[] = data.trades?.map((t: any) => ({
-        time: (typeof t.time === 'string' ? new Date(t.time).getTime() : t.time * 1000),
+        time: normalizeTime(t.time),
         price: t.price,
         side: t.type as 'BUY' | 'SELL',
         profit: t.pnl,
@@ -402,25 +423,21 @@ export default function Backtest() {
         pnl_percent: t.pnl_percent
       })) || [];
 
-      // Sort trades: Newest first (Descending)
+      // Sort trades: Newest first (Descending) for Table
       // Tie-breaker: OPEN/DCA events are "Newer" than CLOSE events in the same tick.
       transformedTrades.sort((a, b) => {
         if (b.time !== a.time) {
           return b.time - a.time;
         }
-        // Same time: Determine sequence
-        // We want [OPEN, CLOSE] order in the table (Top to Bottom)
-        // implying OPEN is newer than CLOSE.
         const isCloseA = a.label?.includes('CLOSE') || false;
         const isCloseB = b.label?.includes('CLOSE') || false;
-
-        if (isCloseA && !isCloseB) return 1; // A (Close) is Older -> Move down (Positive index)
-        if (!isCloseA && isCloseB) return -1; // B (Close) is Older -> Move down
+        if (isCloseA && !isCloseB) return 1;
+        if (!isCloseA && isCloseB) return -1;
         return 0;
       });
 
       const candles: Candle[] = data.chart_data?.map((c: any) => ({
-        time: c.time * 1000,
+        time: normalizeTime(c.time),
         open: c.open,
         high: c.high,
         low: c.low,
@@ -499,20 +516,6 @@ export default function Backtest() {
     }
   };
 
-  // TradingView Chart Wrapper for Backtest
-  const BacktestChart = ({ candles, trades }: { candles: Candle[]; trades: Trade[] }) => (
-    <TradingViewChart
-      data={candles}
-      trades={trades.map(t => ({
-        time: t.time,
-        price: t.price,
-        side: t.side,
-        label: t.label
-      }))}
-      height={400}
-    />
-  );
-
   return (
     <div className="p-6 space-y-6">
       <Tabs defaultValue="backtest" className="w-full">
@@ -541,7 +544,7 @@ export default function Backtest() {
                   Exchange
                 </label>
                 {loadingExchanges ? (
-                  <div className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg bg-background">
+                  <div className="flex items-center gap-2 px-4 py-2 border border-slate-700 rounded-lg bg-slate-900">
                     <Loader2 className="animate-spin" size={16} />
                     <span className="text-muted-foreground">Cargando...</span>
                   </div>
@@ -570,7 +573,7 @@ export default function Backtest() {
                   Mercado
                 </label>
                 {loadingMarkets ? (
-                  <div className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg bg-background">
+                  <div className="flex items-center gap-2 px-4 py-2 border border-slate-700 rounded-lg bg-slate-900">
                     <Loader2 className="animate-spin" size={16} />
                     <span className="text-muted-foreground">Cargando...</span>
                   </div>
@@ -628,18 +631,18 @@ export default function Backtest() {
                   </div>
                 </div>
                 {loadingSymbols ? (
-                  <div className="flex items-center justify-center gap-2 p-8 border border-border rounded-lg bg-background">
+                  <div className="flex items-center justify-center gap-2 p-8 border border-slate-800 rounded-lg bg-slate-950/50">
                     <Loader2 className="animate-spin" size={24} />
                     <span className="text-muted-foreground">Cargando símbolos...</span>
                   </div>
                 ) : symbols.length === 0 ? (
-                  <div className="p-4 border border-border rounded-lg bg-background text-muted-foreground text-center">
+                  <div className="p-4 border border-slate-800 rounded-lg bg-slate-950/50 text-muted-foreground text-center">
                     No hay símbolos disponibles
                   </div>
                 ) : (
-                  <div className="border border-border rounded-lg bg-background max-h-64 overflow-y-auto">
+                  <div className="border border-border rounded-lg bg-slate-950/50 h-96 overflow-y-auto" style={{ height: '400px' }}>
                     <table className="w-full text-sm">
-                      <thead className="sticky top-0 bg-muted border-b border-border">
+                      <thead className="sticky top-0 bg-slate-900 border-b border-border text-white shadow-md z-10">
                         <tr>
                           <th className="text-left py-2 px-4 font-semibold">Símbolo</th>
                           <th className="text-right py-2 px-4 font-semibold">Precio</th>
@@ -651,13 +654,13 @@ export default function Backtest() {
                         {symbols.filter(s => s.symbol.toLowerCase().includes(symbolSearch.toLowerCase())).map((sym: Symbol) => (
                           <tr
                             key={sym.symbol}
-                            className="border-b border-border hover:bg-muted/50 cursor-pointer text-foreground"
+                            className="border-b border-border hover:bg-slate-800/50 cursor-pointer text-slate-200 transition-colors"
                             onClick={() => {
                               setSelectedSymbol(sym.symbol);
                               setSymbol(sym.symbol);
                             }}
                           >
-                            <td className="py-3 px-4 font-medium">{sym.symbol}</td>
+                            <td className="py-3 px-4 font-bold text-cyan-400">{sym.symbol}</td>
                             <td className="py-3 px-4 text-right">${sym.price.toFixed(2)}</td>
                             <td className={`py-3 px-4 text-right font-semibold ${sym.priceChangePercent >= 0 ? 'text-green-500' : 'text-red-500'
                               }`}>
@@ -789,7 +792,7 @@ export default function Backtest() {
                           <p className="text-xs text-muted-foreground italic">Basada en el mejor desempeño del torneo</p>
                         </div>
                       </div>
-                      <div className="bg-background/80 p-4 rounded-xl border border-cyan-500/20 text-sm font-mono space-y-2 shadow-inner">
+                      <div className="bg-slate-950/50 p-4 rounded-xl border border-cyan-500/20 text-sm font-mono space-y-2 shadow-inner">
                         <p><span className="text-cyan-600 dark:text-cyan-400 font-bold">Estrategia:</span> {results.strategy_name}</p>
                         <p><span className="text-muted-foreground">Modelo ID:</span> {results.botConfiguration.model_id}</p>
                         <div className="pt-2">
@@ -819,7 +822,9 @@ export default function Backtest() {
                             const res = await fetch(`${CONFIG.API_BASE_URL}/backtest/deploy_bot?` + new URLSearchParams({
                               symbol: results.symbol,
                               strategy: results.strategy_name || '',
-                              initial_balance: virtualBalance.toString()
+                              initial_balance: virtualBalance.toString(),
+                              timeframe: results.timeframe, // Enviar timeframe del resultado
+                              exchange_id: selectedExchange // Pass selected exchange
                             }), { method: 'POST' });
 
                             if (!res.ok) throw new Error("Fallo en la conexión");
@@ -971,7 +976,7 @@ export default function Backtest() {
               {/* Trade Detail Overlay */}
               {selectedTrade && (
                 <div className="fixed bottom-6 right-6 z-50">
-                  <Card className="p-4 shadow-2xl border-primary/20 bg-background/95 backdrop-blur w-72 animate-in slide-in-from-bottom-5">
+                  <Card className="p-4 shadow-2xl border-primary/20 bg-slate-950/95 backdrop-blur w-72 animate-in slide-in-from-bottom-5">
                     <div className="flex justify-between items-start mb-2">
                       <h4 className="font-bold flex items-center gap-2">
                         {selectedTrade.side === 'BUY' ? <TrendingUp className="text-blue-500" size={16} /> : <TrendingDown className="text-amber-500" size={16} />}
@@ -1028,12 +1033,12 @@ export default function Backtest() {
                   Exchange
                 </label>
                 {loadingExchanges ? (
-                  <div className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg bg-background">
+                  <div className="flex items-center gap-2 px-4 py-2 border border-slate-700 rounded-lg bg-slate-900">
                     <Loader2 className="animate-spin" size={16} />
                     <span className="text-muted-foreground">Cargando...</span>
                   </div>
                 ) : exchanges.length === 0 ? (
-                  <div className="px-4 py-2 border border-border rounded-lg bg-background text-muted-foreground">
+                  <div className="px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-muted-foreground">
                     No hay exchanges
                   </div>
                 ) : (
@@ -1058,7 +1063,7 @@ export default function Backtest() {
                   Mercado
                 </label>
                 {loadingMarkets ? (
-                  <div className="flex items-center gap-2 px-4 py-2 border border-border rounded-lg bg-background">
+                  <div className="flex items-center gap-2 px-4 py-2 border border-slate-700 rounded-lg bg-slate-900">
                     <Loader2 className="animate-spin" size={16} />
                     <span className="text-muted-foreground">Cargando...</span>
                   </div>
@@ -1240,7 +1245,9 @@ export default function Backtest() {
                             const res = await fetch(`${CONFIG.API_BASE_URL}/backtest/deploy_bot?` + new URLSearchParams({
                               symbol: selectedResult.symbol,
                               strategy: selectedResult.strategy_name || '',
-                              initial_balance: virtualBalance.toString()
+                              initial_balance: virtualBalance.toString(),
+                              timeframe: selectedResult.timeframe, // Enviar timeframe del modal
+                              exchange_id: selectedExchange // Pass selected exchange
                             }), { method: 'POST' });
 
                             if (!res.ok) throw new Error("Fallo en la conexión");
@@ -1266,3 +1273,5 @@ export default function Backtest() {
     </div>
   );
 }
+
+

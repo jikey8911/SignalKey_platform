@@ -43,7 +43,7 @@ build/
 *.swo
 *~
 .DS_Store
-
+++/package-lock.json
 # Database
 *.db
 *.sqlite
@@ -66,3 +66,36 @@ web/.env
 web/dist/
 web/build/
 web/node_modules/
+
+# Tests & Coverage
+api/tests/
+web/tests/
+**/tests/**
+**/test/**
+.pytest_cache/
+api_test_results*.txt
+.coverage
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.nox/
+test_report.md
+api_test_results.txt
+
+# App Data & Sessions
+sessions/
+api/data/models/
+api/data/backtests/
+temp_models/
+api/tests/temp_models/
+
+# ML/Data
+.ipynb_checkpoints/
+*.pkl
+*.joblib
+
+**test**
+**tests**

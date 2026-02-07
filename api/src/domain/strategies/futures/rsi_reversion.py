@@ -1,5 +1,5 @@
 import pandas as pd
-from .base import BaseStrategy
+from api.src.domain.strategies.base import BaseStrategy
 
 class RsiReversion(BaseStrategy):
     """

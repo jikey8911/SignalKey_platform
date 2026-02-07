@@ -27,25 +27,26 @@ class StrategyTrainer:
         """Busca archivos de estrategia válidos en el directorio raíz y subdirectorios de mercado."""
         strategies = set()
         
-        # 1. Search in root strategies directory
-        if os.path.exists(self.strategies_dir):
-            root_files = [f[:-3] for f in os.listdir(self.strategies_dir) 
-                          if f.endswith(".py") and f != "base.py" and not f.startswith("__")]
-            strategies.update(root_files)
-            
-        # 2. Search in market specific subdirectory if provided
+        # 1. Search in market specific subdirectory if provided (Priority)
         if market_type:
             market_dir = os.path.join(self.strategies_dir, market_type.lower())
             if os.path.exists(market_dir):
                 market_files = [f[:-3] for f in os.listdir(market_dir) 
                                 if f.endswith(".py") and f != "base.py" and not f.startswith("__")]
                 strategies.update(market_files)
-        
+
+        # 2. Search in root strategies directory
+        if os.path.exists(self.strategies_dir):
+            root_files = [f[:-3] for f in os.listdir(self.strategies_dir)
+                          if f.endswith(".py") and f != "base.py" and not f.startswith("__")
+                          and not os.path.isdir(os.path.join(self.strategies_dir, f))]
+            strategies.update(root_files)
+
         if not strategies:
              logger.warning(f"No strategies found in {self.strategies_dir} (market: {market_type})")
              return []
              
-        return list(strategies)
+        return sorted(list(strategies))
 
     def load_strategy_class(self, strategy_name: str, market_type: str = None):
         """Dynamic strategy class loading."""
@@ -53,28 +54,43 @@ class StrategyTrainer:
             if market_type:
                 module_path = f"api.src.domain.strategies.{market_type.lower()}.{strategy_name}"
             else:
-                module_path = f"api.src.domain.strategies.{strategy_name}"
+                module_path = f"api.src.domain.strategies.spot.{strategy_name}"
 
             try:
                 module = importlib.import_module(module_path)
             except ImportError:
                 # Fallback to root strategies if market-specific not found
                 if market_type:
-                    module_path = f"api.src.domain.strategies.{strategy_name}"
+                    module_path = f"api.src.domain.strategies.spot.{strategy_name}"
                     module = importlib.import_module(module_path)
                 else:
                     raise
             
-            # Try snake_case to PascalCase conversion first
-            class_name_pascal = "".join(w.title() for w in strategy_name.split("_"))
+            # Try multiple class naming conventions
+            possible_names = []
             
-            if hasattr(module, class_name_pascal):
-                return getattr(module, class_name_pascal)
-            elif hasattr(module, strategy_name): # Fallback to filename as classname
-                return getattr(module, strategy_name)
-            else:
-                logger.error(f"Class {class_name_pascal} or {strategy_name} not found in {module_path}")
-                return None
+            # 1. PascalCase (e.g. stochastic -> Stochastic)
+            pascal = "".join(w.title() for w in strategy_name.split("_"))
+            possible_names.append(pascal)
+            
+            # 2. PascalCase + Strategy (e.g. StochasticStrategy)
+            possible_names.append(pascal + "Strategy")
+            
+            # 3. UPPERCASE + Strategy (e.g. vwap -> VWAPStrategy)
+            possible_names.append(strategy_name.upper() + "Strategy")
+            
+            # 4. UPPERCASE (e.g. VWAP)
+            possible_names.append(strategy_name.upper())
+
+            # 5. Original naming (lowercase or whatever filename is)
+            possible_names.append(strategy_name)
+
+            for name in possible_names:
+                if hasattr(module, name):
+                    return getattr(module, name)
+            
+            logger.error(f"Could not find strategy class in {module_path}. Checked: {possible_names}")
+            return None
         except Exception as e:
             logger.error(f"Error loading strategy {strategy_name}: {e}")
             return None
@@ -91,9 +107,9 @@ class StrategyTrainer:
             
             strategy = StrategyClass()
             
-            msg_start = f"💎 [StrategyTrainer] Using Virtual Balance Validation for {strategy_name} (No Exchange Ops)"
+            msg_start = f"[StrategyTrainer] Using Virtual Balance Validation for {strategy_name} (No Exchange Ops)"
             print(msg_start)
-            if emit_callback: await emit_callback(f"🚀 Starting training for {strategy_name}...", "info")
+            if emit_callback: await emit_callback(f"Starting training for {strategy_name}...", "info")
 
             datasets = []
             for symbol, df in symbols_data.items():
@@ -105,7 +121,7 @@ class StrategyTrainer:
                     datasets.append(processed)
 
             if not datasets: 
-                msg = f"⚠️ [StrategyTrainer] No valid data found for {strategy_name}"
+                msg = f"[StrategyTrainer] No valid data found for {strategy_name}"
                 logger.warning(msg)
                 print(msg)
                 if emit_callback: await emit_callback(msg, "warning")
@@ -127,7 +143,7 @@ class StrategyTrainer:
             ml_features = base_features + ['in_position', 'current_pnl']
             
             if not ml_features:
-                 msg = f"❌ [StrategyTrainer] Strategy {strategy_name} returned empty features list."
+                 msg = f"[StrategyTrainer] Strategy {strategy_name} returned empty features list."
                  logger.error(msg)
                  if emit_callback: await emit_callback(msg, "error")
                  return False
@@ -135,7 +151,7 @@ class StrategyTrainer:
             # Verify features exist in dataset
             missing_cols = [c for c in ml_features if c not in full_dataset.columns]
             if missing_cols:
-                msg = f"❌ [StrategyTrainer] Missing features for {strategy_name}: {missing_cols}"
+                msg = f"[StrategyTrainer] Missing features for {strategy_name}: {missing_cols}"
                 logger.error(msg)
                 print(msg)
                 if emit_callback: await emit_callback(msg, "error")
@@ -145,7 +161,7 @@ class StrategyTrainer:
             y = full_dataset['signal']
 
             # Entrenamiento del clasificador con mayor profundidad para captar las reglas de PnL
-            msg_train = f"🧠 [StrategyTrainer] Training {strategy_name} on {len(X)} samples with features: {ml_features}..."
+            msg_train = f"[StrategyTrainer] Training {strategy_name} on {len(X)} samples with features: {ml_features}..."
             print(msg_train)
             if emit_callback: await emit_callback(msg_train, "info")
             
@@ -153,36 +169,36 @@ class StrategyTrainer:
             model.fit(X, y)
 
             # Persistencia segmentada por mercado
-            market_dir = os.path.join(self.models_dir, market_type.lower())
+            market_dir = os.path.join(self.models_dir, market_type.lower()).replace('\\', '/')
             os.makedirs(market_dir, exist_ok=True)
 
-            model_file = os.path.join(market_dir, f"{strategy_name}.pkl")
+            model_file = os.path.join(market_dir, f"{strategy_name}.pkl").replace('\\', '/')
             joblib.dump(model, model_file)
             
             logger.info(f"Modelo {strategy_name}.pkl generado exitosamente.")
-            msg_success = f"✅ [StrategyTrainer] Saved model: {strategy_name}.pkl"
+            msg_success = f"[StrategyTrainer] Saved model: {strategy_name}.pkl"
             print(msg_success)
             if emit_callback: await emit_callback(msg_success, "success")
             
             return True
         except Exception as e:
             logger.error(f"Error en entrenamiento de {strategy_name}: {e}")
-            print(f"❌ [StrategyTrainer] Error training {strategy_name}: {e}")
+            print(f"[StrategyTrainer] Error training {strategy_name}: {e}")
             if emit_callback: await emit_callback(f"Error training {strategy_name}: {e}", "error")
             return False
 
     async def train_all(self, symbols_data: Dict[str, pd.DataFrame], market_type: str = "spot", emit_callback=None):
         """Entrena todas las estrategias disponibles."""
         strategies = self.discover_strategies(market_type)
-        print(f"📋 [StrategyTrainer] Found {len(strategies)} strategies to train for {market_type}: {strategies}")
-        if emit_callback: await emit_callback(f"📋 Found {len(strategies)} strategies for {market_type}", "info")
+        print(f"[StrategyTrainer] Found {len(strategies)} strategies to train for {market_type}: {strategies}")
+        if emit_callback: await emit_callback(f"Found {len(strategies)} strategies for {market_type}", "info")
         
         results = {}
         for strat in strategies:
             success = await self.train_agnostic_model(strat, symbols_data, market_type, emit_callback)
             results[strat] = "Success" if success else "Failed"
-        print(f"🏁 [StrategyTrainer] Training complete. Results: {results}")
-        if emit_callback: await emit_callback("🏁 Training complete", "success")
+        print(f"[StrategyTrainer] Training complete. Results: {results}")
+        if emit_callback: await emit_callback("Training complete", "success")
         return results
 
     def _inject_position_context(self, df: pd.DataFrame) -> pd.DataFrame:

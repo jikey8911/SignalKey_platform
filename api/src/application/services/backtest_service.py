@@ -38,7 +38,7 @@ class BacktestService:
         if df.empty:
             return {"error": "Fallo al obtener datos históricos para validación."}
 
-        strategies = self.trainer.discover_strategies()
+        strategies = self.trainer.discover_strategies(market_type)
         best_score = -1
         best_strat = None
 
@@ -46,17 +46,24 @@ class BacktestService:
 
         for strat_name in strategies:
             try:
-                model_path = os.path.join(self.models_dir, market_type, f"{strat_name}.pkl")
+                model_dir_specific = os.path.join(self.models_dir, market_type.lower()).replace('\\', '/')
+                model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl").replace('\\', '/')
+
                 if not os.path.exists(model_path):
-                    continue
+                    # Fallback: Check root models dir
+                    model_path_root = os.path.normpath(os.path.join(self.models_dir, f"{strat_name}.pkl"))
+                    if os.path.exists(model_path_root):
+                        model_path = model_path_root
+                    else:
+                        continue
                 
                 # Cargar el modelo IA y la clase de estrategia correspondiente
                 model = joblib.load(model_path)
                 
                 # Importación dinámica del contrato de la estrategia
-                module = importlib.import_module(f"api.src.domain.strategies.{strat_name}")
-                class_name = "".join(w.title() for w in strat_name.split("_"))
-                StrategyClass = getattr(module, class_name)
+                StrategyClass = self.trainer.load_strategy_class(strat_name, market_type)
+                if not StrategyClass:
+                    continue
                 strategy = StrategyClass()
                 
                 # 2. Aplicar procesamiento (Cálculo de indicadores y contexto S9)
@@ -136,10 +143,25 @@ class BacktestService:
             self.logger.error(f"Error fetching data: {e}")
             raise ValueError(f"No se pudieron obtener datos para {symbol}: {e}")
 
-        # 2. Descubrir estrategias a evaluar
-        strategies_to_test = self.trainer.discover_strategies()
+        # 2. Descubrir estrategias (Dynamic Discovery from Models Directory)
+        # El usuario solicita usar los modelos que YA existen en api/data/models/[market]
+        model_dir_specific = os.path.normpath(os.path.join(self.models_dir, market_type.lower()))
+        
+        if not os.path.exists(model_dir_specific):
+             self.logger.warning(f"No model directory found for {market_type} at {model_dir_specific}")
+             strategies_to_test = []
+        else:
+             strategies_to_test = [f[:-4] for f in os.listdir(model_dir_specific) if f.endswith(".pkl")]
+             
+        self.logger.info(f"Available models for backtest in {market_type}: {strategies_to_test}")
+
         if not strategies_to_test:
-            raise ValueError("No hay estrategias disponibles para el backtest.")
+            # Fallback to trainer discovery if models dir is empty (maybe models are in root?)
+            self.logger.info("No compiled models found, attempting to discover from source code...")
+            strategies_to_test = self.trainer.discover_strategies(market_type)
+        
+        if not strategies_to_test:
+            raise ValueError(f"No hay estrategias disponibles para el mercado {market_type} (Ni modelos .pkl ni código fuente).")
 
         tournament_results = []
         best_strategy_data = None
@@ -150,14 +172,13 @@ class BacktestService:
             try:
                 self.logger.info(f"🧪 Testing strategy: {strat_name} ({market_type})")
                 
-                # Cargar modelo segmentado
                 # Cargar modelo segmentado (o fallback a root)
-                model_dir_specific = os.path.join(self.models_dir, market_type)
-                model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl")
+                model_dir_specific = os.path.join(self.models_dir, market_type.lower()).replace('\\', '/')
+                model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl").replace('\\', '/')
                 
                 if not os.path.exists(model_path):
                     # Fallback: Check root models dir
-                    model_path_root = os.path.join(self.models_dir, f"{strat_name}.pkl")
+                    model_path_root = os.path.normpath(os.path.join(self.models_dir, f"{strat_name}.pkl"))
                     if os.path.exists(model_path_root):
                         model_path = model_path_root
                         self.logger.info(f"Using root model for {strat_name}")
@@ -166,19 +187,13 @@ class BacktestService:
                         continue
                 
                 model = joblib.load(model_path)
-                module = importlib.import_module(f"api.src.domain.strategies.{strat_name}")
-                if "_" in strat_name:
-                    class_name = "".join(w.title() for w in strat_name.split("_"))
-                else:
-                    class_name = strat_name
                 
-                # Validation / Fallback
-                if not hasattr(module, class_name):
-                     fallback_name = "".join(w.title() for w in strat_name.split("_"))
-                     if hasattr(module, fallback_name):
-                         class_name = fallback_name
+                # Carga dinámica de la clase de estrategia
+                StrategyClass = self.trainer.load_strategy_class(strat_name, market_type)
+                if not StrategyClass:
+                     self.logger.warning(f"⏩ Skipping {strat_name}: Could not load strategy class.")
+                     continue
 
-                StrategyClass = getattr(module, class_name)
                 strategy_obj = StrategyClass()
                 features = strategy_obj.get_features()
 
@@ -348,10 +363,24 @@ class BacktestService:
         
         from api.src.domain.strategies.base import BaseStrategy
 
-        for timestamp, row in df_processed.iterrows():
-            price = row['close']
-            signal = row['ai_signal']
+        # Iterate using range to access "next candle" for execution
+        # Fix Look-ahead bias: Signal at i executes at i+1 (Open)
+
+        for i in range(len(df_processed) - 1):
+            current_row = df_processed.iloc[i]
+            next_row = df_processed.iloc[i+1]
+
+            # Signal comes from the completed candle (i)
+            signal = current_row['ai_signal']
             
+            # Execution happens at the OPEN of the NEXT candle (i+1)
+            price = next_row['open']
+            timestamp = next_row.name # Timestamp of the trade is the open time of i+1
+
+            # Skip if signal is 0 (HOLD)
+            if signal == 0:
+                continue
+
             # --- Lógica de Inversión (Market Flip) ---
             if signal == BaseStrategy.SIGNAL_BUY: 
                 # Check for FLIP (Short -> Long)
@@ -359,7 +388,7 @@ class BacktestService:
                     pnl = short_invested - (short_amount * price)
                     balance += short_invested + pnl
                     trades.append({
-                        "time": timestamp.isoformat(),
+                        "time": int(timestamp.timestamp()),
                         "type": "BUY",
                         "price": price,
                         "amount": short_amount,
@@ -375,7 +404,7 @@ class BacktestService:
                         amount_to_buy = step_investment / price
                         long_amount, long_invested = amount_to_buy, step_investment
                         balance -= step_investment
-                        trades.append({"time": timestamp.isoformat(), "type": "BUY", "price": price, "amount": amount_to_buy, "label": "FLIP_OPEN_LONG"})
+                        trades.append({"time": int(timestamp.timestamp()), "type": "BUY", "price": price, "amount": amount_to_buy, "label": "FLIP_OPEN_LONG"})
                 
                 # Entry/DCA
                 elif balance >= step_investment:
@@ -384,7 +413,7 @@ class BacktestService:
                     long_amount += amount_to_buy
                     long_invested += step_investment
                     balance -= step_investment
-                    trades.append({"time": timestamp.isoformat(), "type": "BUY", "price": price, "amount": amount_to_buy, "label": "DCA_LONG" if is_dca else "OPEN_LONG"})
+                    trades.append({"time": int(timestamp.timestamp()), "type": "BUY", "price": price, "amount": amount_to_buy, "label": "DCA_LONG" if is_dca else "OPEN_LONG"})
                     
             elif signal == BaseStrategy.SIGNAL_SELL: 
                 # Check for FLIP (Long -> Short)
@@ -392,7 +421,7 @@ class BacktestService:
                     pnl = (long_amount * price) - long_invested
                     balance += (long_amount * price)
                     trades.append({
-                        "time": timestamp.isoformat(),
+                        "time": int(timestamp.timestamp()),
                         "type": "SELL",
                         "price": price,
                         "amount": long_amount,
@@ -408,7 +437,7 @@ class BacktestService:
                         amount_to_short = step_investment / price
                         short_amount, short_invested = amount_to_short, step_investment
                         balance -= step_investment
-                        trades.append({"time": timestamp.isoformat(), "type": "SELL", "price": price, "amount": amount_to_short, "label": "FLIP_OPEN_SHORT"})
+                        trades.append({"time": int(timestamp.timestamp()), "type": "SELL", "price": price, "amount": amount_to_short, "label": "FLIP_OPEN_SHORT"})
                         
                 # Entry/DCA
                 elif balance >= step_investment:
@@ -417,7 +446,7 @@ class BacktestService:
                     short_amount += amount_to_short
                     short_invested += step_investment
                     balance -= step_investment
-                    trades.append({"time": timestamp.isoformat(), "type": "SELL", "price": price, "amount": amount_to_short, "label": "DCA_SHORT" if is_dca else "OPEN_SHORT"})
+                    trades.append({"time": int(timestamp.timestamp()), "type": "SELL", "price": price, "amount": amount_to_short, "label": "DCA_SHORT" if is_dca else "OPEN_SHORT"})
 
         # Calculate Final Stats
         final_balance = balance

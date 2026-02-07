@@ -2,10 +2,10 @@
 import pytest
 import pandas as pd
 from unittest.mock import MagicMock, AsyncMock, patch
-from api.strategies.base import BaseStrategy
+from api.src.domain.strategies.base import BaseStrategy
 from api.src.application.services.execution_engine import ExecutionEngine
 from api.src.application.services.simulation_service import SimulationService
-from api.ml.strategy_trainer import StrategyTrainer
+from api.src.domain.services.strategy_trainer import StrategyTrainer
 from api.src.application.services.ml_service import MLService
 
 # --- Mocks & Fixtures ---
