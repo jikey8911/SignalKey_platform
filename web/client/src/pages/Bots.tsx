@@ -372,18 +372,17 @@ const BotsPage = () => {
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const { lastMessage, sendMessage } = useSocketContext();
 
-    const fetchBots = () => {
+    const fetchBots = (showLoading = true) => {
         if (!user?.openId) return;
-        setLoading(true);
+        if (showLoading) setLoading(true);
         sendMessage({ action: 'get_bots' });
     };
 
     useEffect(() => {
         if (user?.openId) {
-            // Give a small delay to ensure socket is connected (or rely on isConnected from context if available)
-            // But usually retrying or just sending is fine if logic handles it.
-            // Better to trigger on mount.
-            fetchBots();
+            fetchBots(true);
+            const interval = setInterval(() => fetchBots(false), 5000);
+            return () => clearInterval(interval);
         }
     }, [user?.openId]);
 
@@ -442,7 +441,7 @@ const BotsPage = () => {
             <div className="flex justify-between items-center">
                 <h1 className="text-4xl font-black text-white tracking-tighter uppercase italic">Control de Bots <span className="text-blue-500">sp4</span></h1>
                 <div className="flex gap-4">
-                    <Button variant="outline" onClick={fetchBots} disabled={loading}>
+                    <Button variant="outline" onClick={() => fetchBots(true)} disabled={loading}>
                         <RotateCcw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} /> Refresh
                     </Button>
                     <Badge variant="success" className="py-2 px-4 shadow-lg shadow-green-500/10 h-10 flex items-center">
