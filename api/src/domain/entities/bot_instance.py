@@ -17,6 +17,7 @@ class BotInstance:
     market_type: str = "spot" # "spot" o "futures"
     mode: str = "simulated"   # "simulated" o "real"
     status: str = "paused"   # "active" o "paused" (Persistido en DB para resiliencia)
+    exchange_id: str = "binance"
     amount: float = 0.0       # Monto base de inversión
     config: Dict = field(default_factory=dict) # Parametros especificos de la estrategia
     position: Dict = field(default_factory=dict) # Estado de la posición actual
@@ -36,6 +37,7 @@ class BotInstance:
             "market_type": self.market_type,
             "mode": self.mode,
             "status": self.status,
+            "exchange_id": self.exchange_id,
             "amount": self.amount,
             "config": self.config,
             "position": self.position,

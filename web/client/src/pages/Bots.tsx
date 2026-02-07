@@ -482,7 +482,7 @@ const BotsPage = () => {
                                 </div>
                                 <h4 className="text-lg font-bold text-white leading-tight mb-1">{bot.name}</h4>
                                 <div className="flex justify-between items-end">
-                                    <p className="text-[10px] font-mono text-slate-500">{bot.symbol} | {bot.strategy_name}</p>
+                                    <p className="text-[10px] font-mono text-slate-400">{bot.symbol} | {bot.strategy_name}</p>
                                     {bot.pnl !== undefined && bot.pnl !== 0 && (
                                         <span className={`text-xs font-bold font-mono ${bot.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                                             {bot.pnl > 0 ? '+' : ''}{bot.pnl.toFixed(2)}%

@@ -122,6 +122,7 @@ class BotInstanceSchema(BaseModel):
     side: Optional[str] = None # BUY, SELL
     position: Optional[Dict[str, float]] = Field(default_factory=lambda: {"qty": 0.0, "avg_price": 0.0})
     exchangeId: str = "binance"
+    exchange_id: Optional[str] = Field(alias="exchangeId", default="binance") # Alias for compatibility
     createdAt: datetime = Field(default_factory=datetime.utcnow)
     
     class Config:

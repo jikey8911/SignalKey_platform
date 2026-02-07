@@ -2,7 +2,7 @@ import logging
 import asyncio
 from datetime import datetime
 from typing import Dict, Any, List
-from api.src.adapters.driven.persistence.mongodb import db, save_trade, update_virtual_balance
+from api.src.adapters.driven.persistence.mongodb import db, save_trade, update_virtual_balance, get_app_config
 from api.src.application.services.cex_service import CEXService
 from api.src.application.services.dex_service import DEXService
 from api.src.domain.models.schemas import AnalysisResult, ExecutionResult
@@ -469,7 +469,17 @@ class SignalBotService:
 
         # A. Procesar Estrategias (Entradas)
         for bot in active_instances:
-            exchange_id = bot.get("exchangeId", "binance")
+            # FIX: Determinar Exchange Correcto
+            exchange_id = bot.get("exchangeId")
+            if not exchange_id:
+                # Fallback: Consultar configuración del usuario
+                try:
+                    user_config = await get_app_config(bot["userId"])
+                    exchange_id = user_config.get("exchange_id", "binance").lower() if user_config else "binance"
+                except Exception as e:
+                    logger.warning(f"Error resolving exchange for bot {bot['_id']}: {e}")
+                    exchange_id = "binance"
+
             symbol = bot["symbol"]
             timeframe = bot.get("timeframe", "15m")
             
@@ -483,7 +493,11 @@ class SignalBotService:
 
         # B. Procesar Trades (Salidas)
         for trade in active_trades:
-            exchange_id = trade.get("exchangeId", "binance")
+            exchange_id = trade.get("exchangeId")
+            if not exchange_id:
+                # Fallback simple si no está en el trade
+                exchange_id = "binance"
+
             symbol = trade["symbol"]
             
             # Suscribir a TICKER para TP/SL en tiempo real
