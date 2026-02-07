@@ -410,24 +410,41 @@ class SignalBotService:
              return ExecutionResult(success=True, message="Bot marcado cerrado (Simulado), Ejecución real pendiente de impl.")
 
     async def initialize_active_bots_monitoring(self):
-        """Startup: Inicia monitoreo y WARM-UP."""
-        active_bots = await db.trades.find({"status": "active"}).to_list(length=1000)
-        logger.info(f"Initializing monitoring for {len(active_bots)} active bots.")
+        """Startup: Inicia monitoreo y WARM-UP basado en INSTANCIAS DE BOTS (Estrategias) y TRADES activos."""
 
-        for bot in active_bots:
+        # 1. Recuperar Estrategias Activas (BotInstances) - Para generar señales de ENTRADA
+        active_instances = await db.bot_instances.find({"status": "active"}).to_list(length=1000)
+
+        # 2. Recuperar Trades Activos (Posiciones Abiertas) - Para gestionar SALIDA (TP/SL)
+        # Sincronizamos 'active' (SignalBotService) vs 'open' (MonitorService)
+        # MonitorService usa 'open', SignalBotService usaba 'active'. Unificamos consulta.
+        active_trades = await db.trades.find({"status": {"$in": ["active", "open"]}}).to_list(length=1000)
+
+        logger.info(f"Initializing monitoring for {len(active_instances)} active strategies and {len(active_trades)} active trades.")
+
+        # Set para evitar duplicar suscripciones
+        subscriptions = set()
+
+        # A. Procesar Estrategias (Entradas)
+        for bot in active_instances:
             exchange_id = bot.get("exchangeId", "binance")
             symbol = bot["symbol"]
-            timeframe = bot.get("timeframe", "15m") # Timeframe del modelo
+            timeframe = bot.get("timeframe", "15m")
             
-            # 1. WARM-UP (Arranca en Frío solucionado)
-            # Antes de escuchar sockets, llenamos la memoria con las últimas 100 velas
-            await self.buffer_service.initialize_buffer(exchange_id, symbol, timeframe, limit=100)
+            sub_key = f"{exchange_id}:{symbol}:{timeframe}"
+            if sub_key not in subscriptions:
+                # WARM-UP
+                await self.buffer_service.initialize_buffer(exchange_id, symbol, timeframe, limit=100)
+                # Suscribir a VELAS para señales IA
+                await self.stream_service.subscribe_candles(exchange_id, symbol, timeframe)
+                subscriptions.add(sub_key)
+
+        # B. Procesar Trades (Salidas)
+        for trade in active_trades:
+            exchange_id = trade.get("exchangeId", "binance")
+            symbol = trade["symbol"]
             
-            # 2. Suscribir a VELAS para la IA (Nuevo)
-            await self.stream_service.subscribe_candles(exchange_id, symbol, timeframe)
-            
-            # 3. Suscribir a TICKER para TP/SL (Seguridad en tiempo real)
-            # El TP/SL debe saltar al instante, no esperar al cierre de la vela
+            # Suscribir a TICKER para TP/SL en tiempo real
             await self.stream_service.subscribe_ticker(exchange_id, symbol)
 
     async def handle_market_update(self, event_type: str, data: Dict[str, Any]):
@@ -450,8 +467,8 @@ class SignalBotService:
         if not symbol or not last_price:
             return
 
-        # Find bots for this symbol
-        active_bots = await db.trades.find({"symbol": symbol, "status": "active"}).to_list(length=None)
+        # Find bots for this symbol (Unified active/open)
+        active_bots = await db.trades.find({"symbol": symbol, "status": {"$in": ["active", "open"]}}).to_list(length=None)
         
         if not active_bots:
             return
@@ -468,25 +485,24 @@ class SignalBotService:
         timeframe = data["timeframe"]
         incoming_candle = data["candle"] # {timestamp, close, ...}
         
-        # Buscar bots que operen este símbolo y timeframe
-        relevant_bots = await db.trades.find({
+        # 1. Buscar ESTRATEGIAS (BotInstances) activas para este símbolo
+        relevant_instances = await db.bot_instances.find({
             "symbol": symbol, 
             "timeframe": timeframe, 
             "status": "active"
         }).to_list(length=None)
         
-        if not relevant_bots: return
+        if not relevant_instances: return
 
         exchange_id = data.get("exchange", "binance")
         
         # 1. Actualizar Buffer con la vela entrante (que puede ser la nueva formándose)
         await self.buffer_service.update_with_candle(exchange_id, symbol, timeframe, incoming_candle)
-        
         full_history = self.buffer_service.get_latest_data(exchange_id, symbol, timeframe)
         
-        for bot in relevant_bots:
-            # RECUPERAR ESTADO: ¿Cuál fue la última vela procesada por este bot?
-            last_processed_ts = bot.get("lastCandleTimestamp", 0)
+        for instance in relevant_instances:
+            # RECUPERAR ESTADO DE LA ESTRATEGIA (no del trade)
+            last_processed_ts = instance.get("lastCandleTimestamp", 0)
             current_candle_ts = incoming_candle["timestamp"]
             
             # --- CRITERIO DE CIERRE: Detectamos nueva vela ---
@@ -509,15 +525,15 @@ class SignalBotService:
                          history_for_ai = full_history.iloc[:-1] # Excluir vela actual (forming)
 
                     if not history_for_ai.empty:
-                         await self._execute_ai_pipeline(bot, history_for_ai)
+                         await self._execute_ai_pipeline(instance, history_for_ai)
                 
-                # 2. Actualizar Timestamp para no repetir en esta vela
-                await db.trades.update_one(
-                    {"_id": bot["_id"]},
+                # 2. Actualizar Timestamp DE LA INSTANCIA para no repetir en esta vela
+                await db.bot_instances.update_one(
+                    {"_id": instance["_id"]},
                     {"$set": {"lastCandleTimestamp": current_candle_ts}}
                 )
 
-    async def _execute_ai_pipeline(self, bot: Dict[str, Any], candles_df: Any):
+    async def _execute_ai_pipeline(self, instance: Dict[str, Any], candles_df: Any):
         """Llama al MLService y ejecuta operaciones si hay señal."""
         if candles_df is None or candles_df.empty:
             return
@@ -526,17 +542,27 @@ class SignalBotService:
         # MLService.predict takes List[Dict].
         candles_list = candles_df.reset_index().to_dict('records')
         
+        # Obtener si hay posición abierta asociada para pasar al modelo (Optional)
+        # Aquí buscamos si hay un trade activo para esta instancia
+        active_trade = await db.trades.find_one({"botInstanceId": str(instance["_id"]), "status": "active"})
+
         current_pos = {
-            "qty": bot.get("amount", 0) / bot.get("entryPrice", 1) if bot.get("entryPrice") else 0,
-            "avg_price": bot.get("entryPrice", 0)
+            "qty": 0.0,
+            "avg_price": 0.0
         }
 
+        if active_trade:
+            current_pos = {
+                "qty": active_trade.get("amount", 0) / active_trade.get("entryPrice", 1) if active_trade.get("entryPrice") else 0,
+                "avg_price": active_trade.get("entryPrice", 0)
+            }
+
         prediction = self.ml_service.predict(
-            symbol=bot["symbol"],
-            timeframe=bot["timeframe"],
+            symbol=instance["symbol"],
+            timeframe=instance["timeframe"],
             candles=candles_list,
-            market_type=bot.get("marketType", "CEX"),
-            strategy_name=bot.get("strategy_name", "auto"),
+            market_type=instance.get("marketType", "CEX"),
+            strategy_name=instance.get("strategy_name", "auto"),
             current_position=current_pos
         )
         
@@ -550,8 +576,8 @@ class SignalBotService:
              
              analysis = AnalysisResult(
                  decision=decision,
-                 symbol=bot["symbol"],
-                 market_type=bot.get("marketType", "CEX"),
+                 symbol=instance["symbol"],
+                 market_type=instance.get("marketType", "CEX"),
                  confidence=0.0, # TODO: Extract confidence
                  reasoning=f"Auto-Bot Signal: {decision}",
                  parameters={
@@ -561,12 +587,12 @@ class SignalBotService:
                  }
              )
              
-             user_id = bot["userId"] # Needed as str, usually ObjectID in bot doc
+             user_id = instance["userId"] # Needed as str, usually ObjectID in bot doc
              # Convert ObjectId if needed
              user_str = str(user_id) if user_id else "default"
              
              # Call existing executor
-             await self.activate_bot(analysis, user_str, config={}, bot_id=str(bot.get("botInstanceId") or bot["_id"]))
+             await self.activate_bot(analysis, user_str, config={}, bot_id=str(instance["_id"]))
 
     async def _process_bot_tick(self, bot: Dict[str, Any], current_price: float = None) -> float:
         """
