@@ -143,7 +143,9 @@ class SignalBotService:
                     "leverage": analysis.parameters.get("leverage", 1)
                 }
             )
-            execution_result = await self.cex_service.execute_trade(exec_analysis, user_id)
+            # FIX: Pass exchange_id explicitly if available in config
+            target_exchange = config.get("exchange_id")
+            execution_result = await self.cex_service.execute_trade(exec_analysis, user_id, exchange_id=target_exchange)
         else:
             execution_result = await self.dex_service.execute_trade(analysis, user_id)
 
@@ -253,7 +255,9 @@ class SignalBotService:
             }
         )
         
-        exec_result = await self.cex_service.execute_trade(exec_analysis, user_id)
+        # FIX: Pass exchange_id to accumulate on the SAME exchange
+        target_exchange = existing_bot.get("exchangeId") or config.get("exchange_id")
+        exec_result = await self.cex_service.execute_trade(exec_analysis, user_id, exchange_id=target_exchange)
         
         if not exec_result.success:
             return exec_result
@@ -420,7 +424,9 @@ class SignalBotService:
              )
 
              # Ejecutar cierre a través de CEXService (que delega a CCXTAdapter)
-             close_result = await self.cex_service.execute_trade(close_analysis, user_id)
+             # FIX: Pass exchange_id to ensure closing on correct exchange
+             target_exchange = existing_bot.get("exchangeId")
+             close_result = await self.cex_service.execute_trade(close_analysis, user_id, exchange_id=target_exchange)
 
              if close_result.success:
                  # Actualizar DB

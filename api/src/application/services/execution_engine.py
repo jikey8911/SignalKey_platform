@@ -217,7 +217,8 @@ class ExecutionEngine:
         user_id = str(bot_instance.get('user_id', "default_user"))
 
         try:
-            trade_result = await self.real_exchange.execute_trade(analysis, user_id)
+            exchange_id = bot_instance.get("exchangeId") or bot_instance.get("exchange_id")
+            trade_result = await self.real_exchange.execute_trade(analysis, user_id, exchange_id=exchange_id)
             if trade_result.success:
                 # Actualizar posición local
                 updated_pos = {'qty': amount / price, 'avg_price': trade_result.price or price}
@@ -357,13 +358,17 @@ class ExecutionEngine:
             # Check Balance
             # Assuming symbol like "BTC/USDT", quote is USDT
             quote_currency = symbol.split('/')[1]
-            balances = await self.real_exchange.get_balance(str(user_id))
+            exchange_id = bot_instance.get("exchangeId") or bot_instance.get("exchange_id")
             
-            available = balances.get(quote_currency, {}).get('free', 0.0)
+            # FIX: Use fetch_balance consistent with IExchangePort
+            balances = await self.real_exchange.fetch_balance(str(user_id), exchange_id=exchange_id)
+
+            # Find quote balance in List[Balance]
+            balance_obj = next((b for b in balances if b.asset == quote_currency), None)
+            available = balance_obj.free if balance_obj else 0.0
             
             if available < amount:
                 self.logger.warning(f"❌ Insufficient Funds for {symbol}: Need {amount} {quote_currency}, Have {available}")
-                # Emitir alerta socket?
                 return False
                 
             return True
