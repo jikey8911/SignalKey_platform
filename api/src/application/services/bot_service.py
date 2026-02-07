@@ -474,10 +474,15 @@ class SignalBotService:
             if not exchange_id:
                 # Fallback: Consultar configuración del usuario
                 try:
-                    user_config = await get_app_config(bot["userId"])
-                    exchange_id = user_config.get("exchange_id", "binance").lower() if user_config else "binance"
+                    # FIX: Handle bot document keys safely (user_id vs userId)
+                    u_id = bot.get("userId") or bot.get("user_id")
+                    if u_id:
+                        user_config = await get_app_config(u_id)
+                        exchange_id = user_config.get("exchange_id", "binance").lower() if user_config else "binance"
+                    else:
+                        exchange_id = "binance"
                 except Exception as e:
-                    logger.warning(f"Error resolving exchange for bot {bot['_id']}: {e}")
+                    logger.warning(f"Error resolving exchange for bot {bot.get('_id')}: {e}")
                     exchange_id = "binance"
 
             symbol = bot["symbol"]

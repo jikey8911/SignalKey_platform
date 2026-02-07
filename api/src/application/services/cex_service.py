@@ -372,3 +372,46 @@ class CEXService:
         except Exception as e:
             logger.error(f"Error CEXService.get_historical_data for {symbol}: {e}")
             return pd.DataFrame()
+
+    async def get_historical_candles(self, exchange_id: str, symbol: str, timeframe: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """
+        Método wrapper específico para obtener velas en formato lista de diccionarios (no DataFrame),
+        compatible con BufferService.
+        """
+        try:
+            # Obtener instancia pública si es solo para datos
+            exchange = await self.get_public_exchange_instance(exchange_id)
+            if not exchange:
+                # Fallback al provider default
+                exchange = await self.ccxt_provider.create_public_instance(exchange_id or "binance")
+
+            if not exchange:
+                logger.error(f"Cannot get candles: Exchange {exchange_id} not initialized")
+                return []
+
+            # Asegurar carga de mercados
+            if not exchange.markets:
+                try:
+                    await exchange.load_markets()
+                except Exception as me:
+                    logger.warning(f"Error loading markets in get_historical_candles: {me}")
+
+            # Obtener velas
+            ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+
+            # Formatear
+            candles = []
+            for candle in ohlcv:
+                candles.append({
+                    "timestamp": candle[0],
+                    "open": candle[1],
+                    "high": candle[2],
+                    "low": candle[3],
+                    "close": candle[4],
+                    "volume": candle[5]
+                })
+            return candles
+
+        except Exception as e:
+            logger.error(f"Error fetching historical candles for {symbol}: {e}")
+            return []
