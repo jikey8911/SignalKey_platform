@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Dict, Any, Callable, List, Optional
 import ccxt.pro as ccxt
+from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
 
 logger = logging.getLogger(__name__)
 
@@ -52,13 +53,19 @@ class MarketStreamService:
                     'options': {'defaultType': 'spot'} # Default, can be overridden
                 })
 
-            # Pre-load markets to avoid repeated REST calls during stream
-            # This helps prevent 'Network error... GET exchangeInfo' spam if REST is flaky
+            # Optimization: Try to use Adapter's cached public markets if available to avoid REST call
             try:
-                await exchange.load_markets()
-                logger.info(f"Markets loaded for {exchange_id}")
+                # Attempt to get markets from the REST adapter first
+                rest_instance = await ccxt_service.get_public_exchange_instance(exchange_id)
+                if rest_instance and rest_instance.markets:
+                    exchange.set_markets(rest_instance.markets)
+                    logger.info(f"Markets injected from Adapter for {exchange_id}")
+                else:
+                    # Fallback to direct load
+                    await exchange.load_markets()
+                    logger.info(f"Markets loaded directly for {exchange_id}")
             except Exception as e:
-                logger.warning(f"Failed to pre-load markets for {exchange_id} (will retry on stream): {e}")
+                logger.warning(f"Failed to load markets for {exchange_id}: {e}")
 
             self.exchanges[exchange_id] = exchange
             logger.info(f"Initialized WebSocket exchange: {exchange_id}")
@@ -132,24 +139,18 @@ class MarketStreamService:
 
     async def _watch_ticker_loop(self, exchange, symbol: str):
         """Internal loop to watch ticker."""
-        # FIX: Ensure markets are loaded before watching
-        if not exchange.markets:
-            try:
-                await exchange.load_markets()
-            except Exception as e:
-                logger.error(f"Failed to load markets for ticker stream {symbol}: {e}")
-                await asyncio.sleep(10)
-                # If loading fails, loop might crash on watch_ticker, so we retry in loop
-
+        backoff = 1
         while self.running:
             try:
-                # Explicit check inside loop to handle reconnections/reloads
+                # Ensure markets are loaded (using Adapter if possible logic handled in init, but refresh here if needed)
                 if not exchange.markets:
                      await exchange.load_markets()
 
                 # This await blocks until update is received
                 ticker = await exchange.watch_ticker(symbol)
                 
+                backoff = 1 # Reset backoff on success
+
                 # Emit event
                 await self.notify_listeners("ticker_update", {
                     "exchange": exchange.id,
@@ -158,7 +159,8 @@ class MarketStreamService:
                 })
             except Exception as e:
                 logger.error(f"Error watching {symbol} on {exchange.id}: {e}")
-                await asyncio.sleep(10) # Increased backoff to prevent log spam
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 60) # Exponential backoff
 
     async def subscribe_candles(self, exchange_id: str, symbol: str, timeframe: str):
         """
@@ -184,23 +186,26 @@ class MarketStreamService:
                 exchange = self.exchanges.get(exchange_id) 
                 if not exchange: return
 
-                # FIX: Ensure markets are loaded before watching (Candles)
-                if not exchange.markets:
-                    try:
-                        await exchange.load_markets()
-                    except Exception as e:
-                        logger.error(f"Failed to load markets for candle stream {stream_key}: {e}")
-                        await asyncio.sleep(10)
-
+                backoff = 1
                 while self.running:
                     # CCXT watch_ohlcv devuelve una lista de velas. Tomamos la última.
                     try:
                         # Explicit check inside loop to handle reconnections/reloads
                         if not exchange.markets:
-                             await exchange.load_markets()
+                             # Try to reload via adapter first to avoid spam
+                             try:
+                                 rest_instance = await ccxt_service.get_public_exchange_instance(exchange_id)
+                                 if rest_instance and rest_instance.markets:
+                                     exchange.set_markets(rest_instance.markets)
+                                 else:
+                                     await exchange.load_markets()
+                             except:
+                                 await exchange.load_markets()
 
                         candles = await exchange.watch_ohlcv(symbol, timeframe)
                         
+                        backoff = 1 # Reset
+
                         if candles:
                             # La última vela suele ser la "actual en formación".
                             # La penúltima es la "recién cerrada".
@@ -225,10 +230,12 @@ class MarketStreamService:
                             await self.notify_listeners("candle_update", event_data)
                     except ccxt.NetworkError as ne:
                          logger.warning(f"Network error in candle stream {stream_key}: {ne}")
-                         await asyncio.sleep(10) # Increased backoff
+                         await asyncio.sleep(backoff)
+                         backoff = min(backoff * 2, 60)
                     except Exception as e:
                          logger.error(f"Error in candle stream loop {stream_key}: {e}")
-                         await asyncio.sleep(10) # Increased backoff
+                         await asyncio.sleep(backoff)
+                         backoff = min(backoff * 2, 60)
                         
             except Exception as e:
                 logger.error(f"Fatal error in stream de velas {stream_key}: {e}")
