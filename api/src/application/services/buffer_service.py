@@ -18,7 +18,7 @@ class DataBufferService:
         return cls._instance
     
     def __init__(self, stream_service: MarketStreamService = None, cex_service: CEXService = None):
-        if self._initialized:
+        if hasattr(self, '_initialized') and self._initialized:
             return
             
         self.buffers: Dict[str, pd.DataFrame] = {} # Key: "exchange_symbol_timeframe"

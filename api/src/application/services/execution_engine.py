@@ -306,7 +306,8 @@ class ExecutionEngine:
                 "price": exec_result.get('price', signal_data.get('price')),
                 "timestamp": datetime.now().isoformat(),
                 "mode": bot_instance.get('mode'),
-                "pnl_impact": exec_result.get('pnl', 0)
+                "pnl_impact": exec_result.get('pnl', 0),
+                "exchange_id": bot_instance.get("exchangeId", "binance") # Added for Task 3.2
             }
             # Emitimos el evento que el monitor híbrido en React capturará
             await self.socket.emit_to_user(str(bot_instance.get('user_id')), "live_execution_signal", event_payload)
