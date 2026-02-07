@@ -6,10 +6,11 @@ import { toast } from 'sonner';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
 import { CONFIG } from '@/config';
 import { TradingViewChart } from '@/components/ui/TradingViewChart';
+import { wsService } from '@/lib/websocket'; // Importar servicio WS
 
 interface Candle {
   time: number;
@@ -153,121 +154,152 @@ export default function Backtest() {
   const [symbols, setSymbols] = useState<Symbol[]>([]);
   const [loadingSymbols, setLoadingSymbols] = useState(false);
 
-  // --- Semi-Auto Access ---
+  // --- Semi-Auto Access (WebSocket) ---
   const [isScanning, setIsScanning] = useState(false);
-  const stopScanRef = useRef(false);
   const [scanResults, setScanResults] = useState<BacktestResults[]>([]);
-  const [scanProgress, setScanProgress] = useState({ current: 0, total: 0 });
+  const [scanProgress, setScanProgress] = useState({ current: 0, total: 0, percent: 0, symbol: '' });
   const [selectedResult, setSelectedResult] = useState<BacktestResults | null>(null);
 
-  const handleStopScan = () => {
-    stopScanRef.current = true;
-    toast.info("Deteniendo escaneo...");
-  };
+  // Escuchar eventos WebSocket
+  useEffect(() => {
+    const handleBacktestStart = (data: any) => {
+      setIsScanning(true);
+      setScanResults([]);
+      setScanProgress({ current: 0, total: data.total || 0, percent: 0, symbol: 'Iniciando...' });
+      toast.info(`Iniciando escaneo de ${data.total} símbolos...`);
+    };
 
-  const handleStartScan = async () => {
+    const handleBacktestProgress = (data: any) => {
+      setScanProgress({
+        current: data.current,
+        total: data.total,
+        percent: data.percent,
+        symbol: data.symbol
+      });
+    };
+
+    const handleBacktestResult = (data: any) => {
+      // Transformar datos del WS a la estructura BacktestResults
+      // Nota: 'details' viene serializado como en el endpoint single run
+      const details = data.details || {};
+
+      const normalizeTime = (t: any): number => {
+          if (typeof t === 'string') return new Date(t).getTime();
+          if (typeof t === 'number' && t < 20000000000) return t * 1000;
+          return t;
+      };
+
+      const transformedTrades: Trade[] = details.trades?.map((t: any) => ({
+          time: normalizeTime(t.time),
+          price: t.price,
+          side: t.type as 'BUY' | 'SELL',
+          profit: t.pnl,
+          amount: t.amount,
+          avg_price: t.avg_price,
+          label: t.label,
+          pnl_percent: t.pnl_percent
+      })) || [];
+
+      const candles: Candle[] = details.chart_data?.map((c: any) => ({
+          time: normalizeTime(c.time),
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close
+      })) || [];
+
+      const result: BacktestResults = {
+          symbol: data.symbol,
+          timeframe: timeframe, // Usamos el estado local ya que es el mismo para todos
+          days: days,
+          totalTrades: data.trades,
+          winRate: data.win_rate,
+          profitFactor: details.metrics?.profit_factor?.toString() || '0',
+          maxDrawdown: details.metrics?.max_drawdown?.toFixed(2) || '0',
+          totalReturn: data.pnl?.toFixed(2) || '0',
+          sharpeRatio: details.metrics?.sharpe_ratio?.toString() || '0',
+          candles: candles,
+          trades: transformedTrades,
+          botConfiguration: details.bot_configuration,
+          metrics: details.metrics,
+          tournamentResults: details.tournament_results,
+          winner: details.winner,
+          strategy_name: data.strategy,
+          initial_balance: details.initial_balance,
+          final_balance: details.final_balance
+      };
+
+      setScanResults(prev => {
+          const newResults = [...prev, result];
+          return newResults.sort((a, b) => parseFloat(b.totalReturn) - parseFloat(a.totalReturn));
+      });
+    };
+
+    const handleBacktestComplete = (data: any) => {
+      setIsScanning(false);
+      setScanProgress({ ...scanProgress, percent: 100, symbol: 'Completado' });
+      toast.success("Escaneo completado exitosamente");
+    };
+
+    const handleBacktestError = (data: any) => {
+      console.error("Backtest Error:", data);
+      toast.error(`Error en backtest: ${data.message || data.error}`);
+      if (data.message && data.message.includes("Critical")) {
+          setIsScanning(false);
+      }
+    };
+
+    const handleSymbolError = (data: any) => {
+        console.warn(`Error en símbolo ${data.symbol}: ${data.error}`);
+    }
+
+    wsService.on('backtest_start', handleBacktestStart);
+    wsService.on('backtest_progress', handleBacktestProgress);
+    wsService.on('backtest_result', handleBacktestResult);
+    wsService.on('backtest_complete', handleBacktestComplete);
+    wsService.on('backtest_error', handleBacktestError);
+    wsService.on('backtest_symbol_error', handleSymbolError);
+
+    return () => {
+      wsService.off('backtest_start', handleBacktestStart);
+      wsService.off('backtest_progress', handleBacktestProgress);
+      wsService.off('backtest_result', handleBacktestResult);
+      wsService.off('backtest_complete', handleBacktestComplete);
+      wsService.off('backtest_error', handleBacktestError);
+      wsService.off('backtest_symbol_error', handleSymbolError);
+    };
+  }, [timeframe, days]); // Dependencias para el contexto de result mapping
+
+  const handleStartScan = () => {
     if (!user?.openId || !selectedExchange || !selectedMarket) {
       toast.error("Configuración incompleta");
       return;
     }
 
-    setIsScanning(true);
-    stopScanRef.current = false;
-    setScanResults([]);
-
-    // Filter symbols to scan - Now taking ALL symbols as requested by user
-    // We execute them sequentially to avoid rate limits/DoS.
-    const targetSymbols = symbols.map(s => s.symbol);
-    setScanProgress({ current: 0, total: targetSymbols.length });
-
-    for (let i = 0; i < targetSymbols.length; i++) {
-      if (stopScanRef.current) {
-        setIsScanning(false);
-        toast.success("Escaneo detenido");
-        return;
-      }
-
-      const sym = targetSymbols[i];
-      try {
-        // Call Backtest API
-        const response = await fetch(
-          `${CONFIG.API_BASE_URL}/backtest/run?` + new URLSearchParams({
-            symbol: sym,
-            exchange_id: selectedExchange,
-            days: days.toString(),
+    // Enviar comando por WS
+    wsService.send({
+        action: "run_batch_backtest",
+        data: {
+            exchangeId: selectedExchange,
+            marketType: selectedMarket,
             timeframe: timeframe,
-            market_type: selectedMarket, // Usamos el mercado seleccionado (spot/futures)
-            initial_balance: initialBalance.toString(),
-            trade_amount: tradeAmount.toString()
-          }), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include'
+            days: days,
+            initialBalance: initialBalance,
+            tradeAmount: tradeAmount
         }
-        );
+    });
 
-        if (response.ok) {
-          const data = await response.json();
+    // Reset UI state implicitly handled by 'backtest_start' event
+    // But we can set loading state here just in case WS lags a bit
+    setIsScanning(true);
+    setScanResults([]);
+  };
 
-          // Transform Data (Reuse logic from single run)
-          const transformedTrades: Trade[] = data.trades?.map((t: any) => ({
-            time: (typeof t.time === 'string' ? new Date(t.time).getTime() : t.time * 1000),
-            price: t.price,
-            side: t.type as 'BUY' | 'SELL',
-            profit: t.pnl,
-            amount: t.amount,
-            avg_price: t.avg_price,
-            label: t.label,
-            pnl_percent: t.pnl_percent
-          })) || [];
-
-          const candles: Candle[] = data.chart_data?.map((c: any) => ({
-            time: c.time * 1000,
-            open: c.open,
-            high: c.high,
-            low: c.low,
-            close: c.close
-          })) || [];
-
-          const result: BacktestResults = {
-            symbol: data.symbol || sym,
-            timeframe,
-            days,
-            totalTrades: data.metrics?.total_trades || 0,
-            winRate: data.metrics?.win_rate || 0,
-            profitFactor: data.metrics?.profit_factor?.toString() || '0',
-            maxDrawdown: data.metrics?.max_drawdown?.toFixed(2) || '0',
-            totalReturn: data.metrics?.profit_pct?.toFixed(2) || '0',
-            sharpeRatio: data.metrics?.sharpe_ratio?.toString() || '0',
-            candles,
-            trades: transformedTrades,
-            botConfiguration: data.bot_configuration,
-            metrics: data.metrics,
-            tournamentResults: data.tournament_results,
-            winner: data.winner,
-            strategy_name: data.strategy_name || "Unknown",
-            initial_balance: data.initial_balance,
-            final_balance: data.final_balance
-          };
-
-          setScanResults(prev => {
-            const newResults = [...prev, result];
-            // Sort descending by Total Return
-            return newResults.sort((a, b) => parseFloat(b.totalReturn) - parseFloat(a.totalReturn));
-          });
-        }
-
-      } catch (e) {
-        console.error(`Error scanning ${sym}`, e);
-      } finally {
-        setScanProgress(prev => ({ ...prev, current: prev.current + 1 }));
-        // Small delay to be kind to the rate limits and keep UI snappy
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-    }
-
-    setIsScanning(false);
-    toast.success("Escaneo de mercado completado");
+  const handleStopScan = () => {
+      // No implemented explicit stop in backend yet, but we can simulate locally or reload
+      // For now just warn user
+      toast.info("La detención del proceso en servidor no está implementada, recarga la página si deseas cancelar la visualización.");
+      setIsScanning(false);
   };
 
   useEffect(() => {
@@ -1118,6 +1150,32 @@ export default function Backtest() {
               </div>
             </div>
 
+            {/* Simulation Config for Semi-Auto */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 border-t border-border pt-4">
+                <div>
+                <label className="block text-sm font-semibold text-foreground mb-2">
+                  Balance Inicial (USDT)
+                </label>
+                <input
+                  type="number"
+                  value={initialBalance}
+                  onChange={(e) => setInitialBalance(parseFloat(e.target.value) || 0)}
+                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-foreground mb-2">
+                  Inversión por Entrada
+                </label>
+                <input
+                  type="number"
+                  value={tradeAmount}
+                  onChange={(e) => setTradeAmount(parseFloat(e.target.value) || 0)}
+                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+            </div>
+
             <div className="flex justify-end gap-4">
               {isScanning && (
                 <Button
@@ -1137,7 +1195,7 @@ export default function Backtest() {
                 {isScanning ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Escaneando Mercado... ({scanProgress.current}/{scanProgress.total})
+                    Escaneando {scanProgress.symbol} ({scanProgress.current}/{scanProgress.total})
                   </>
                 ) : (
                   <>
@@ -1152,10 +1210,10 @@ export default function Backtest() {
           {isScanning && (
             <div className="space-y-2">
               <div className="flex justify-between text-xs text-muted-foreground">
-                <span>Progreso del escaneo</span>
-                <span>{Math.round((scanProgress.current / (scanProgress.total || 1)) * 100)}%</span>
+                <span>Progreso: {scanProgress.symbol}</span>
+                <span>{Math.round(scanProgress.percent)}%</span>
               </div>
-              <Progress value={(scanProgress.current / (scanProgress.total || 1)) * 100} className="h-2" />
+              <Progress value={scanProgress.percent} className="h-2" />
             </div>
           )}
 
@@ -1273,5 +1331,3 @@ export default function Backtest() {
     </div>
   );
 }
-
-
