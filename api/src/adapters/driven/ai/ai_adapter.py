@@ -11,7 +11,7 @@ try:
 except ImportError:
     AsyncPerplexity = None
 from api.src.domain.ports.output.ai_port import IAIPort
-from api.src.domain.models.signal import RawSignal, SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
+from api.src.domain.entities.signal import RawSignal, SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
 from api.config import Config
 import importlib
 

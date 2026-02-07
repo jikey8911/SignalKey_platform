@@ -155,7 +155,7 @@ class StrategyRunnerService:
                 # 7. Persistencia y Emisión de Señal (Tarea 4.3/4.5: Emitir HOLD y otros)
                 confidence = prediction.get('confidence', 0.85)
                 try:
-                    from api.src.domain.models.signal import Signal, SignalStatus, Decision, MarketType
+                    from api.src.domain.entities.signal import Signal, SignalStatus, Decision, MarketType
                     from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
                     
                     signal_repo = MongoDBSignalRepository(db)

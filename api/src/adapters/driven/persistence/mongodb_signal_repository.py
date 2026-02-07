@@ -1,7 +1,7 @@
 from typing import List, Optional
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from bson import ObjectId
-from api.src.domain.models.signal import Signal, SignalStatus, MarketType, Decision
+from api.src.domain.entities.signal import Signal, SignalStatus, MarketType, Decision, TradingParameters, TakeProfit
 from api.src.domain.ports.output.signal_repository import ISignalRepository
 
 class MongoDBSignalRepository(ISignalRepository):
@@ -10,6 +10,11 @@ class MongoDBSignalRepository(ISignalRepository):
         self.collection = db.trading_signals
 
     async def save(self, signal: Signal) -> Signal:
+        # Serializar parámetros si existen
+        params_dict = None
+        if signal.parameters:
+            params_dict = signal.parameters.to_dict() if hasattr(signal.parameters, 'to_dict') else signal.parameters
+
         signal_dict = {
             "userId": ObjectId(signal.userId) if isinstance(signal.userId, str) and len(signal.userId) == 24 else signal.userId,
             "source": signal.source,
@@ -25,7 +30,8 @@ class MongoDBSignalRepository(ISignalRepository):
             "riskScore": signal.riskScore,
             "botId": ObjectId(signal.botId) if isinstance(signal.botId, str) and len(signal.botId) == 24 else signal.botId,
             "tradeId": signal.tradeId,
-            "executionMessage": signal.executionMessage
+            "executionMessage": signal.executionMessage,
+            "parameters": params_dict
         }
         result = await self.collection.insert_one(signal_dict)
         signal.id = str(result.inserted_id)
@@ -44,26 +50,55 @@ class MongoDBSignalRepository(ISignalRepository):
         return result.modified_count > 0
 
     async def find_by_id(self, signal_id: str) -> Optional[Signal]:
-        doc = await self.collection.find_one({"_id": ObjectId(signal_id)})
-        if not doc:
+        try:
+            doc = await self.collection.find_one({"_id": ObjectId(signal_id)})
+            if not doc:
+                return None
+            return self._map_to_entity(doc)
+        except Exception:
             return None
-        return self._map_to_entity(doc)
 
     async def find_by_user(self, user_id: str) -> List[Signal]:
-        cursor = self.collection.find({"userId": ObjectId(user_id)})
+        # Buscar por userId (ObjectId o String según como se guarde)
+        # Intentamos ambos por compatibilidad
+        query = {"userId": ObjectId(user_id)} if len(user_id) == 24 else {"userId": user_id}
+        cursor = self.collection.find(query).sort("createdAt", -1)
         signals = []
         async for doc in cursor:
             signals.append(self._map_to_entity(doc))
         return signals
 
     async def find_by_bot_id(self, bot_id: str) -> List[Signal]:
-        cursor = self.collection.find({"botId": ObjectId(bot_id)})
+        query = {"botId": ObjectId(bot_id)} if len(bot_id) == 24 else {"botId": bot_id}
+        cursor = self.collection.find(query).sort("createdAt", -1)
         signals = []
         async for doc in cursor:
             signals.append(self._map_to_entity(doc))
         return signals
 
     def _map_to_entity(self, doc: dict) -> Signal:
+        # Reconstruct TradingParameters
+        params = None
+        if doc.get("parameters"):
+            p_data = doc["parameters"]
+            tps = []
+            if p_data.get("tp"):
+                # Handle list of dicts or list of objects (if coming from raw)
+                raw_tps = p_data["tp"]
+                for tp in raw_tps:
+                    if isinstance(tp, dict):
+                         tps.append(TakeProfit(price=tp.get("price", 0), percent=tp.get("percent", 0)))
+
+            params = TradingParameters(
+                entry_price=p_data.get("entry_price"),
+                entry_type=p_data.get("entry_type", "market"),
+                tp=tps,
+                sl=p_data.get("sl"),
+                leverage=p_data.get("leverage", 1),
+                amount=p_data.get("amount"),
+                network=p_data.get("network")
+            )
+
         return Signal(
             id=str(doc["_id"]),
             userId=str(doc["userId"]),
@@ -79,5 +114,6 @@ class MongoDBSignalRepository(ISignalRepository):
             riskScore=doc.get("riskScore"),
             botId=str(doc.get("botId")) if doc.get("botId") else None,
             tradeId=str(doc.get("tradeId")) if doc.get("tradeId") else None,
-            executionMessage=doc.get("executionMessage")
+            executionMessage=doc.get("executionMessage"),
+            parameters=params
         )
