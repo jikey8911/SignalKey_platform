@@ -43,7 +43,7 @@ build/
 *.swo
 *~
 .DS_Store
-
+++/package-lock.json
 # Database
 *.db
 *.sqlite
