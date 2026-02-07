@@ -36,6 +36,7 @@ class TradeResult:
     price: Optional[float] = None
     amount: Optional[float] = None
     fee: Optional[float] = None
+    timestamp: Optional[datetime] = None
 
 @dataclass
 class Position:

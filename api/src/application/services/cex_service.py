@@ -38,7 +38,8 @@ class CEXService:
 
     async def test_connection(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None):
         """Prueba la conexión delegando a CCXTService"""
-        return await self.ccxt_provider.test_connection_private(exchange_id, api_key, secret, password, uid)
+        success = await self.ccxt_provider.test_connection_private(exchange_id, api_key, secret, password, uid)
+        return success, "Conexión exitosa" if success else "Error de conexión"
 
     async def fetch_balance(self, user_id: str, exchange_id: Optional[str] = None) -> Dict[str, Any]:
         """Obtiene el balance total del usuario delegando a CCXTService"""
@@ -320,7 +321,7 @@ class CEXService:
                         }
                     )
                 else:
-                    return ExecutionResult(success=False, message=f"Fallo en ejecución: {trade_result.error}")
+                    return ExecutionResult(success=False, message=f"Fallo en ejecución: {trade_result.message}")
 
             except Exception as e:
                 logger.error(f"Error delegando trade a CCXTAdapter: {e}")
