@@ -823,7 +823,8 @@ export default function Backtest() {
                               symbol: results.symbol,
                               strategy: results.strategy_name || '',
                               initial_balance: virtualBalance.toString(),
-                              timeframe: results.timeframe // Enviar timeframe del resultado
+                              timeframe: results.timeframe, // Enviar timeframe del resultado
+                              exchange_id: selectedExchange // Pass selected exchange
                             }), { method: 'POST' });
 
                             if (!res.ok) throw new Error("Fallo en la conexión");
@@ -1245,7 +1246,8 @@ export default function Backtest() {
                               symbol: selectedResult.symbol,
                               strategy: selectedResult.strategy_name || '',
                               initial_balance: virtualBalance.toString(),
-                              timeframe: selectedResult.timeframe // Enviar timeframe del modal
+                              timeframe: selectedResult.timeframe, // Enviar timeframe del modal
+                              exchange_id: selectedExchange // Pass selected exchange
                             }), { method: 'POST' });
 
                             if (!res.ok) throw new Error("Fallo en la conexión");
