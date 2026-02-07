@@ -238,9 +238,11 @@ async def update_bot(bot_id: str, data: UpdateBotSchema, current_user: dict = De
 from api.src.application.services.execution_engine import ExecutionEngine
 from bson import ObjectId
 from api.src.adapters.driven.notifications.socket_service import socket_service
+from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
 
 # Nota: Engine requiere el adaptador de DB para funcionar
-engine = ExecutionEngine(repo, socket_service) 
+# Corregido: Pasar 'db' (adaptador de persistencia global) y 'ccxt_service' (puerto de exchange)
+engine = ExecutionEngine(db, socket_service, exchange_adapter=ccxt_service)
 
 class SignalWebhook(BaseModel):
     bot_id: str

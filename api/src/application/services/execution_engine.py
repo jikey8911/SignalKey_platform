@@ -1,9 +1,8 @@
 import logging
 import asyncio
 from datetime import datetime
+from bson import ObjectId
 from api.src.application.services.simulation_service import SimulationService
-from api.src.application.services.simulation_service import SimulationService
-from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
 from api.src.domain.strategies.base import BaseStrategy
 
 class ExecutionEngine:
@@ -11,11 +10,19 @@ class ExecutionEngine:
     Motor central del Sprint 4. Orquesta la ejecución basándose en el modo (Real/Sim).
     Implementa la Tarea 4.3: Emisión de eventos para el monitoreo híbrido en tiempo real.
     """
-    def __init__(self, db_adapter, socket_service=None):
+    def __init__(self, db_adapter, socket_service=None, exchange_adapter=None):
         self.db = db_adapter
         self.socket = socket_service # Referencia para emitir eventos vía WebSockets hacia el frontend
         self.simulator = SimulationService(db_adapter)
-        self.real_exchange = ccxt_service
+
+        # Inyección de dependencia (Puerto)
+        if exchange_adapter:
+             self.real_exchange = exchange_adapter
+        else:
+             # Fallback temporal para evitar roturas si no se inyecta
+             from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+             self.real_exchange = ccxt_service
+
         self.logger = logging.getLogger("ExecutionEngine")
 
     async def process_signal(self, bot_instance, signal_data):
@@ -257,7 +264,7 @@ class ExecutionEngine:
 
         # --- TASK 6.3: NOTIFICACIONES TELEGRAM ---
         # Call Telegram Adapter to send alert
-        if execution_result and execution_result.get('status') in ['executed', 'closed']:
+        if exec_result and exec_result.get('status') in ['executed', 'closed']:
             try:
                 # Lazy import to avoid circular dep
                 from api.src.adapters.driven.notifications.telegram_adapter import TelegramAdapter
@@ -275,12 +282,12 @@ class ExecutionEngine:
                     
                     # Prepare data for alert
                     alert_data = {
-                        "symbol": symbol,
-                        "side": execution_result.get('side', 'unknown'),
-                        "price": execution_result.get('price', price),
-                        "amount": execution_result.get('amount', amount),
-                        "pnl": execution_result.get('pnl', 0),
-                        "is_simulated": execution_result.get('is_simulated', False),
+                        "symbol": bot_instance.get('symbol'),
+                        "side": exec_result.get('side', 'unknown'),
+                        "price": exec_result.get('price', 0),
+                        "amount": exec_result.get('amount', 0),
+                        "pnl": exec_result.get('pnl', 0),
+                        "is_simulated": exec_result.get('is_simulated', False),
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
                     
@@ -290,20 +297,20 @@ class ExecutionEngine:
                 self.logger.error(f"Error sending Telegram alert: {e}")
 
         # --- TAREA 4.3: NOTIFICACIÓN EN TIEMPO REAL (Socket) ---
-        if self.socket and execution_result and execution_result.get('status') == 'executed':
+        if self.socket and exec_result and exec_result.get('status') == 'executed':
             event_payload = {
                 "bot_id": str(bot_instance.get('_id', 'unknown')), 
-                "symbol": symbol,
-                "type": "LONG" if signal == BaseStrategy.SIGNAL_BUY else "SHORT",
-                "price": execution_result.get('price', price),
+                "symbol": bot_instance.get('symbol'),
+                "type": "LONG" if signal_data.get('signal') == BaseStrategy.SIGNAL_BUY else "SHORT",
+                "price": exec_result.get('price', signal_data.get('price')),
                 "timestamp": datetime.now().isoformat(),
-                "mode": mode,
-                "pnl_impact": execution_result.get('pnl', 0) 
+                "mode": bot_instance.get('mode'),
+                "pnl_impact": exec_result.get('pnl', 0)
             }
             # Emitimos el evento que el monitor híbrido en React capturará
             await self.socket.emit_to_user(str(bot_instance.get('user_id')), "live_execution_signal", event_payload)
             
-        return execution_result or {"status": "executed", "details": execution_result}
+        return exec_result or {"status": "executed", "details": exec_result}
 
     async def _apply_profit_guard(self, bot_instance, signal, current_price):
         """

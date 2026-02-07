@@ -399,15 +399,57 @@ class SignalBotService:
             return ExecutionResult(success=True, message=f"Posición cerrada por señal opuesta. PnL: {pnl_pct:.2f}%")
             
         else:
-             # REAL MODE
-             # Ejecutar orden opuesta
-             # Necesitamos CEXService para hacer 'create_order' reverso
-             # Podemos usar execute_trade con side opuesto y monto total??
-             # execute_trade usa lógica de limites... mejor usar exchange instance directo o methodo 'close_position' si existiera.
-             # Por ahora, simularemos cierre updateando DB pero loggeando que falta lógica CEX Real de cierre.
-             # TODO: Implementar Cierre Real en CEXService
-             logger.warning("Real CEX Close not fully implemented via Signal triggers yet.")
-             return ExecutionResult(success=True, message="Bot marcado cerrado (Simulado), Ejecución real pendiente de impl.")
+             # REAL MODE: CLOSE POSITION
+             # Determinar lado opuesto para cerrar
+             close_side = "SELL" if existing_bot["side"] == "BUY" else "BUY"
+
+             logger.info(f"Closing REAL position for {symbol}. Side: {close_side}, Amount: {existing_bot['amount']}")
+
+             # Crear análisis de cierre
+             close_analysis = AnalysisResult(
+                 decision=close_side,
+                 symbol=symbol,
+                 market_type=existing_bot.get("marketType", "CEX"),
+                 confidence=1.0,
+                 reasoning=f"Close Signal Triggered: {analysis.decision}",
+                 parameters={
+                     "amount": existing_bot["amount"],
+                     "entry_price": current_price, # Market order
+                     "leverage": existing_bot.get("leverage", 1)
+                 }
+             )
+
+             # Ejecutar cierre a través de CEXService (que delega a CCXTAdapter)
+             close_result = await self.cex_service.execute_trade(close_analysis, user_id)
+
+             if close_result.success:
+                 # Actualizar DB
+                 pnl = 0
+                 exit_price = current_price
+
+                 if close_result.details and "price" in close_result.details:
+                      exit_price = float(close_result.details["price"])
+                      entry_price = float(existing_bot["entryPrice"])
+                      if existing_bot["side"] == "BUY":
+                          pnl = ((exit_price - entry_price) / entry_price) * 100
+                      else:
+                          pnl = ((entry_price - exit_price) / entry_price) * 100
+
+                 await db.trades.update_one(
+                    {"_id": existing_bot["_id"]},
+                    {
+                        "$set": {
+                            "status": "closed",
+                            "exitPrice": exit_price,
+                            "pnl": pnl,
+                            "closeReason": f"Opposite Signal: {analysis.decision}",
+                            "executedAt": datetime.utcnow()
+                        }
+                    }
+                )
+                 return ExecutionResult(success=True, message=f"Posición REAL cerrada. PnL: {pnl:.2f}%")
+             else:
+                 return ExecutionResult(success=False, message=f"Fallo al cerrar posición REAL: {close_result.message}")
 
     async def initialize_active_bots_monitoring(self):
         """Startup: Inicia monitoreo y WARM-UP basado en INSTANCIAS DE BOTS (Estrategias) y TRADES activos."""

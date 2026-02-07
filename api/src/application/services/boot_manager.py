@@ -4,6 +4,7 @@ from bson import ObjectId
 from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
 from api.src.application.services.execution_engine import ExecutionEngine
 from api.src.adapters.driven.persistence.mongodb import db as db_adapter # Asumimos db global disponible
+from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
 
 logger = logging.getLogger("BootManager")
 
@@ -12,11 +13,12 @@ class BootManager:
     Servicio de Resiliencia (Tarea 7.2).
     Se asegura de que los bots 'active' reanuden su monitoreo tras un reinicio de la API.
     """
-    def __init__(self, db_adapter_in=None, socket_service=None):
+    def __init__(self, db_adapter_in=None, socket_service=None, exchange_adapter=None):
         self.repo = MongoBotRepository()
         # Usamos el db_adapter pasado o el global si no se pasa (para compatibilidad)
         final_db = db_adapter_in if db_adapter_in is not None else db_adapter
-        self.engine = ExecutionEngine(final_db, socket_service)
+        final_exchange = exchange_adapter if exchange_adapter else ccxt_service
+        self.engine = ExecutionEngine(final_db, socket_service, exchange_adapter=final_exchange)
 
     async def initialize_active_bots(self):
         """
