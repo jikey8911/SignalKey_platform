@@ -470,7 +470,11 @@ class SignalBotService:
         # A. Procesar Estrategias (Entradas)
         for bot in active_instances:
             # FIX: Determinar Exchange Correcto
-            exchange_id = bot.get("exchangeId")
+            # Prioridad 1: 'exchangeId' (nuevo)
+            # Prioridad 2: 'exchange_id' (legacy/alternativo)
+            # Prioridad 3: Configuración del usuario
+            exchange_id = bot.get("exchangeId") or bot.get("exchange_id")
+
             if not exchange_id:
                 # Fallback: Consultar configuración del usuario
                 try:
@@ -478,12 +482,24 @@ class SignalBotService:
                     u_id = bot.get("userId") or bot.get("user_id")
                     if u_id:
                         user_config = await get_app_config(u_id)
-                        exchange_id = user_config.get("exchange_id", "binance").lower() if user_config else "binance"
+                        # Busca en 'activeExchange' o primer exchange activo
+                        exchange_id = user_config.get("activeExchange")
+                        if not exchange_id and user_config.get("exchanges"):
+                             # Buscar el primer exchange activo
+                             active_ex = next((e for e in user_config["exchanges"] if e.get("isActive")), None)
+                             if active_ex:
+                                 exchange_id = active_ex["exchangeId"]
+
+                        if not exchange_id:
+                             exchange_id = "binance" # Default absoluto
                     else:
                         exchange_id = "binance"
                 except Exception as e:
                     logger.warning(f"Error resolving exchange for bot {bot.get('_id')}: {e}")
                     exchange_id = "binance"
+
+            exchange_id = exchange_id.lower()
+            logger.info(f"Using exchange '{exchange_id}' for bot {bot.get('name', 'Unknown')} ({bot.get('_id')})")
 
             symbol = bot["symbol"]
             timeframe = bot.get("timeframe", "15m")
@@ -491,7 +507,11 @@ class SignalBotService:
             sub_key = f"{exchange_id}:{symbol}:{timeframe}"
             if sub_key not in subscriptions:
                 # WARM-UP
-                await self.buffer_service.initialize_buffer(exchange_id, symbol, timeframe, limit=100)
+                try:
+                    await self.buffer_service.initialize_buffer(exchange_id, symbol, timeframe, limit=100)
+                except Exception as e:
+                    logger.error(f"Failed to initialize buffer for {sub_key}: {e}")
+
                 # Suscribir a VELAS para señales IA
                 await self.stream_service.subscribe_candles(exchange_id, symbol, timeframe)
                 subscriptions.add(sub_key)
