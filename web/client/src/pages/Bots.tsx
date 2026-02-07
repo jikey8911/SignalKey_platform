@@ -370,32 +370,20 @@ const BotsPage = () => {
     const [bots, setBots] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedId, setSelectedId] = useState<string | null>(null);
-    const { lastMessage } = useSocketContext();
+    const { lastMessage, sendMessage } = useSocketContext();
 
-    const fetchBots = async () => {
+    const fetchBots = () => {
         if (!user?.openId) return;
-
-        try {
-            const res = await fetch(`${CONFIG.API_BASE_URL}/bots/`);
-            if (res.ok) {
-                const data = await res.json();
-                setBots(data);
-                if (data.length > 0 && !selectedId) {
-                    setSelectedId(data[0].id);
-                }
-            }
-        } catch (e) {
-            console.error("Error fetching bots:", e);
-        } finally {
-            setLoading(false);
-        }
+        setLoading(true);
+        sendMessage({ action: 'get_bots' });
     };
 
     useEffect(() => {
         if (user?.openId) {
+            // Give a small delay to ensure socket is connected (or rely on isConnected from context if available)
+            // But usually retrying or just sending is fine if logic handles it.
+            // Better to trigger on mount.
             fetchBots();
-            const interval = setInterval(fetchBots, 60000);
-            return () => clearInterval(interval);
         }
     }, [user?.openId]);
 
@@ -410,17 +398,25 @@ const BotsPage = () => {
     useEffect(() => {
         if (!lastMessage) return;
 
-        if (lastMessage.event === 'bot_update') {
+        if (lastMessage.event === 'all_bots_list') {
+            setBots(lastMessage.data);
+            setLoading(false);
+            if (lastMessage.data.length > 0 && !selectedId) {
+                setSelectedId(lastMessage.data[0].id);
+            }
+        } else if (lastMessage.event === 'bot_update') {
             setBots(prev => prev.map(b => b.id === lastMessage.data.id ? { ...b, ...lastMessage.data } : b));
         } else if (lastMessage.event === 'bot_created') {
             setBots(prev => [lastMessage.data, ...prev]);
             toast.success(`Bot ${lastMessage.data.name} creado exitosamente`);
         } else if (lastMessage.event === 'bot_deleted') {
             setBots(prev => prev.filter(b => b.id !== lastMessage.data.id));
-            toast.info(`Bot eliminado`);
+            toast.success(`Bot eliminado`);
         } else if (lastMessage.event === 'operation_update') {
             const op = lastMessage.data;
-            toast.info(`Operación: ${op.type} en ${op.price}`, {
+            toast(`Operación: ${op.type} en ${op.price}`, {
+                icon: 'ℹ️',
+                // @ts-ignore
                 description: `${op.symbol} - ${op.reason}`
             });
         }
