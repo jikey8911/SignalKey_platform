@@ -252,8 +252,15 @@ export default function Backtest() {
 
           setScanResults(prev => {
             const newResults = [...prev, result];
-            // Sort descending by Total Return
-            return newResults.sort((a, b) => parseFloat(b.totalReturn) - parseFloat(a.totalReturn));
+            // Sort descending by Total Return, then Win Rate
+            const sorted = newResults.sort((a, b) => {
+              const pnlA = parseFloat(a.totalReturn);
+              const pnlB = parseFloat(b.totalReturn);
+              if (pnlB !== pnlA) return pnlB - pnlA;
+              return b.winRate - a.winRate;
+            });
+            // Keep top 10
+            return sorted.slice(0, 10);
           });
         }
 
