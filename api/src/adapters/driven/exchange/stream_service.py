@@ -132,8 +132,21 @@ class MarketStreamService:
 
     async def _watch_ticker_loop(self, exchange, symbol: str):
         """Internal loop to watch ticker."""
+        # FIX: Ensure markets are loaded before watching
+        if not exchange.markets:
+            try:
+                await exchange.load_markets()
+            except Exception as e:
+                logger.error(f"Failed to load markets for ticker stream {symbol}: {e}")
+                await asyncio.sleep(10)
+                # If loading fails, loop might crash on watch_ticker, so we retry in loop
+
         while self.running:
             try:
+                # Explicit check inside loop to handle reconnections/reloads
+                if not exchange.markets:
+                     await exchange.load_markets()
+
                 # This await blocks until update is received
                 ticker = await exchange.watch_ticker(symbol)
                 
@@ -145,7 +158,7 @@ class MarketStreamService:
                 })
             except Exception as e:
                 logger.error(f"Error watching {symbol} on {exchange.id}: {e}")
-                await asyncio.sleep(5) # Prevent tight loop on error
+                await asyncio.sleep(10) # Increased backoff to prevent log spam
 
     async def subscribe_candles(self, exchange_id: str, symbol: str, timeframe: str):
         """
@@ -171,9 +184,21 @@ class MarketStreamService:
                 exchange = self.exchanges.get(exchange_id) 
                 if not exchange: return
 
+                # FIX: Ensure markets are loaded before watching (Candles)
+                if not exchange.markets:
+                    try:
+                        await exchange.load_markets()
+                    except Exception as e:
+                        logger.error(f"Failed to load markets for candle stream {stream_key}: {e}")
+                        await asyncio.sleep(10)
+
                 while self.running:
                     # CCXT watch_ohlcv devuelve una lista de velas. Tomamos la última.
                     try:
+                        # Explicit check inside loop to handle reconnections/reloads
+                        if not exchange.markets:
+                             await exchange.load_markets()
+
                         candles = await exchange.watch_ohlcv(symbol, timeframe)
                         
                         if candles:
@@ -200,10 +225,10 @@ class MarketStreamService:
                             await self.notify_listeners("candle_update", event_data)
                     except ccxt.NetworkError as ne:
                          logger.warning(f"Network error in candle stream {stream_key}: {ne}")
-                         await asyncio.sleep(5)
+                         await asyncio.sleep(10) # Increased backoff
                     except Exception as e:
                          logger.error(f"Error in candle stream loop {stream_key}: {e}")
-                         await asyncio.sleep(5)
+                         await asyncio.sleep(10) # Increased backoff
                         
             except Exception as e:
                 logger.error(f"Fatal error in stream de velas {stream_key}: {e}")
