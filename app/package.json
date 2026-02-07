@@ -27,7 +27,7 @@
     "react-native-reanimated": "~3.16.1",
     "expo-secure-store": "~14.0.0",
     "react-native-webview": "13.12.2",
-    "lucide-react-native": "^0.4.0",
+    "lucide-react-native": "^0.460.0",
     "clsx": "^2.1.0",
     "tailwind-merge": "^2.2.0",
     "date-fns": "^3.3.1",
