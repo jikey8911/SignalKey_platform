@@ -1,7 +1,7 @@
 import logging
 import asyncio
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from api.src.adapters.driven.persistence.mongodb import db, save_trade, update_virtual_balance, get_app_config
 from api.src.application.services.cex_service import CEXService
 from api.src.application.services.dex_service import DEXService
@@ -9,6 +9,8 @@ from api.src.domain.models.schemas import AnalysisResult, ExecutionResult
 from api.src.adapters.driven.exchange.stream_service import MarketStreamService
 from api.src.application.services.buffer_service import DataBufferService
 from api.src.application.services.ml_service import MLService
+from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
+from api.src.domain.entities.signal import Signal, SignalStatus, MarketType, Decision, TradingParameters
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,7 @@ class SignalBotService:
         self.stream_service = MarketStreamService()
         self.buffer_service = DataBufferService(stream_service=self.stream_service, cex_service=self.cex_service)
         self.stream_service.add_listener(self.handle_market_update)
+        self.signal_repository = MongoDBSignalRepository(db)
 
     async def start(self):
         """Starts the bot service, stream service, and initial monitoring."""
@@ -42,7 +45,7 @@ class SignalBotService:
         })
         return active_bots_count < max_bots
 
-    async def activate_bot(self, analysis: AnalysisResult, user_id: str, config: Dict[str, Any], bot_id: str = None) -> ExecutionResult:
+    async def activate_bot(self, analysis: AnalysisResult, user_id: str, config: Dict[str, Any], bot_id: str = None, signal_id: str = None) -> ExecutionResult:
         """Activa un bot para una señal aprobada, manejando acumulación o cierre."""
         symbol = self.cex_service._normalize_symbol(analysis.symbol)
         
@@ -158,6 +161,7 @@ class SignalBotService:
         bot_doc = {
             "userId": user_id,
             "botInstanceId": bot_id, # Link to Bot Instance
+            "signalId": signal_id, # Link to Signal
             "symbol": symbol,
             "timeframe": timeframe, # Timeframe para monitoreo de velas
             "side": analysis.decision.upper(),
@@ -192,6 +196,14 @@ class SignalBotService:
                 inserted_id = await save_trade(bot_doc)
         else:
             inserted_id = await save_trade(bot_doc)
+
+        # Update Signal if exists
+        if signal_id:
+            await self.signal_repository.update(signal_id, {
+                "status": SignalStatus.EXECUTING,
+                "tradeId": str(inserted_id),
+                "executionMessage": execution_result.message
+            })
 
         # --- SAVE OPERATION LOG ---
         if bot_id:
@@ -653,33 +665,72 @@ class SignalBotService:
             current_position=current_pos
         )
         
-        decision = prediction.get("decision", "HOLD")
+        decision_str = prediction.get("decision", "HOLD")
+
+        # --- 1. PERSIST SIGNAL ALWAYS ---
+        # Map decision string to Enum
+        try:
+            decision_enum = Decision(decision_str.upper())
+        except:
+            decision_enum = Decision.HOLD
+
+        # Prepare parameters from Analysis/Prediction
+        # Nota: prediction["analysis"] podría tener detalles, pero 'activate_bot' construye AnalysisResult de nuevo.
+        # Intento obtener parametros base.
+        last_close = candles_list[-1]['close']
+
+        signal_params = TradingParameters(
+            entry_price=last_close,
+            tp=[],
+            sl=None
+        )
+
+        user_id_str = str(instance.get("userId") or instance.get("user_id") or "default_user")
         
-        if decision in ["BUY", "SELL"]:
+        signal_entity = Signal(
+            id=None,
+            userId=user_id_str,
+            source=f"BotInstance:{instance.get('_id')}",
+            rawText=f"AI Prediction for {instance['symbol']} {instance['timeframe']}",
+            status=SignalStatus.PROCESSING if decision_enum in [Decision.BUY, Decision.SELL] else SignalStatus.COMPLETED,
+            createdAt=datetime.utcnow(),
+            symbol=instance["symbol"],
+            marketType=MarketType(instance.get("marketType", "CEX")),
+            decision=decision_enum,
+            confidence=prediction.get("confidence", 0.0), # Assuming ML service returns confidence
+            reasoning=f"AI Strategy Used: {prediction.get('strategy_used', 'auto')}",
+            riskScore=0.0,
+            botId=str(instance["_id"]),
+            parameters=signal_params
+        )
+
+        try:
+            saved_signal = await self.signal_repository.save(signal_entity)
+            logger.info(f"💾 Signal saved: {saved_signal.id} ({decision_enum})")
+        except Exception as e:
+            logger.error(f"Error saving signal: {e}")
+            saved_signal = signal_entity # Fallback without ID
+
+        # --- 2. EXECUTE IF BUY/SELL ---
+        if decision_enum in [Decision.BUY, Decision.SELL]:
              # If decision matches or reverses, activate_bot logic handles it.
-             # Need to create AnalysisResult.
-             # This duplicates logic in 'activate_bot' a bit, or 'activate_bot' IS the executor.
-             # We call 'activate_bot'.
              
              analysis = AnalysisResult(
-                 decision=decision,
+                 decision=decision_str,
                  symbol=instance["symbol"],
                  market_type=instance.get("marketType", "CEX"),
-                 confidence=0.0, # TODO: Extract confidence
-                 reasoning=f"Auto-Bot Signal: {decision}",
+                 confidence=0.0,
+                 reasoning=f"Auto-Bot Signal: {decision_str}",
                  parameters={
-                     "entry_price": candles_list[-1]['close'],
+                     "entry_price": last_close,
                      "tp": [],
                      "sl": None
                  }
              )
              
-             user_id = instance["userId"] # Needed as str, usually ObjectID in bot doc
-             # Convert ObjectId if needed
-             user_str = str(user_id) if user_id else "default"
-             
              # Call existing executor
-             await self.activate_bot(analysis, user_str, config={}, bot_id=str(instance["_id"]))
+             # We pass the saved signal ID to link it
+             await self.activate_bot(analysis, user_id_str, config={}, bot_id=str(instance["_id"]), signal_id=saved_signal.id)
 
     async def _process_bot_tick(self, bot: Dict[str, Any], current_price: float = None) -> float:
         """

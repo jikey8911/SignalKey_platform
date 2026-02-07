@@ -100,7 +100,7 @@ class ExecutionEngine:
     async def _persist_signal(self, bot_instance, signal_data):
         """Persiste la señal técnica recibida."""
         try:
-            from api.src.domain.models.signal import Signal, SignalStatus, Decision
+            from api.src.domain.entities.signal import Signal, SignalStatus, Decision
             from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
             signal_repo = MongoDBSignalRepository(self.db)
             

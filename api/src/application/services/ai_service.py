@@ -1,6 +1,6 @@
 import logging
 from api.src.adapters.driven.ai.ai_adapter import AIAdapter
-from api.src.domain.models.signal import RawSignal, Decision
+from api.src.domain.entities.signal import RawSignal, Decision
 from api.src.domain.models.schemas import AnalysisResult
 from typing import List
 

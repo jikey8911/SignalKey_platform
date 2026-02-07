@@ -3,8 +3,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from api.src.infrastructure.adapters.ai.ai_adapter import AIAdapter
 from api.src.application.services.ai_service import AIService
-from api.src.domain.entities.signal import Decision
-from api.src.domain.models.signal import RawSignal
+from api.src.domain.entities.signal import Decision, RawSignal
 
 @pytest.mark.asyncio
 async def test_ai_adapter_analyze_signal():
