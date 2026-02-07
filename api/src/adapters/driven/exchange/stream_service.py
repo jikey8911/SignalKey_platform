@@ -51,7 +51,15 @@ class MarketStreamService:
                     'enableRateLimit': True,  # Recommended
                     'options': {'defaultType': 'spot'} # Default, can be overridden
                 })
-                
+
+            # Pre-load markets to avoid repeated REST calls during stream
+            # This helps prevent 'Network error... GET exchangeInfo' spam if REST is flaky
+            try:
+                await exchange.load_markets()
+                logger.info(f"Markets loaded for {exchange_id}")
+            except Exception as e:
+                logger.warning(f"Failed to pre-load markets for {exchange_id} (will retry on stream): {e}")
+
             self.exchanges[exchange_id] = exchange
             logger.info(f"Initialized WebSocket exchange: {exchange_id}")
             
