@@ -259,12 +259,27 @@ class CcxtAdapter(IExchangePort):
         Fetch balance. If exchange_id is provided (User specific), it creates a temporary private instance.
         If not, it attempts to use the system client (though fetching balance usually requires private auth).
         """
-        # Note: This method signature implies resolving API keys for the user.
-        # For this refactor, we will focus on the public/system methods first as requested.
-        # Private methods usually require passing API keys explicitly or resolving them via User Service.
-        pass 
+        try:
+             client = await self._get_client_for_user(user_id, exchange_id)
+             if not client: return []
 
-    async def execute_trade(self, analysis: SignalAnalysis, user_id: str) -> TradeResult:
+             balance_data = await client.fetch_balance()
+
+             # Convert to List[Balance]
+             balances = []
+             if 'total' in balance_data:
+                 for asset, total in balance_data['total'].items():
+                     # Incluir balances positivos
+                     if total > 0:
+                         free = balance_data['free'].get(asset, 0.0)
+                         used = balance_data['used'].get(asset, 0.0)
+                         balances.append(Balance(asset=asset, free=free, used=used, total=total))
+             return balances
+        except Exception as e:
+            logger.error(f"Error fetching balance for user {user_id}: {e}")
+            return []
+
+    async def execute_trade(self, analysis: SignalAnalysis, user_id: str, exchange_id: Optional[str] = None) -> TradeResult:
         """
         Ejecuta una operación en el exchange configurado para el usuario/bot.
         Soporta Multi-Exchange (Binance, OKX) dinámicamente.
@@ -272,7 +287,10 @@ class CcxtAdapter(IExchangePort):
         try:
             # 1. Obtener instancia privada (con credenciales) para el usuario
             # Nota: _get_client_for_user carga las credenciales desde DB config
-            client = await self._get_client_for_user(user_id)
+            client = await self._get_client_for_user(user_id, exchange_id=exchange_id)
+
+            if not client:
+                 return TradeResult(success=False, message=f"Could not initialize exchange client for user {user_id}")
             
             # TODO: Add specific checks for keys presence
             # For now relying on client initialization success
@@ -283,7 +301,7 @@ class CcxtAdapter(IExchangePort):
             amount = analysis.parameters.amount
             
             if not amount:
-                 return TradeResult(success=False, error="Amount is zero")
+                 return TradeResult(success=False, message="Amount is zero")
 
             logger.info(f"🚀 Executing REAL trade: {side.upper()} {symbol} Amt:{amount} via {client.id}")
             
@@ -307,6 +325,7 @@ class CcxtAdapter(IExchangePort):
                 
             return TradeResult(
                 success=True,
+                message="Order executed successfully",
                 order_id=order['id'],
                 price=avg_price,
                 amount=order['amount'],
@@ -315,7 +334,7 @@ class CcxtAdapter(IExchangePort):
             
         except Exception as e:
             logger.error(f"Error executing trade on {analysis.symbol}: {e}")
-            return TradeResult(success=False, error=str(e))
+            return TradeResult(success=False, message=str(e))
 
     async def fetch_open_orders(self, user_id: str, symbol: Optional[str] = None) -> List[Order]:
         try:
