@@ -99,12 +99,17 @@ const ExecutionMonitor = ({ bot }: any) => {
                             data={candles}
                             symbol={bot?.symbol}
                             timeframe={bot?.timeframe}
-                            trades={combinedSignals.map(s => ({
-                                time: new Date(s.createdAt || Date.now()).getTime(),
-                                price: s.price || s.parameters?.entry_price || s.entryPrice,
-                                side: (s.decision?.includes('BUY') || s.type === 'LONG' || s.side === 'buy') ? 'BUY' : 'SELL',
-                                label: s.decision || s.type || s.side
-                            }))}
+                            trades={combinedSignals
+                                .filter(s => {
+                                    const d = (s.decision || s.type || s.side || '').toUpperCase();
+                                    return d.includes('BUY') || d.includes('SELL') || d.includes('LONG') || d.includes('SHORT');
+                                })
+                                .map(s => ({
+                                    time: new Date(s.createdAt || Date.now()).getTime(),
+                                    price: s.price || s.parameters?.entry_price || s.entryPrice,
+                                    side: (s.decision?.toUpperCase().includes('BUY') || s.type === 'LONG' || s.side?.toLowerCase() === 'buy') ? 'BUY' : 'SELL',
+                                    label: s.decision || s.type || s.side
+                                }))}
                             height={320}
                         />
                     )}
