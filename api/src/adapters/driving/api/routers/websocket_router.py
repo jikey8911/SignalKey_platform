@@ -45,33 +45,18 @@ async def _run_batch_backtest(user_id: str, params: dict):
         # TODO: CEXService debería tener un método para listar símbolos activos sin necesidad de una instancia específica si son públicos
         # Por ahora, usamos una instancia genérica o reusamos la existente
 
-        # Primero intentamos obtener la lista de mercados cacheados o cargarlos
+        # Primero intentamos obtener la lista de símbolos usando el CCXT adapter
         try:
-             # Necesitamos un cliente autenticado o público.
-             # BacktestService tiene exchange adapter.
-             # Asumimos que podemos obtener los símbolos del exchange adapter.
-             # Pero ccxt_adapter.load_markets requiere credenciales a veces o es público? load_markets es público generalmente.
-
-             # Vamos a usar el exchange adapter del backtest_service
-             markets = await backtest_service.exchange.load_markets(exchange_id)
-
-             # Filtrar por market_type y active
-             active_symbols = []
-             for symbol, market in markets.items():
-                 # Verificar tipo de mercado (spot/swap/future)
-                 m_type = market.get('type', 'spot').upper()
-                 if market_type == 'SPOT' and m_type == 'SPOT':
-                     if market.get('active'): active_symbols.append(symbol)
-                 elif market_type == 'FUTURES' and m_type in ['SWAP', 'FUTURE']:
-                     if market.get('active'): active_symbols.append(symbol)
-
-             # Limitar para no explotar si hay miles (ej: top 50 por volumen sería ideal, pero por ahora primeros 20 para prueba)
-             # O mejor, todos, pero reportando progreso.
-             # Para la demo, limitemos a 10 para rapidez.
-             # active_symbols = active_symbols[:10]
-
+             # Usamos el nuevo método get_symbols del adaptador
+             # market_type viene en UPPER (SPOT, FUTURES) pero CcxtAdapter espera lower (spot, swap)
+             ccxt_market_type = market_type.lower()
+             if ccxt_market_type == 'futures':
+                 ccxt_market_type = 'swap' # CCXT suele usar 'swap' para perpetuos
+             
+             active_symbols = await backtest_service.exchange.get_symbols(exchange_id, ccxt_market_type)
+             
              total_symbols = len(active_symbols)
-             logger.info(f"Found {total_symbols} active symbols for {exchange_id} {market_type}")
+             logger.info(f"Found {total_symbols} active symbols for {exchange_id} {ccxt_market_type}")
 
              if total_symbols == 0:
                  await socket_service.emit_to_user(user_id, "backtest_error", {"message": f"No active symbols found for {exchange_id} {market_type}"})
@@ -159,23 +144,22 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
 
                         for bot in bots:
                             b_dict = bot.to_dict()
+                            bot_id_obj = ObjectId(b_dict["id"]) if isinstance(b_dict.get("id"), str) else b_dict.get("_id")
 
-                            # Enrich with active trade data if exists
-                            active_trade = await db.trades.find_one({
-                                "userId": user_id,
-                                "symbol": bot.symbol,
-                                "status": "active"
+                            # 1. Buscar posición activa en 'positions'
+                            active_position = await db.db["positions"].find_one({
+                                "botId": bot_id_obj,
+                                "status": "OPEN"
                             })
 
-                            if active_trade:
-                                b_dict["active_trade_id"] = str(active_trade["_id"])
-                                b_dict["pnl"] = active_trade.get("pnl", 0.0)
-                                b_dict["current_price"] = active_trade.get("currentPrice", 0.0)
-                                b_dict["status"] = "active" # Force active status if trade is running
+                            if active_position:
+                                b_dict["active_position"] = _serialize_mongo(active_position)
+                                b_dict["pnl"] = active_position.get("roi", 0.0)
+                                b_dict["entryPrice"] = active_position.get("avgEntryPrice", 0.0)
+                                b_dict["currentQty"] = active_position.get("currentQty", 0.0)
                             else:
-                                b_dict["active_trade_id"] = None
+                                b_dict["active_position"] = None
                                 b_dict["pnl"] = 0.0
-                                b_dict["current_price"] = 0.0
 
                             result.append(b_dict)
 

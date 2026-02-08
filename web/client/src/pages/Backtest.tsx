@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Play, BarChart3, TrendingUp, TrendingDown, Loader2, Trophy, BrainCircuit, ChevronRight, Search, RotateCcw, CircleStop, X } from 'lucide-react';
@@ -119,40 +119,104 @@ export default function Backtest() {
 
   useEffect(() => {
     setLoadingExchanges(true);
+    console.log("[Backtest] Fetching exchanges from:", `${CONFIG.API_BASE_URL}/market/exchanges`);
     fetch(`${CONFIG.API_BASE_URL}/market/exchanges`)
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+        return res.json();
+      })
       .then(data => {
+        console.log("[Backtest] Exchanges loaded:", data);
         if (Array.isArray(data)) {
-          // Map string[] to object structure expected by UI
           setExchanges(data.map(e => ({ exchangeId: e, isActive: true })));
         }
       })
-      .catch(err => console.error("Error fetching exchanges:", err))
+      .catch(err => {
+        console.error("[Backtest] Error fetching exchanges:", err);
+        toast.error("Error al cargar exchanges");
+      })
       .finally(() => setLoadingExchanges(false));
   }, []);
+
+  // WebSocket Connection Initialization
+  useEffect(() => {
+    if (user?.openId) {
+      console.log(`[Backtest] Initializing WebSocket for user: ${user.openId}`);
+      wsService.connect(user.openId);
+    }
+    return () => {
+      // We don't necessarily want to disconnect here if other pages use it, 
+      // but wsService.connect handles existing connections.
+    };
+  }, [user?.openId]);
 
   // Fetch Markets
   const [markets, setMarkets] = useState<string[]>([]);
   const [loadingMarkets, setLoadingMarkets] = useState(false);
 
-  useEffect(() => {
-    if (!selectedExchange) {
+  const loadMarkets = useCallback((exchangeId: string) => {
+    if (!exchangeId) {
       setMarkets([]);
       return;
     }
     setLoadingMarkets(true);
-    fetch(`${CONFIG.API_BASE_URL}/market/exchanges/${selectedExchange}/markets`)
+    fetch(`${CONFIG.API_BASE_URL}/market/exchanges/${exchangeId}/markets`)
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) setMarkets(data);
       })
       .catch(err => console.error("Error fetching markets:", err))
       .finally(() => setLoadingMarkets(false));
-  }, [selectedExchange]);
+  }, []);
 
   // Fetch Symbols
   const [symbols, setSymbols] = useState<Symbol[]>([]);
   const [loadingSymbols, setLoadingSymbols] = useState(false);
+
+  const loadSymbols = useCallback((exchangeId: string, marketType: string) => {
+    if (!exchangeId || !marketType) return;
+    setLoadingSymbols(true);
+    fetch(`${CONFIG.API_BASE_URL}/market/exchanges/${exchangeId}/markets/${marketType}/symbols`)
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          const mapped: Symbol[] = data.map(s => ({
+            symbol: s,
+            baseAsset: s.split('/')[0] || '',
+            quoteAsset: s.split('/')[1] || '',
+            price: 0,
+            priceChange: 0,
+            priceChangePercent: 0,
+            volume: 0
+          }));
+          setSymbols(mapped);
+          // Auto-select first symbol if none selected
+          if (mapped.length > 0 && !selectedSymbol) {
+            // Use ref or handle this in a way that doesn't cause loops
+          }
+        }
+      })
+      .catch(err => console.error("Error fetching symbols:", err))
+      .finally(() => setLoadingSymbols(false));
+  }, [selectedSymbol]);
+
+  // Handle Exchange Change
+  const handleExchangeChange = (exchangeId: string) => {
+    setSelectedExchange(exchangeId);
+    loadMarkets(exchangeId);
+    // Clear dependent states
+    setSymbols([]);
+    setSelectedSymbol('');
+  };
+
+  // Handle Market Change
+  const handleMarketChange = (marketType: string) => {
+    setSelectedMarket(marketType);
+    if (selectedExchange) {
+      loadSymbols(selectedExchange, marketType);
+    }
+    setSelectedSymbol('');
+  };
 
   // --- Semi-Auto Access (WebSocket) ---
   const [isScanning, setIsScanning] = useState(false);
@@ -587,7 +651,7 @@ export default function Backtest() {
                 ) : (
                   <select
                     value={selectedExchange}
-                    onChange={(e) => setSelectedExchange(e.target.value)}
+                    onChange={(e) => handleExchangeChange(e.target.value)}
                     className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
                   >
                     <option value="">Seleccionar exchange</option>
@@ -612,7 +676,7 @@ export default function Backtest() {
                 ) : (
                   <select
                     value={selectedMarket}
-                    onChange={(e) => setSelectedMarket(e.target.value)}
+                    onChange={(e) => handleMarketChange(e.target.value)}
                     disabled={!selectedExchange || markets.length === 0}
                     className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
                   >
@@ -1076,11 +1140,11 @@ export default function Backtest() {
                 ) : (
                   <select
                     value={selectedExchange}
-                    onChange={(e) => setSelectedExchange(e.target.value)}
+                    onChange={(e) => handleExchangeChange(e.target.value)}
                     className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
                   >
-                    <option value="">Seleccionar</option>
-                    {exchanges.map((ex: Exchange) => (
+                    <option value="">Seleccionar Exchange</option>
+                    {exchanges.map((ex) => (
                       <option key={ex.exchangeId} value={ex.exchangeId}>
                         {ex.exchangeId.toUpperCase()}
                       </option>
@@ -1089,20 +1153,20 @@ export default function Backtest() {
                 )}
               </div>
 
-              {/* Market */}
+              {/* Market Type */}
               <div>
                 <label className="block text-sm font-semibold text-foreground mb-2">
                   Mercado
                 </label>
                 {loadingMarkets ? (
-                  <div className="flex items-center gap-2 px-4 py-2 border border-slate-700 rounded-lg bg-slate-900">
-                    <Loader2 className="animate-spin" size={16} />
-                    <span className="text-muted-foreground">Cargando...</span>
+                  <div className="flex items-center gap-2 px-4 py-2 bg-slate-900 rounded-lg border border-slate-700 h-[42px]">
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                    <span className="text-muted-foreground text-sm">Cargando...</span>
                   </div>
                 ) : (
                   <select
                     value={selectedMarket}
-                    onChange={(e) => setSelectedMarket(e.target.value)}
+                    onChange={(e) => handleMarketChange(e.target.value)}
                     disabled={!selectedExchange}
                     className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
                   >

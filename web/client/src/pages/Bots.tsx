@@ -125,7 +125,7 @@ const ExecutionMonitor = ({ bot }: any) => {
                                 <span className={(sig.decision?.includes('BUY') || sig.type === 'LONG' || sig.side === 'buy') ? 'text-blue-400' : 'text-amber-400'}>
                                     ● {sig.decision || sig.type || sig.side}
                                 </span>
-                                <span className="text-white font-mono">${sig.price?.toFixed(2)}</span>
+                                <span className="text-white font-mono">${sig.price?.toFixed(6)}</span>
                                 <span className="text-[10px] text-slate-500">
                                     {new Date(sig.createdAt || Date.now()).toLocaleTimeString()}
                                 </span>
@@ -187,7 +187,7 @@ const BotInfoModule = ({ bot }: { bot: any }) => {
                             <div className="flex gap-1">
                                 {(bot.takeProfits || []).map((tp: any, idx: number) => (
                                     <Badge key={idx} variant="outline" className={`text-[10px] ${tp.status === 'hit' ? 'bg-green-500/20 text-green-400' : 'text-slate-500'}`}>
-                                        {tp.price?.toFixed(2)}
+                                        {tp.price?.toFixed(6)}
                                     </Badge>
                                 ))}
                                 {(!bot.takeProfits || bot.takeProfits.length === 0) && <span className="text-xs text-slate-600">Auto (IA)</span>}
@@ -195,7 +195,7 @@ const BotInfoModule = ({ bot }: { bot: any }) => {
                         </div>
                         <div className="flex justify-between items-center">
                             <span className="text-slate-500 text-sm">Stop Loss:</span>
-                            <span className="font-mono text-red-400">${bot.stopLoss?.toFixed(4) || '---'}</span>
+                            <span className="font-mono text-red-400">${bot.stopLoss?.toFixed(6) || '---'}</span>
                         </div>
                         <div className="flex justify-between items-center">
                             <span className="text-slate-500 text-sm">Leverage:</span>
@@ -217,11 +217,11 @@ const BotInfoModule = ({ bot }: { bot: any }) => {
                     </div>
                     <div>
                         <p className="text-xs text-slate-500 mb-1">Precio Entrada</p>
-                        <p className="text-xl font-mono text-white">${bot.entryPrice?.toFixed(4)}</p>
+                        <p className="text-xl font-mono text-white">${bot.entryPrice?.toFixed(6)}</p>
                     </div>
                     <div>
                         <p className="text-xs text-slate-500 mb-1">Precio Actual</p>
-                        <p className="text-xl font-mono text-white">${bot.currentPrice?.toFixed(4) || '---'}</p>
+                        <p className="text-xl font-mono text-white">${bot.currentPrice?.toFixed(6) || '---'}</p>
                     </div>
                 </div>
             </Card>
@@ -357,7 +357,7 @@ const GlobalSignalTicker = () => {
                                 <Badge variant="outline" className={`h-4 text-[9px] px-1 ${(sig.decision?.includes('BUY') || sig.type === 'LONG') ? 'text-green-400 border-green-500/30' : 'text-red-400 border-red-500/30'}`}>
                                     {sig.decision || sig.type}
                                 </Badge>
-                                <span className="text-[10px] font-mono text-white">${sig.price?.toFixed(2)}</span>
+                                <span className="text-[10px] font-mono text-white">${sig.price?.toFixed(6)}</span>
                             </div>
                         </div>
                     ))}
@@ -408,6 +408,25 @@ const BotsPage = () => {
             if (lastMessage.data.length > 0 && !selectedId) {
                 setSelectedId(lastMessage.data[0].id);
             }
+        } else if (lastMessage.event === 'price_update') {
+            const { bot_id, price } = lastMessage.data;
+            setBots(prev => prev.map(b => {
+                if (b.id === bot_id) {
+                    // Recalcular PnL si hay una posición activa
+                    let newPnl = b.pnl;
+                    if (b.active_position && b.active_position.avgEntryPrice > 0) {
+                        const avg = b.active_position.avgEntryPrice;
+                        const side = b.active_position.side;
+                        if (side === 'BUY') {
+                            newPnl = ((price - avg) / avg) * 100;
+                        } else if (side === 'SELL') {
+                            newPnl = ((avg - price) / avg) * 100;
+                        }
+                    }
+                    return { ...b, currentPrice: price, pnl: newPnl };
+                }
+                return b;
+            }));
         } else if (lastMessage.event === 'bot_update') {
             setBots(prev => prev.map(b => b.id === lastMessage.data.id ? { ...b, ...lastMessage.data } : b));
         } else if (lastMessage.event === 'bot_created') {
@@ -515,25 +534,36 @@ const BotsPage = () => {
                                     </TabsContent>
 
                                     <TabsContent value="monitor">
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-                                            <Card className="p-6 bg-gradient-to-br from-blue-500/5 to-transparent border-blue-500/10">
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                                            <Card className="p-4 bg-gradient-to-br from-blue-500/5 to-transparent border-blue-500/10">
                                                 <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Profit Actual</p>
-                                                <h3 className={`text-3xl font-black ${activeBot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                <h3 className={`text-2xl font-black ${activeBot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
                                                     {activeBot.pnl > 0 ? '+' : ''}{activeBot.pnl?.toFixed(2) || '0.00'}%
                                                 </h3>
                                             </Card>
-                                            <Card className="p-6 bg-slate-900/50 border-white/5">
+                                            <Card className="p-4 bg-slate-900/50 border-white/5">
                                                 <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Precio Actual</p>
-                                                <h3 className="text-2xl font-mono text-white">
-                                                    ${activeBot.currentPrice?.toFixed(2) || '---'}
+                                                <h3 className="text-xl font-mono text-white">
+                                                    ${activeBot.currentPrice === undefined || activeBot.currentPrice === 0
+                                                        ? (activeBot.active_position?.avgEntryPrice?.toFixed(6) || '---')
+                                                        : activeBot.currentPrice.toFixed(6)}
                                                 </h3>
                                             </Card>
-                                            <Card className="p-6 bg-slate-900/50 border-white/5">
-                                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Bot ID</p>
-                                                <h3 className="text-sm font-mono text-slate-400 truncate" title={activeBot.id}>
-                                                    {activeBot.id}
+                                            <Card className="p-4 bg-slate-900/50 border-white/5">
+                                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Precio Entrada (Promediado)</p>
+                                                <h3 className="text-xl font-mono text-blue-400">
+                                                    ${(activeBot.active_position?.avgEntryPrice || activeBot.entryPrice)?.toFixed(6) || '---'}
                                                 </h3>
                                             </Card>
+                                            <Card className="p-4 bg-slate-900/50 border-white/5">
+                                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Cantidad ({activeBot.symbol?.split('/')[0]})</p>
+                                                <h3 className="text-xl font-mono text-amber-500">
+                                                    {activeBot.active_position?.currentQty?.toFixed(6) || '0.000000'}
+                                                </h3>
+                                            </Card>
+                                        </div>
+                                        <div className="mb-6 opacity-40 hover:opacity-100 transition-opacity">
+                                            <p className="text-[10px] font-mono text-slate-500">Bot ID: {activeBot.id}</p>
                                         </div>
                                         <ExecutionMonitor bot={activeBot} />
                                     </TabsContent>

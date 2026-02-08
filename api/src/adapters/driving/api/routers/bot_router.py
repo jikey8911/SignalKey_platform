@@ -124,24 +124,23 @@ async def list_user_bots(current_user: dict = Depends(get_current_user)):
     
     for bot in bots:
         b_dict = bot.to_dict()
+        bot_id_obj = ObjectId(b_dict["id"]) if isinstance(b_dict.get("id"), str) else b_dict.get("_id")
         
-        # Enrich with active trade data if exists
-        # We assume one active trade per symbol/user context usually
-        active_trade = await db.trades.find_one({
-            "userId": user_id,
-            "symbol": bot.symbol,
-            "status": "active"
+        # 1. Buscar posición activa en la nueva colección 'positions'
+        active_position = await db.db["positions"].find_one({
+            "botId": bot_id_obj,
+            "status": "OPEN"
         })
         
-        if active_trade:
-            b_dict["active_trade_id"] = str(active_trade["_id"])
-            b_dict["pnl"] = active_trade.get("pnl", 0.0)
-            b_dict["current_price"] = active_trade.get("currentPrice", 0.0)
-            b_dict["status"] = "active" # Force active status if trade is running
+        if active_position:
+            b_dict["active_position"] = _serialize_mongo(active_position)
+            # Para compatibilidad con legacy frontend:
+            b_dict["pnl"] = active_position.get("roi", 0.0)
+            b_dict["entryPrice"] = active_position.get("avgEntryPrice", 0.0)
+            b_dict["currentQty"] = active_position.get("currentQty", 0.0)
         else:
-            b_dict["active_trade_id"] = None
+            b_dict["active_position"] = None
             b_dict["pnl"] = 0.0
-            b_dict["current_price"] = 0.0
             
         result.append(b_dict)
         

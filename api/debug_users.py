@@ -12,7 +12,7 @@ ATLAS_DB_NAME = os.getenv("MONGODB_DB_NAME")
 
 async def compare_users():
     print("--- USER COMPARISON START ---")
-    
+     
     local_client = AsyncIOMotorClient(LOCAL_URI)
     atlas_client = AsyncIOMotorClient(ATLAS_URI)
     

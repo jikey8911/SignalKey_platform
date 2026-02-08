@@ -154,6 +154,11 @@ class CcxtAdapter(IExchangePort):
         ticker = await client.fetch_ticker(symbol)
         return ticker['last']
 
+    async def get_public_current_price(self, symbol: str, exchange_id: str = "binance") -> float:
+        client = await self._get_system_client_for_exchange(exchange_id)
+        ticker = await client.fetch_ticker(symbol)
+        return ticker['last']
+
     async def create_public_instance(self, exchange_id: str):
         return await self._get_system_client_for_exchange(exchange_id)
 
@@ -265,6 +270,44 @@ class CcxtAdapter(IExchangePort):
         return await self.get_historical_data(
             symbol, timeframe, limit, use_random_date, user_id=None, exchange_id=target_exchange
         )
+
+    async def get_markets(self, exchange_id: str) -> List[str]:
+        """
+        Returns available market types (spot, swap, future, etc.) for an exchange.
+        """
+        try:
+            client = await self._get_system_client_for_exchange(exchange_id)
+            await client.load_markets()
+            
+            # Extract underlying market types
+            market_types = set()
+            for key, market in client.markets.items():
+                m_type = market.get('type')
+                if m_type:
+                    market_types.add(m_type)
+            
+            return sorted(list(market_types))
+        except Exception as e:
+            logger.error(f"Error fetching markets for {exchange_id}: {e}")
+            return []
+
+    async def get_symbols(self, exchange_id: str, market_type: str) -> List[str]:
+        """
+        Returns active symbols for a specific market type on an exchange.
+        """
+        try:
+            client = await self._get_system_client_for_exchange(exchange_id)
+            await client.load_markets()
+            
+            symbols = []
+            for symbol, market in client.markets.items():
+                if market.get('type') == market_type and market.get('active', True):
+                    symbols.append(symbol)
+            
+            return sorted(symbols)
+        except Exception as e:
+            logger.error(f"Error fetching symbols for {exchange_id} ({market_type}): {e}")
+            return []
 
     # --- END MISSING METHODS ---
 

@@ -18,6 +18,7 @@ class BootManager:
         # Usamos el db_adapter pasado o el global si no se pasa (para compatibilidad)
         final_db = db_adapter_in if db_adapter_in is not None else db_adapter
         final_exchange = exchange_adapter if exchange_adapter else ccxt_service
+        self.socket_service = socket_service
         self.engine = ExecutionEngine(final_db, socket_service, exchange_adapter=final_exchange)
 
     async def initialize_active_bots(self):
@@ -25,6 +26,9 @@ class BootManager:
         Busca en MongoDB y relanza los procesos de monitoreo.
         """
         logger.info("Iniciando proceso de recuperación de bots...")
+        
+        # 1. Iniciar el streaming de precios centralizado (NUEVO)
+        asyncio.create_task(self._price_streaming_loop())
         
         try:
             # get_active_bots devuelve objetos BotInstance
@@ -48,6 +52,51 @@ class BootManager:
             
         except Exception as e:
             logger.error(f"Fallo crítico en la recuperación automática: {e}")
+
+    async def _price_streaming_loop(self):
+        """Bucle centralizado que emite precios actuales para todos los bots activos."""
+        logger.info("📡 Iniciando Streaming de Precios Live...")
+        while True:
+            try:
+                if not self.socket_service:
+                    await asyncio.sleep(5)
+                    continue
+
+                active_bots = await self.repo.get_active_bots()
+                if not active_bots:
+                    await asyncio.sleep(10)
+                    continue
+
+                # Agrupar por símbolo para optimizar llamadas a la API
+                symbol_map = {}
+                for bot in active_bots:
+                    sym = bot.symbol
+                    if sym not in symbol_map:
+                        symbol_map[sym] = []
+                    symbol_map[sym].append(bot)
+
+                for symbol, bots in symbol_map.items():
+                    try:
+                        # Obtenemos precio público (Binance default por ahora)
+                        # TODO: Podría usarse el exchange configurado en el bot si es necesario
+                        price = await ccxt_service.get_public_current_price(symbol)
+                        
+                        # Notificar a cada usuario del bot
+                        for bot in bots:
+                            user_id = str(bot.user_id)
+                            await self.socket_service.emit_to_user(user_id, "price_update", {
+                                "bot_id": str(bot.id),
+                                "symbol": symbol,
+                                "price": price,
+                                "timestamp": datetime.utcnow().isoformat()
+                            })
+                    except Exception as e:
+                        logger.error(f"Error streaming price for {symbol}: {e}")
+
+            except Exception as e:
+                logger.error(f"Error crítico en _price_streaming_loop: {e}")
+            
+            await asyncio.sleep(5) # Actualización cada 5 segundos
 
     async def monitor_loop(self, bot_data):
         """

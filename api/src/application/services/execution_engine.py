@@ -116,36 +116,139 @@ class ExecutionEngine:
         except Exception as e:
             self.logger.error(f"Error persistiendo señal: {e}")
 
-    async def _execute_simulated(self, bot, action, side, price, amount):
-        """Ejecuta simulación actualizando DB."""
-        qty = amount / price
-        pnl = 0
+    async def _update_simulation_position_db(self, bot_instance, action, side, exec_price, exec_qty, exec_amount):
+        """
+        Maneja la lógica matemática avanzada de la posición simulada y actualiza la colección 'positions'.
+        """
+        bot_id = bot_instance['_id']
+        symbol = bot_instance['symbol']
+        user_id = bot_instance['user_id']
+        
+        # 1. Buscar la posición activa en la nueva colección
+        positions_coll = self.db.db["positions"]
+        position = await positions_coll.find_one({
+            "botId": ObjectId(bot_id),
+            "status": "OPEN"
+        })
 
-        # Estado actual
-        curr_pos = bot.get('position', {})
-        current_qty = float(curr_pos.get('qty', 0))
-        current_avg = float(curr_pos.get('avg_price', 0))
+        # Valores iniciales si no existe
+        if not position:
+            position = {
+                "botId": ObjectId(bot_id),
+                "userId": user_id,
+                "symbol": symbol,
+                "status": "OPEN",
+                "side": side,
+                "currentQty": 0.0,
+                "avgEntryPrice": 0.0,
+                "investedAmount": 0.0,
+                "totalTrades": 0,
+                "realizedPnl": 0.0,
+                "roi": 0.0
+            }
 
-        new_qty = qty
-        new_avg_price = price
-
+        # 2. Lógica Matemática según la Acción
+        prev_qty = float(position["currentQty"])
+        prev_avg = float(position["avgEntryPrice"])
+        prev_invested = float(position["investedAmount"])
+        
+        # Si es FLIP, cerramos la anterior (lógica simplificada: reinicio)
         if action == "FLIP":
-            # Calcular PnL de cierre virtual
-            pnl = self._calculate_pnl(bot, price)
-            self.logger.info(f"🔄 SIM FLIP: Closing with PnL {pnl:.2f}%")
-            # Open new position
-            new_qty = amount / price
-            new_avg_price = price
+            # Aquí podrías marcar la anterior como CLOSED y crear una nueva
+            await positions_coll.update_one(
+                {"_id": position.get("_id")}, 
+                {"$set": {"status": "CLOSED", "closedAt": datetime.utcnow()}}
+            )
+            # Reiniciamos el objeto para la nueva posición
+            position["currentQty"] = 0.0
+            position["avgEntryPrice"] = 0.0
+            position["investedAmount"] = 0.0
+            position["totalTrades"] = 0
+            position["side"] = side
+            prev_qty = 0.0 # Reset para el cálculo siguiente
 
-        elif action == "DCA":
-            # Promediar Precio
-            total_qty = current_qty + qty
-            # Formula: (OldTotalVal + NewVal) / NewTotalQty
-            new_avg_price = ((current_qty * current_avg) + amount) / total_qty
-            new_qty = total_qty
+        # Calcular nuevos valores
+        # NOTA: Asumimos que 'side' es la dirección de la señal.
+        # Si la posición es LONG y la señal es BUY -> Aumenta posición (DCA)
+        # Si la posición es LONG y la señal es SELL -> Disminuye posición (Take Profit / Cierre parcial)
+        
+        is_increasing_position = (position["side"] == side) or (prev_qty == 0)
 
-        # Actualizar DB
-        await self._update_bot_db(bot['_id'], side, new_qty, new_avg_price, pnl)
+        if is_increasing_position:
+            # --- COMPRA / AUMENTO (DCA) ---
+            new_qty = prev_qty + exec_qty
+            total_cost = (prev_qty * prev_avg) + (exec_qty * exec_price)
+            new_avg_price = total_cost / new_qty if new_qty > 0 else exec_price
+            
+            position["currentQty"] = new_qty
+            position["avgEntryPrice"] = new_avg_price
+            position["investedAmount"] = total_cost
+            position["totalTrades"] += 1
+            
+        else:
+            # --- VENTA / REDUCCIÓN ---
+            trade_pnl = 0
+            if position["side"] == "BUY": # Long
+                trade_pnl = (exec_price - prev_avg) * exec_qty
+            else: # Short
+                trade_pnl = (prev_avg - exec_price) * exec_qty
+                
+            position["realizedPnl"] += trade_pnl
+            position["currentQty"] = max(0, prev_qty - exec_qty)
+            position["investedAmount"] = position["currentQty"] * prev_avg
+            
+            # Si cantidad llega a 0, cerramos
+            if position["currentQty"] <= 0.0000001:
+                position["status"] = "CLOSED"
+                position["closedAt"] = datetime.utcnow()
+
+        # 3. Calcular ROI actual
+        if position["avgEntryPrice"] > 0:
+            current_val = position["currentQty"] * exec_price
+            cost_val = position["currentQty"] * position["avgEntryPrice"]
+            
+            unrealized_pnl = 0
+            if position["side"] == "BUY":
+                unrealized_pnl = current_val - cost_val
+                position["roi"] = ((exec_price - position["avgEntryPrice"]) / position["avgEntryPrice"]) * 100
+            else:
+                unrealized_pnl = cost_val - current_val
+                position["roi"] = ((position["avgEntryPrice"] - exec_price) / position["avgEntryPrice"]) * 100
+            
+            position["unrealizedPnl"] = unrealized_pnl
+
+        # 4. Guardar en BD (Upsert)
+        position["updatedAt"] = datetime.utcnow()
+        
+        if "_id" in position:
+            await positions_coll.replace_one({"_id": position["_id"]}, position)
+            return position["currentQty"], position["avgEntryPrice"], position["roi"]
+        else:
+            await positions_coll.insert_one(position)
+            return position["currentQty"], position["avgEntryPrice"], 0.0
+
+    async def _execute_simulated(self, bot, action, side, price, amount):
+        """Ejecuta simulación actualizando DB y la colección 'positions'."""
+        qty_executed = amount / price
+        
+        # Llamar al nuevo gestor de posiciones
+        final_qty, final_avg_price, current_roi = await self._update_simulation_position_db(
+            bot_instance=bot,
+            action=action,
+            side=side,
+            exec_price=price,
+            exec_qty=qty_executed,
+            exec_amount=amount
+        )
+
+        pnl = 0 
+        if action == "FLIP":
+             pnl = self._calculate_pnl(bot, price)
+
+        # Actualizar bot_instances (para compatibilidad)
+        await self._update_bot_db(bot['_id'], bot.get('side', side), final_qty, final_avg_price, pnl)
+
+        self.logger.info(f"📈 SIM EXEC: {bot['symbol']} | Side: {side} | Qty: {qty_executed:.4f} | Avg: {final_avg_price:.2f} | ROI: {current_roi:.2f}% | PnL: {pnl:.2f}")
 
         return {
             "success": True,
@@ -153,7 +256,9 @@ class ExecutionEngine:
             "price": price,
             "amount": amount,
             "side": side,
-            "pnl": pnl
+            "pnl": pnl,
+            "new_position_avg": final_avg_price,
+            "roi": current_roi
         }
 
     async def _execute_real(self, bot, action, side, price, amount):

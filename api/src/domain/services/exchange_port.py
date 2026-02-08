@@ -34,5 +34,15 @@ class IExchangePort(ABC):
         """Fetch historical data using public API (no credentials required)."""
         pass
 
+    @abstractmethod
+    async def get_markets(self, exchange_id: str) -> List[str]:
+        """Fetch available market types for an exchange."""
+        pass
+
+    @abstractmethod
+    async def get_symbols(self, exchange_id: str, market_type: str) -> List[str]:
+        """Fetch active symbols for a specific market type."""
+        pass
+
 # Alias for backward compatibility
 ExchangePort = IExchangePort
