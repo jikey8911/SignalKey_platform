@@ -128,6 +128,8 @@ class BootManager:
                             await self.engine.process_signal(current_bot, {
                                 "signal": signal_val,
                                 "price": candles_list[-1]['close'],
+                                "confidence": prediction.get('confidence'),
+                                "reasoning": prediction.get('reasoning') or f"Strategy: {bot_data.get('strategy_name')}",
                                 "is_alert": False 
                             })
 

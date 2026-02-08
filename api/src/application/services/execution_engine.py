@@ -104,15 +104,24 @@ class ExecutionEngine:
             from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
             signal_repo = MongoDBSignalRepository(self.db)
             
+            strategy_name = bot_instance.get('strategy_name', 'AUTO_STRATEGY')
+            source = f"AUTO_STRATEGY_{strategy_name.upper()}" if strategy_name != 'AUTO_STRATEGY' else "AUTO_STRATEGY"
+            
+            from api.src.domain.entities.signal import MarketType
+            market_type_str = bot_instance.get('market_type') or bot_instance.get('marketType') or 'SPOT'
+            
             new_sig = Signal(
                 id=None,
                 userId=str(bot_instance.get('user_id')),
-                source="AUTO_STRATEGY",
-                rawText=f"Signal {signal_data['signal']} at {signal_data['price']}",
+                source=source,
+                rawText=signal_data.get('rawText') or f"Signal {signal_data['signal']} at {signal_data['price']}",
                 status=SignalStatus.EXECUTING,
                 createdAt=datetime.utcnow(),
                 symbol=bot_instance['symbol'],
+                marketType=MarketType(market_type_str.upper()),
                 decision=Decision.BUY if signal_data['signal'] == 1 else Decision.SELL,
+                confidence=signal_data.get('confidence'),
+                reasoning=signal_data.get('reasoning'),
                 botId=str(bot_instance.get('id') or bot_instance.get('_id'))
             )
             await signal_repo.save(new_sig)
@@ -256,7 +265,7 @@ class ExecutionEngine:
             "pnl": exec_result.get('closed_pnl', 0),
             "mode": bot_instance.get('mode'),
             "marketType": bot_instance.get('market_type'),
-            "timestamp": datetime.now()
+            "timestamp": datetime.utcnow()
         }
         await self.db.db["trades"].insert_one(trade_doc)
 
@@ -305,7 +314,8 @@ class ExecutionEngine:
                 "symbol": bot_instance.get('symbol'),
                 "type": "LONG" if signal_data.get('signal') == BaseStrategy.SIGNAL_BUY else "SHORT",
                 "price": exec_result.get('price', signal_data.get('price')),
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.utcnow().isoformat() + "Z",
+                "createdAt": datetime.utcnow().isoformat() + "Z",
                 "mode": bot_instance.get('mode'),
                 "pnl_impact": exec_result.get('pnl', 0),
                 "exchange_id": bot_instance.get("exchangeId", "binance") # Added for Task 3.2

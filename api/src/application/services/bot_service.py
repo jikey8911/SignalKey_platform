@@ -702,6 +702,11 @@ class SignalBotService:
         try:
             saved_signal = await self.signal_repository.save(signal_entity)
             logger.info(f"💾 Signal saved: {saved_signal.id} ({decision_enum})")
+            
+            # --- EMISIÓN SOCKET PARA MONITOR EN TIEMPO REAL ---
+            from api.src.adapters.driven.notifications.socket_service import socket_service
+            await socket_service.emit_to_user(user_id_str, "signal_update", saved_signal.to_dict())
+            # --------------------------------------------------
         except Exception as e:
             logger.error(f"Error saving signal: {e}")
             saved_signal = signal_entity # Fallback without ID

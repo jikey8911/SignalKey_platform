@@ -101,7 +101,7 @@ const ExecutionMonitor = ({ bot }: any) => {
                             timeframe={bot?.timeframe}
                             trades={combinedSignals.map(s => ({
                                 time: new Date(s.createdAt || Date.now()).getTime(),
-                                price: s.price,
+                                price: s.price || s.parameters?.entry_price || s.entryPrice,
                                 side: (s.decision?.includes('BUY') || s.type === 'LONG' || s.side === 'buy') ? 'BUY' : 'SELL',
                                 label: s.decision || s.type || s.side
                             }))}

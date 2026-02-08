@@ -34,7 +34,7 @@ interface ChartProps {
 }
 
 const toSeconds = (t: string | number): Time => {
-    if (typeof t === 'string') return (new Date(t).getTime() / 1000) as Time;
+    if (typeof t === 'string') return Math.floor(new Date(t).getTime() / 1000) as Time;
     if (typeof t === 'number') {
         if (t > 33000000000) return (Math.floor(t / 1000)) as Time;
         return Math.floor(t) as Time;

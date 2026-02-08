@@ -99,7 +99,7 @@ class Signal:
             "source": self.source,
             "rawText": self.rawText,
             "status": self.status.value if hasattr(self.status, 'value') else str(self.status),
-            "createdAt": self.createdAt.isoformat() if hasattr(self.createdAt, 'isoformat') else str(self.createdAt),
+            "createdAt": self.createdAt.isoformat() + ("Z" if not self.createdAt.tzinfo else "") if hasattr(self.createdAt, 'isoformat') else str(self.createdAt),
             "symbol": self.symbol,
             "marketType": self.marketType.value if hasattr(self.marketType, 'value') else (str(self.marketType) if self.marketType else None),
             "decision": self.decision.value if hasattr(self.decision, 'value') else (str(self.decision) if self.decision else None),

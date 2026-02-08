@@ -37,7 +37,7 @@ class ProcessSignalUseCase:
             "id": saved_signal.id,
             "source": source,
             "status": saved_signal.status,
-            "createdAt": saved_signal.createdAt.isoformat()
+            "createdAt": saved_signal.createdAt.isoformat() + "Z"
         })
 
         if not config.get("isAutoEnabled", True):
@@ -82,7 +82,8 @@ class ProcessSignalUseCase:
                     "id": current_id,
                     "symbol": analysis.symbol,
                     "status": status,
-                    "decision": analysis.decision
+                    "decision": analysis.decision,
+                    "createdAt": datetime.utcnow().isoformat() + "Z"
                 })
 
                 if analysis.decision == Decision.HOLD:
