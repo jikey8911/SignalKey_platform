@@ -59,37 +59,48 @@ class StrategyTrainer:
             try:
                 module = importlib.import_module(module_path)
             except ImportError:
-                # Fallback to root strategies if market-specific not found
+                # Try fallback paths
+                fallbacks = []
                 if market_type:
-                    module_path = f"api.src.domain.strategies.spot.{strategy_name}"
-                    module = importlib.import_module(module_path)
-                else:
+                    fallbacks.append(f"api.src.domain.strategies.spot.{strategy_name}")
+                fallbacks.append(f"api.src.domain.strategies.{strategy_name}")
+                
+                module = None
+                for fb_path in fallbacks:
+                    try:
+                        module = importlib.import_module(fb_path)
+                        module_path = fb_path
+                        break
+                    except ImportError:
+                        continue
+                
+                if not module:
                     raise
             
-            # Try multiple class naming conventions
-            possible_names = []
-            
-            # 1. PascalCase (e.g. stochastic -> Stochastic)
-            pascal = "".join(w.title() for w in strategy_name.split("_"))
-            possible_names.append(pascal)
-            
-            # 2. PascalCase + Strategy (e.g. StochasticStrategy)
-            possible_names.append(pascal + "Strategy")
-            
-            # 3. UPPERCASE + Strategy (e.g. vwap -> VWAPStrategy)
-            possible_names.append(strategy_name.upper() + "Strategy")
-            
-            # 4. UPPERCASE (e.g. VWAP)
-            possible_names.append(strategy_name.upper())
+            # --- IMPROVED: Search for any class inheriting from BaseStrategy ---
+            # This avoids strict naming mismatches (e.g. RSI vs Rsi)
+            from api.src.domain.strategies.base import BaseStrategy
+            import inspect
 
-            # 5. Original naming (lowercase or whatever filename is)
-            possible_names.append(strategy_name)
+            for name, obj in inspect.getmembers(module):
+                if inspect.isclass(obj) and issubclass(obj, BaseStrategy) and obj is not BaseStrategy:
+                    logger.info(f"Loaded strategy class '{name}' from {module_path}")
+                    return obj
+
+            # Fallback to old name-based logic if no explicitly inheriting class found
+            possible_names = [
+                "".join(w.title() for w in strategy_name.split("_")),
+                "".join(w.title() for w in strategy_name.split("_")) + "Strategy",
+                strategy_name.upper() + "Strategy",
+                strategy_name.upper(),
+                strategy_name
+            ]
 
             for name in possible_names:
                 if hasattr(module, name):
                     return getattr(module, name)
             
-            logger.error(f"Could not find strategy class in {module_path}. Checked: {possible_names}")
+            logger.error(f"Could not find strategy class in {module_path}.")
             return None
         except Exception as e:
             logger.error(f"Error loading strategy {strategy_name}: {e}")
