@@ -285,7 +285,7 @@ const SignalHistoryModule = ({ botId }: { botId: string }) => {
                                         </Badge>
                                     </td>
                                     <td className="px-6 py-4 font-mono text-white">
-                                        {signal.price ? `$${signal.price.toFixed(2)}` : '---'}
+                                        {signal.price ? `$${signal.price.toFixed(6)}` : '---'}
                                     </td>
                                     <td className="px-6 py-4">
                                         {signal.confidence ? (
@@ -403,30 +403,46 @@ const BotsPage = () => {
         if (!lastMessage) return;
 
         if (lastMessage.event === 'all_bots_list') {
-            setBots(lastMessage.data);
+            setBots(prev => {
+                const newData = lastMessage.data;
+                return newData.map((newBot: any) => {
+                    const existingBot = prev.find(b => b.id === newBot.id);
+                    // Preservar el currentPrice del estado local para evitar parpadeos si el DB es lento
+                    return {
+                        ...newBot,
+                        currentPrice: existingBot?.currentPrice || newBot.currentPrice
+                    };
+                });
+            });
             setLoading(false);
             if (lastMessage.data.length > 0 && !selectedId) {
                 setSelectedId(lastMessage.data[0].id);
             }
         } else if (lastMessage.event === 'price_update') {
             const { bot_id, price } = lastMessage.data;
-            setBots(prev => prev.map(b => {
-                if (b.id === bot_id) {
-                    // Recalcular PnL si hay una posición activa
-                    let newPnl = b.pnl;
-                    if (b.active_position && b.active_position.avgEntryPrice > 0) {
-                        const avg = b.active_position.avgEntryPrice;
-                        const side = b.active_position.side;
-                        if (side === 'BUY') {
-                            newPnl = ((price - avg) / avg) * 100;
-                        } else if (side === 'SELL') {
-                            newPnl = ((avg - price) / avg) * 100;
+            setBots(prev => {
+                const targetBot = prev.find(b => b.id === bot_id);
+                // Evitar actualizaciones innecesarias si el precio no cambió (como pidió el usuario)
+                if (targetBot && targetBot.currentPrice === price) return prev;
+
+                return prev.map(b => {
+                    if (b.id === bot_id) {
+                        // Recalcular PnL si hay una posición activa
+                        let newPnl = b.pnl;
+                        if (b.active_position && b.active_position.avgEntryPrice > 0) {
+                            const avg = b.active_position.avgEntryPrice;
+                            const side = b.active_position.side;
+                            if (side === 'BUY') {
+                                newPnl = ((price - avg) / avg) * 100;
+                            } else if (side === 'SELL') {
+                                newPnl = ((avg - price) / avg) * 100;
+                            }
                         }
+                        return { ...b, currentPrice: price, pnl: newPnl };
                     }
-                    return { ...b, currentPrice: price, pnl: newPnl };
-                }
-                return b;
-            }));
+                    return b;
+                });
+            });
         } else if (lastMessage.event === 'bot_update') {
             setBots(prev => prev.map(b => b.id === lastMessage.data.id ? { ...b, ...lastMessage.data } : b));
         } else if (lastMessage.event === 'bot_created') {
@@ -508,9 +524,14 @@ const BotsPage = () => {
                                 <div className="flex justify-between items-end">
                                     <p className="text-[10px] font-mono text-slate-400">{bot.symbol} | {bot.strategy_name}</p>
                                     {bot.pnl !== undefined && bot.pnl !== 0 && (
-                                        <span className={`text-xs font-bold font-mono ${bot.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                            {bot.pnl > 0 ? '+' : ''}{bot.pnl.toFixed(2)}%
-                                        </span>
+                                        <div className="flex items-center gap-1">
+                                            <div className={`p-1 rounded-full ${bot.pnl >= 0 ? 'bg-green-500/10' : 'bg-red-500/10'}`}>
+                                                <TrendingUp className={`w-3 h-3 ${bot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`} />
+                                            </div>
+                                            <span className={`text-[10px] font-bold ${bot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                {bot.pnl > 0 ? '+' : ''}{bot.pnl.toFixed(6)}%
+                                            </span>
+                                        </div>
                                     )}
                                 </div>
                             </Card>
@@ -538,7 +559,7 @@ const BotsPage = () => {
                                             <Card className="p-4 bg-gradient-to-br from-blue-500/5 to-transparent border-blue-500/10">
                                                 <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Profit Actual</p>
                                                 <h3 className={`text-2xl font-black ${activeBot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                                                    {activeBot.pnl > 0 ? '+' : ''}{activeBot.pnl?.toFixed(2) || '0.00'}%
+                                                    {activeBot.pnl > 0 ? '+' : ''}{activeBot.pnl?.toFixed(6) || '0.000000'}%
                                                 </h3>
                                             </Card>
                                             <Card className="p-4 bg-slate-900/50 border-white/5">
