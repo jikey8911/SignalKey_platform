@@ -51,48 +51,33 @@ class StrategyTrainer:
     def load_strategy_class(self, strategy_name: str, market_type: str = None):
         """Dynamic strategy class loading."""
         try:
-            if market_type:
-                module_path = f"api.src.domain.strategies.{market_type.lower()}.{strategy_name}"
-            else:
-                module_path = f"api.src.domain.strategies.spot.{strategy_name}"
+            # La ruta debe ser estrictamente api.src.domain.strategies.[market_type].[strategy_name]
+            # Si no se provee market_type, se asume 'spot' por defecto pero dentro de esa estructura.
+            market = market_type.lower() if market_type else "spot"
+            module_path = f"api.src.domain.strategies.{market}.{strategy_name}"
 
             try:
                 module = importlib.import_module(module_path)
             except ImportError:
-                # Try fallback paths
-                fallbacks = []
-                if market_type:
-                    fallbacks.append(f"api.src.domain.strategies.spot.{strategy_name}")
-                fallbacks.append(f"api.src.domain.strategies.{strategy_name}")
-                
-                module = None
-                for fb_path in fallbacks:
-                    try:
-                        module = importlib.import_module(fb_path)
-                        module_path = fb_path
-                        break
-                    except ImportError:
-                        continue
-                
-                if not module:
-                    raise
+                logger.error(f"Estrategia '{strategy_name}' no encontrada en la ruta obligatoria: {module_path}")
+                raise
             
             # --- IMPROVED: Search for any class inheriting from BaseStrategy ---
-            # This avoids strict naming mismatches (e.g. RSI vs Rsi)
-            from api.src.domain.strategies.base import BaseStrategy
+            # Use MRO check to be robust against duplicate BaseStrategy imports via different paths
             import inspect
-
             for name, obj in inspect.getmembers(module):
-                if inspect.isclass(obj) and issubclass(obj, BaseStrategy) and obj is not BaseStrategy:
-                    logger.info(f"Loaded strategy class '{name}' from {module_path}")
-                    return obj
+                if inspect.isclass(obj):
+                    # Check if any class in inheritance tree is named BaseStrategy
+                    if any(base.__name__ == 'BaseStrategy' for base in obj.__mro__) and obj.__name__ != 'BaseStrategy':
+                        logger.info(f"Loaded strategy class '{name}' from {module_path}")
+                        return obj
 
             # Fallback to old name-based logic if no explicitly inheriting class found
             possible_names = [
-                "".join(w.title() for w in strategy_name.split("_")),
+                "".join(w.title() for w in strategy_name.split("_")), # rsi_strategy -> RsiStrategy
+                strategy_name.upper(), # rsi -> RSI
+                strategy_name.upper() + "Strategy", # rsi -> RSIStrategy
                 "".join(w.title() for w in strategy_name.split("_")) + "Strategy",
-                strategy_name.upper() + "Strategy",
-                strategy_name.upper(),
                 strategy_name
             ]
 

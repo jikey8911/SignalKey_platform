@@ -121,7 +121,7 @@ class ExecutionEngine:
 
     async def _execute_simulated_trade(self, bot_instance, signal, price, amount, is_flip):
         """Ejecuta un trade simulado con soporte para flipping."""
-        bot_id = bot_instance['id']
+        bot_id = str(bot_instance.get('id') or bot_instance.get('_id'))
         side = "buy" if signal == BaseStrategy.SIGNAL_BUY else "sell"
         target_side = side.upper()
 
@@ -222,8 +222,9 @@ class ExecutionEngine:
             if trade_result.success:
                 # Actualizar posición local
                 updated_pos = {'qty': amount / price, 'avg_price': trade_result.price or price}
+                bot_id = str(bot_instance.get('id') or bot_instance.get('_id'))
                 await self.db.db["bot_instances"].update_one(
-                    {"_id": ObjectId(bot_instance['id'])},
+                    {"_id": ObjectId(bot_id)},
                     {"$set": {
                         "position": updated_pos,
                         "side": target_side,
@@ -247,7 +248,7 @@ class ExecutionEngine:
         """Guarda la señal y el trade en MongoDB."""
         trade_doc = {
             "userId": bot_instance.get('user_id'),
-            "botId": bot_instance.get('id'),
+            "botId": str(bot_instance.get('id') or bot_instance.get('_id')),
             "symbol": bot_instance.get('symbol'),
             "side": exec_result.get('side').upper(),
             "price": exec_result.get('price'),

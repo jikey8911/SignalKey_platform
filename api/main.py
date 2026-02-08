@@ -138,11 +138,43 @@ signal_bot_service = SignalBotService(cex_service=cex_service, dex_service=dex_s
 
 # --- ROUTERS ---
 from fastapi import APIRouter
-from api.src.adapters.driving.api.routers import (
-    auth_router, user_config_router, telegram_router, backtest_router,
-    websocket_router, ml_router, market_data_router, bot_router,
-    signal_router, trade_router, health_router
-)
+
+logger.info("📦 Cargando routers de la API...")
+
+from api.src.adapters.driving.api.routers import auth_router
+logger.info("  - Auth router [OK]")
+
+from api.src.adapters.driving.api.routers import user_config_router
+logger.info("  - User Config router [OK]")
+
+from api.src.adapters.driving.api.routers import bot_router
+logger.info("  - Bot router [OK]")
+
+from api.src.adapters.driving.api.routers import market_data_router
+logger.info("  - Market Data router [OK]")
+
+from api.src.adapters.driving.api.routers import signal_router
+logger.info("  - Signal router [OK]")
+
+from api.src.adapters.driving.api.routers import trade_router
+logger.info("  - Trade router [OK]")
+
+from api.src.adapters.driving.api.routers import ml_router
+logger.info("  - ML router [OK]")
+
+from api.src.adapters.driving.api.routers import backtest_router
+logger.info("  - Backtest router [OK]")
+
+from api.src.adapters.driving.api.routers import telegram_router
+logger.info("  - Telegram router [OK]")
+
+from api.src.adapters.driving.api.routers import websocket_router
+logger.info("  - WebSocket router [OK]")
+
+from api.src.adapters.driving.api.routers import health_router
+logger.info("  - Health router [OK]")
+
+logger.info("✅ Todos los routers cargados.")
 
 # API Router (prefix /api)
 api_router = APIRouter(prefix="/api")

@@ -6,7 +6,6 @@ import asyncio
 from bson import ObjectId
 from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
 from api.src.adapters.driven.persistence.mongodb import db
-from api.main import backtest_service, cex_service
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +35,9 @@ async def _run_batch_backtest(user_id: str, params: dict):
     days = int(params.get("days", 7))
     initial_balance = float(params.get("initialBalance", 10000))
     trade_amount = float(params.get("tradeAmount", 1000)) if params.get("tradeAmount") else None
+
+    # Importación local para evitar dependencias circulares
+    from api.main import backtest_service, cex_service
 
     try:
         # 1. Obtener símbolos activos del exchange
