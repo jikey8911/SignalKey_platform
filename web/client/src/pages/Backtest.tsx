@@ -184,54 +184,54 @@ export default function Backtest() {
       const details = data.details || {};
 
       const normalizeTime = (t: any): number => {
-          if (typeof t === 'string') return new Date(t).getTime();
-          if (typeof t === 'number' && t < 20000000000) return t * 1000;
-          return t;
+        if (typeof t === 'string') return new Date(t).getTime();
+        if (typeof t === 'number' && t < 20000000000) return t * 1000;
+        return t;
       };
 
       const transformedTrades: Trade[] = details.trades?.map((t: any) => ({
-          time: normalizeTime(t.time),
-          price: t.price,
-          side: t.type as 'BUY' | 'SELL',
-          profit: t.pnl,
-          amount: t.amount,
-          avg_price: t.avg_price,
-          label: t.label,
-          pnl_percent: t.pnl_percent
+        time: normalizeTime(t.time),
+        price: t.price,
+        side: t.type as 'BUY' | 'SELL',
+        profit: t.pnl,
+        amount: t.amount,
+        avg_price: t.avg_price,
+        label: t.label,
+        pnl_percent: t.pnl_percent
       })) || [];
 
       const candles: Candle[] = details.chart_data?.map((c: any) => ({
-          time: normalizeTime(c.time),
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close
+        time: normalizeTime(c.time),
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close
       })) || [];
 
       const result: BacktestResults = {
-          symbol: data.symbol,
-          timeframe: timeframe, // Usamos el estado local ya que es el mismo para todos
-          days: days,
-          totalTrades: data.trades,
-          winRate: data.win_rate,
-          profitFactor: details.metrics?.profit_factor?.toString() || '0',
-          maxDrawdown: details.metrics?.max_drawdown?.toFixed(2) || '0',
-          totalReturn: data.pnl?.toFixed(2) || '0',
-          sharpeRatio: details.metrics?.sharpe_ratio?.toString() || '0',
-          candles: candles,
-          trades: transformedTrades,
-          botConfiguration: details.bot_configuration,
-          metrics: details.metrics,
-          tournamentResults: details.tournament_results,
-          winner: details.winner,
-          strategy_name: data.strategy,
-          initial_balance: details.initial_balance,
-          final_balance: details.final_balance
+        symbol: data.symbol,
+        timeframe: timeframe, // Usamos el estado local ya que es el mismo para todos
+        days: days,
+        totalTrades: data.trades,
+        winRate: data.win_rate,
+        profitFactor: details.metrics?.profit_factor?.toString() || '0',
+        maxDrawdown: details.metrics?.max_drawdown?.toFixed(2) || '0',
+        totalReturn: data.pnl?.toFixed(2) || '0',
+        sharpeRatio: details.metrics?.sharpe_ratio?.toString() || '0',
+        candles: candles,
+        trades: transformedTrades,
+        botConfiguration: details.bot_configuration,
+        metrics: details.metrics,
+        tournamentResults: details.tournament_results,
+        winner: details.winner,
+        strategy_name: data.strategy,
+        initial_balance: details.initial_balance,
+        final_balance: details.final_balance
       };
 
       setScanResults(prev => {
-          const newResults = [...prev, result];
-          return newResults.sort((a, b) => parseFloat(b.totalReturn) - parseFloat(a.totalReturn));
+        const newResults = [...prev, result];
+        return newResults.sort((a, b) => parseFloat(b.totalReturn) - parseFloat(a.totalReturn));
       });
     };
 
@@ -245,12 +245,12 @@ export default function Backtest() {
       console.error("Backtest Error:", data);
       toast.error(`Error en backtest: ${data.message || data.error}`);
       if (data.message && data.message.includes("Critical")) {
-          setIsScanning(false);
+        setIsScanning(false);
       }
     };
 
     const handleSymbolError = (data: any) => {
-        console.warn(`Error en símbolo ${data.symbol}: ${data.error}`);
+      console.warn(`Error en símbolo ${data.symbol}: ${data.error}`);
     }
 
     wsService.on('backtest_start', handleBacktestStart);
@@ -278,15 +278,15 @@ export default function Backtest() {
 
     // Enviar comando por WS
     wsService.send({
-        action: "run_batch_backtest",
-        data: {
-            exchangeId: selectedExchange,
-            marketType: selectedMarket,
-            timeframe: timeframe,
-            days: days,
-            initialBalance: initialBalance,
-            tradeAmount: tradeAmount
-        }
+      action: "run_batch_backtest",
+      data: {
+        exchangeId: selectedExchange,
+        marketType: selectedMarket,
+        timeframe: timeframe,
+        days: days,
+        initialBalance: initialBalance,
+        tradeAmount: tradeAmount
+      }
     });
 
     // Reset UI state implicitly handled by 'backtest_start' event
@@ -296,10 +296,10 @@ export default function Backtest() {
   };
 
   const handleStopScan = () => {
-      // No implemented explicit stop in backend yet, but we can simulate locally or reload
-      // For now just warn user
-      toast.info("La detención del proceso en servidor no está implementada, recarga la página si deseas cancelar la visualización.");
-      setIsScanning(false);
+    // No implemented explicit stop in backend yet, but we can simulate locally or reload
+    // For now just warn user
+    toast.info("La detención del proceso en servidor no está implementada, recarga la página si deseas cancelar la visualización.");
+    setIsScanning(false);
   };
 
   useEffect(() => {
@@ -1152,7 +1152,7 @@ export default function Backtest() {
 
             {/* Simulation Config for Semi-Auto */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 border-t border-border pt-4">
-                <div>
+              <div>
                 <label className="block text-sm font-semibold text-foreground mb-2">
                   Balance Inicial (USDT)
                 </label>

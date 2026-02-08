@@ -60,7 +60,11 @@ class BootManager:
         market_type = bot_data.get('market_type', 'spot')
         user_id = bot_data.get('user_id')
         
-        logger.info(f"🟢 Bucle Autotrade iniciado para {bot_id} ({symbol} | {timeframe})")
+        # --- FIX: Extraer el Exchange ID del bot ---
+        # Intentamos ambas nomenclaturas por seguridad
+        exchange_id = bot_data.get('exchange_id') or bot_data.get('exchangeId')
+        
+        logger.info(f"🟢 Bucle Autotrade iniciado para {bot_id} ({symbol} | {timeframe}) en Exchange: {exchange_id}")
 
         from api.src.application.services.ml_service import MLService
         from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
@@ -72,8 +76,7 @@ class BootManager:
                 from api.src.adapters.driven.persistence.mongodb import get_app_config
                 config = await get_app_config(user_id)
 
-                # Default behavior: If config is None (DB error/User not found), we assume autotrade is ENABLED to prevent stopping bots on temporary glitches,
-                # unless we are sure it is disabled.
+                # Default behavior: If config is None (DB error/User not found), we assume autotrade is ENABLED
                 is_auto_enabled = True
                 if config:
                     is_auto_enabled = config.get('isAutoEnabled', True)
@@ -86,8 +89,16 @@ class BootManager:
                 
                 # 2. Obtener datos recientes
                 try:
-                    # Obtenemos las últimas 100 velas
-                    candles_df = await ccxt_service.get_historical_data(symbol, timeframe, limit=100)
+                    # --- FIX: Pasar exchange_id y user_id explícitamente ---
+                    # Esto fuerza al adaptador a usar las credenciales y mercado correctos (ej: OKX) en lugar de default (Binance)
+                    candles_df = await ccxt_service.get_historical_data(
+                        symbol, 
+                        timeframe, 
+                        limit=100,
+                        user_id=str(user_id), # Aseguramos string
+                        exchange_id=exchange_id
+                    )
+                    
                     if not candles_df.empty:
                         candles_list = []
                         for ts, row in candles_df.iterrows():
@@ -98,7 +109,6 @@ class BootManager:
                             })
 
                         # 3. Predecir señal
-                        # S9: Pasar posición actual para contexto
                         current_bot = await self.repo.collection.find_one({"_id": ObjectId(bot_id)})
                         prediction = ml_service.predict(
                             symbol=symbol,
@@ -118,11 +128,11 @@ class BootManager:
                             await self.engine.process_signal(current_bot, {
                                 "signal": signal_val,
                                 "price": candles_list[-1]['close'],
-                                "is_alert": False # Permitir Profit Guard normal
+                                "is_alert": False 
                             })
 
                 except Exception as e:
-                    logger.error(f"⚠️ Error analizando mercado para bot {bot_id}: {e}")
+                    logger.error(f"⚠️ Error analizando mercado para bot {bot_id} en {exchange_id}: {e}")
 
                 # Esperar al siguiente intervalo (ej: 1 minuto)
                 await asyncio.sleep(60)
@@ -131,3 +141,4 @@ class BootManager:
             logger.info(f"🔴 Bucle Autotrade cancelado para {bot_id}")
         except Exception as e:
             logger.error(f"Error crítico en bucle Autotrade {bot_id}: {e}")
+

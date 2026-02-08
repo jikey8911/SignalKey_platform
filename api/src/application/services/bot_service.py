@@ -606,17 +606,12 @@ class SignalBotService:
             
             # --- CRITERIO DE CIERRE: Detectamos nueva vela ---
             if current_candle_ts > last_processed_ts:
-                self.logger.info(f"⏱️ New Candle detected {current_candle_ts} vs {last_processed_ts} for {symbol}. Running AI on CLOSED candle...")
+                # --- FIX: Usar 'logger' global en lugar de 'self.logger' ---
+                logger.info(f"⏱️ New Candle detected {current_candle_ts} vs {last_processed_ts} for {symbol}. Running AI on CLOSED candle...")
                 
                 # SOLUCIÓN LOOK-AHEAD / REPAINTING:
-                # incoming_candle es la nueva vela (Tiempo T, incompleta).
-                # Debemos predecir usando la historia hasta T-1 (Vela cerrada).
-                # full_history incluye T (porque acabamos de llamar a update_with_candle).
-                # Así que cortamos la última vela.
-                
                 if full_history is not None and not full_history.empty:
                     # Si el buffer tiene la nueva vela al final, la excluimos para la IA
-                    # Verificamos si el último timestamp coincide con current_candle_ts
                     last_buffer_ts = full_history.index[-1].value // 10 ** 6 # ms
 
                     history_for_ai = full_history
