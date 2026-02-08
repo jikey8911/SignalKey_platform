@@ -128,3 +128,44 @@ class BotInstanceSchema(BaseModel):
     class Config:
         populate_by_name = True
 
+# --- NUEVOS SCHEMAS PARA OPTIMIZACIÓN Y AGENTES IA ---
+
+class AIAgent(BaseModel):
+    id: Optional[Any] = Field(alias="_id", default=None)
+    userId: Any # ObjectId or str
+    configId: Any # ObjectId or str related to AppConfig
+    provider: str # gemini, openai, perplexity, grok, groq
+    apiKey: Optional[str] = None
+    isActive: bool = False
+    isPrimary: bool = False # Defines if this is the currently selected provider
+    createdAt: datetime = Field(default_factory=datetime.utcnow)
+    updatedAt: Optional[datetime] = None
+
+    class Config:
+        populate_by_name = True
+
+class StrategyOptimizationRequest(BaseModel):
+    strategy_name: str
+    symbol: str
+    timeframe: str
+    market_type: str = "spot"
+    days: int
+    initial_balance: float
+    # Datos del Backtest reciente (enviados por el Frontend)
+    metrics: Dict[str, Any] # win_rate, profit_pct, etc.
+    trades: List[Dict[str, Any]] # Lista de operaciones (time, price, pnl, type...)
+
+    # Opcional: Feedback del usuario ("Hazla más conservadora")
+    user_feedback: Optional[str] = None
+
+class StrategyOptimizationResponse(BaseModel):
+    original_code: str
+    optimized_code: str
+    analysis: str
+    modifications: List[str]
+
+class SaveStrategyRequest(BaseModel):
+    strategy_name: str
+    code: str
+    market_type: str = "spot" # spot, futures
+    description: Optional[str] = None
