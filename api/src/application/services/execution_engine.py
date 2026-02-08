@@ -276,15 +276,20 @@ class ExecutionEngine:
 
             if current_qty > 0:
                 self.logger.info(f"🔄 REAL FLIP: Closing {current_qty} {symbol} ({close_side})")
-                close_result = await self.real_exchange.create_order(
-                    user_id, exchange_id, symbol, "market", close_side, current_qty
+                close_res_dict = await self.real_exchange.execute_trade(
+                    symbol=symbol,
+                    side=close_side,
+                    amount=current_qty,
+                    user_id=user_id,
+                    exchange_id=exchange_id
                 )
 
-                if not close_result.success:
-                    return {"success": False, "reason": f"Flip Close Failed: {close_result.message}"}
-
+                if not close_res_dict.get("success"):
+                    return {"success": False, "reason": f"Flip Close Failed: {close_res_dict.get('message')}"}
+                
+                close_order = close_res_dict.get("details", {})
                 # Calcular PnL Real
-                close_price = close_result.price or price
+                close_price = close_order.get('average') or close_order.get('price') or price
                 realized_pnl = self._calculate_realized_pnl_value(bot, close_price)
 
         # 2. Abrir la nueva posición (o DCA)
@@ -296,16 +301,22 @@ class ExecutionEngine:
         params = {}
         # if side == "BUY": params = {"cost": amount} # Optional optimization
 
-        open_result = await self.real_exchange.create_order(
-            user_id, exchange_id, symbol, "market", side, qty_to_buy, params=params
+        open_res_dict = await self.real_exchange.execute_trade(
+            symbol=symbol,
+            side=side,
+            amount=qty_to_buy,
+            user_id=user_id,
+            exchange_id=exchange_id
         )
 
-        if not open_result.success:
-             return {"success": False, "reason": f"Open Failed: {open_result.message}"}
+        if not open_res_dict.get("success"):
+             return {"success": False, "reason": f"Open Failed: {open_res_dict.get('message')}"}
 
         # 3. Calcular nuevos valores para DB
-        final_price = open_result.price or price
-        final_qty = open_result.amount or qty_to_buy
+        open_order = open_res_dict.get("details", {})
+        final_price = open_order.get('average') or open_order.get('price') or price
+        final_qty = open_order.get('amount') or qty_to_buy
+        order_id = open_res_dict.get("order_id")
         
         if action == "DCA":
             curr_pos = bot.get('position', {})
@@ -324,7 +335,7 @@ class ExecutionEngine:
             "status": "executed",
             "price": final_price,
             "side": side,
-            "order_id": open_result.order_id,
+            "order_id": order_id,
             "pnl": realized_pnl
         }
 

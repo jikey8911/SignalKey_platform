@@ -21,103 +21,49 @@ class CEXService:
             self.ccxt_provider = ccxt_service
 
     async def close_all(self):
-        """Cierra todas las sesiones de exchange abiertas"""
-        for exchange in self.exchanges.values():
-            try:
-                await exchange.close()
-            except:
-                pass
-        for exchange in self.public_exchanges.values():
-            try:
-                await exchange.close()
-            except:
-                pass
-        self.exchanges = {}
-        self.public_exchanges = {}
-        logger.info("CEXService: Todas las sesiones cerradas.")
+        """Cierra todas las sesiones de exchange gestionadas por el proveedor central"""
+        await self.ccxt_provider.close_all()
+        logger.info("CEXService: Todas las sesiones cerradas vía CCXTProvider.")
 
     async def test_connection(self, exchange_id: str, api_key: str, secret: str, password: str = None, uid: str = None):
         """Prueba la conexión delegando a CCXTService"""
-        success = await self.ccxt_provider.test_connection_private(exchange_id, api_key, secret, password, uid)
-        return success, "Conexión exitosa" if success else "Error de conexión"
+        success = await self.ccxt_provider.test_connection(exchange_id, api_key, secret, password, uid)
+        return success, "Conexión exitosa" if success else "Error de conexión (Verifica tus APIs)"
 
     async def fetch_balance(self, user_id: str, exchange_id: Optional[str] = None) -> Dict[str, Any]:
         """Obtiene el balance total del usuario delegando a CCXTService"""
         try:
-            config = await get_app_config(user_id)
-            exchanges_config = config.get("exchanges", []) if config else []
-            
-            # Identificar el exchange objetivo
-            ex_cfg = None
-            if exchange_id:
-                ex_cfg = next((e for e in exchanges_config if e["exchangeId"] == exchange_id and e.get("isActive", True)), None)
-            else:
-                ex_cfg = next((e for e in exchanges_config if e.get("isActive", True)), None)
-            
-            if not ex_cfg or not ex_cfg.get("apiKey"):
-                logger.error(f"CEXService: Credenciales no encontradas para {exchange_id or 'active exchange'}")
-                return {}
-
-            return await self.ccxt_provider.fetch_balance_private(
-                ex_cfg["exchangeId"], 
-                ex_cfg["apiKey"], 
-                ex_cfg["secret"], 
-                ex_cfg.get("password"), 
-                ex_cfg.get("uid")
-            )
+            balances = await self.ccxt_provider.fetch_balance(user_id, exchange_id or "binance")
+            # Convertir lista de objetos Balance a dict para compatibilidad con el resto de la app si es necesario
+            res = {"total": {}, "free": {}, "used": {}}
+            for b in balances:
+                res["total"][b.asset] = b.total
+                res["free"][b.asset] = b.free
+                res["used"][b.asset] = b.used
+            return res
         except Exception as e:
-            logger.error(f"CEXService: Error al obtener balance unificado: {e}")
+            logger.error(f"CEXService: Error al obtener balance: {e}")
             return {}
 
     async def get_exchange_instance(self, user_id: str, exchange_id: Optional[str] = None):
-        """Obtiene una instancia (persistent/cached si existe) usando CCXTService"""
-        config = await get_app_config(user_id)
-        if not config or "exchanges" not in config:
-            return None, None
-
-        # 1. Identificar configuración
-        ex_cfg = None
-        if exchange_id:
-            ex_cfg = next((e for e in config["exchanges"] if e["exchangeId"] == exchange_id and e.get("isActive", True)), None)
-        else:
-            ex_cfg = next((e for e in config["exchanges"] if e.get("isActive", True)), None)
-            if ex_cfg: exchange_id = ex_cfg["exchangeId"]
+        """Obtiene una instancia (persistent/cached si existe) usando CCXTService Pro"""
+        # Obtenemos config del usuario para determinar exchangeId si no se provee
+        if not exchange_id:
+            config = await get_app_config(user_id)
+            if config and config.get("exchanges"):
+                active_ex = next((e for e in config["exchanges"] if e.get("isActive", True)), None)
+                if active_ex:
+                    exchange_id = active_ex["exchangeId"]
         
-        if not ex_cfg or not ex_cfg.get("apiKey"):
-            return None, config
-
-        cache_key = f"{user_id}_{exchange_id}"
-        if cache_key in self.exchanges:
-            return self.exchanges[cache_key], config
-
-        # 2. Crear instancia usando CCXTService
-        instance = await self.ccxt_provider.get_private_instance(
-            exchange_id, 
-            ex_cfg["apiKey"], 
-            ex_cfg["secret"], 
-            ex_cfg.get("password"), 
-            ex_cfg.get("uid")
-        )
-        if instance:
-            self.exchanges[cache_key] = instance
+        exchange_id = exchange_id or "binance"
         
-        if instance:
-            self.exchanges[cache_key] = instance
-        
-        return instance, config
+        # Delegamos a CCXTService que ya maneja su propio cache (user_instances)
+        instance = await self.ccxt_provider._get_exchange(exchange_id, user_id)
+        return instance, None # Retornamos None para config si no es estrictamente necesario aquí
 
     async def get_public_exchange_instance(self, exchange_id: str):
-        """Obtiene una instancia PÚBLICA (sin claves) para datos de mercado"""
-        if not exchange_id: return None
-        
-        if exchange_id in self.public_exchanges:
-            return self.public_exchanges[exchange_id]
-            
-        instance = await self.ccxt_provider.create_public_instance(exchange_id)
-        if instance:
-            self.public_exchanges[exchange_id] = instance
-            
-        return instance
+        """Obtiene una instancia PÚBLICA (sin claves) delegando al cache de CCXTService"""
+        return await self.ccxt_provider._get_exchange(exchange_id)
 
     def _normalize_symbol(self, symbol: str) -> str:
         """Normaliza el símbolo al formato de ccxt (e.g. BTC/USDT)"""
@@ -278,50 +224,36 @@ class CEXService:
             if not exchange:
                 return ExecutionResult(success=False, message="Exchange no configurado para trading real")
 
-            # DELEGACIÓN AL PUERTO (CCXTAdapter)
-            # Convertir AnalysisResult (App Schema) a SignalAnalysis (Domain Object)
+            # DELEGACIÓN AL PUERTO (CCXT Service corregido)
             try:
-                domain_decision = Decision.BUY if side == 'buy' else Decision.SELL
-                domain_market = MarketType.SPOT if analysis.market_type == 'SPOT' else MarketType.FUTURES
-                
-                # Convertir TP dicts a objetos TakeProfit
-                tp_list = []
-                if analysis.parameters and analysis.parameters.get('tp'):
-                    for tp_data in analysis.parameters.get('tp'):
-                        if isinstance(tp_data, dict):
-                            tp_list.append(TakeProfit(price=tp_data.get('price', 0), percent=tp_data.get('percent', 0)))
-
-                signal_analysis = SignalAnalysis(
+                # El nuevo CCXTService.execute_trade recibe parámetros individuales
+                logger.info(f"Delegando ejecución real a CCXTService para {symbol}")
+                trade_result_dict = await self.ccxt_provider.execute_trade(
                     symbol=symbol,
-                    decision=domain_decision,
-                    market_type=domain_market,
-                    confidence=analysis.confidence,
-                    reasoning=analysis.reasoning,
-                    parameters=TradingParameters(
-                        amount=amount,
-                        leverage=analysis.parameters.get('leverage', 1) if analysis.parameters else 1,
-                        tp=tp_list,
-                        sl=analysis.parameters.get('sl') if analysis.parameters else None
-                    )
+                    side=side,
+                    amount=amount,
+                    price=analysis.parameters.get('entry_price') if analysis.parameters else None,
+                    user_id=user_id,
+                    exchange_id=config.get("exchange_id", "binance") if config else "binance"
                 )
-
-                # Ejecutar a través del proveedor (Adapter)
-                logger.info(f"Delegando ejecución real a CCXTAdapter para {symbol}")
-                trade_result = await self.ccxt_provider.execute_trade(signal_analysis, user_id)
                 
-                if trade_result.success:
+                if trade_result_dict.get("success"):
+                    order = trade_result_dict.get("details", {})
+                    # Extraer precio promedio si es posible
+                    avg_price = order.get('average') or order.get('price') or price
+                    
                     return ExecutionResult(
                         success=True,
-                        order_id=trade_result.order_id,
+                        order_id=trade_result_dict.get("order_id"),
                         message=f"Orden real {side.upper()} ejecutada exitosamente",
                         details={
-                            "price": trade_result.price,
-                            "amount": trade_result.amount,
-                            "timestamp": trade_result.timestamp
+                            "price": avg_price,
+                            "amount": order.get('amount', amount),
+                            "timestamp": datetime.utcnow()
                         }
                     )
                 else:
-                    return ExecutionResult(success=False, message=f"Fallo en ejecución: {trade_result.message}")
+                    return ExecutionResult(success=False, message=f"Fallo en ejecución: {trade_result_dict.get('message')}")
 
             except Exception as e:
                 logger.error(f"Error delegando trade a CCXTAdapter: {e}")

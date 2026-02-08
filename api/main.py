@@ -56,7 +56,11 @@ async def run_background_startup():
         # 2. Inicializar Bots de Trading (Recuperar estado de DB)
         from api.src.application.services.boot_manager import BootManager
         from api.src.adapters.driven.notifications.socket_service import socket_service
-        boot_manager_service = BootManager(db_adapter_in=db, socket_service=socket_service)
+        boot_manager_service = BootManager(
+            db_adapter_in=db, 
+            socket_service=socket_service,
+            stream_service=market_stream_service
+        )
         logger.info("📈 [BACKGROUND] Reactivando bots de trading...")
         await boot_manager_service.initialize_active_bots()
         
@@ -106,6 +110,7 @@ async def lifespan(app: FastAPI):
         await bot_manager.stop_all_bots()
         if monitor_service: await monitor_service.stop_monitoring()
         await signal_bot_service.stop()
+        await market_stream_service.stop() # Nuevo stop centralizado
         await cex_service.close_all()
         await dex_service.close_all()
         await ai_service.close()
@@ -126,16 +131,30 @@ app.add_middleware(
 
 # Inicialización de adaptadores base (Ligeros)
 from api.src.adapters.driven.exchange.ccxt_adapter import CcxtAdapter
+from api.src.adapters.driven.exchange.stream_service import MarketStreamService
 ccxt_adapter = CcxtAdapter(db_adapter=db) 
+market_stream_service = MarketStreamService()
 
 logger.info(f"[INIT] Config loaded. JWT Prefix: {Config.JWT_SECRET[:4]}...")
+
+from api.src.application.services.execution_engine import ExecutionEngine
 
 # Instanciación de Servicios (Sin iniciarlos aún)
 ai_service = AIService()
 cex_service = CEXService(ccxt_adapter=ccxt_adapter) 
 dex_service = DEXService()
 backtest_service = BacktestService(exchange_adapter=ccxt_adapter) 
-signal_bot_service = SignalBotService(cex_service=cex_service, dex_service=dex_service)
+
+# Motor de Ejecución Centralizado
+from api.src.adapters.driven.notifications.socket_service import socket_service
+execution_engine = ExecutionEngine(db, socket_service=socket_service, exchange_adapter=ccxt_adapter)
+
+signal_bot_service = SignalBotService(
+    cex_service=cex_service, 
+    dex_service=dex_service,
+    stream_service=market_stream_service,
+    engine=execution_engine
+)
 
 # --- ROUTERS ---
 from fastapi import APIRouter
