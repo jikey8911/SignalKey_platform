@@ -55,7 +55,8 @@ async def run_background_startup():
 
         # 2. Inicializar Bots de Trading (Recuperar estado de DB)
         from api.src.application.services.boot_manager import BootManager
-        boot_manager_service = BootManager(db_adapter_in=db)
+        from api.src.adapters.driven.notifications.socket_service import socket_service
+        boot_manager_service = BootManager(db_adapter_in=db, socket_service=socket_service)
         logger.info("📈 [BACKGROUND] Reactivando bots de trading...")
         await boot_manager_service.initialize_active_bots()
         

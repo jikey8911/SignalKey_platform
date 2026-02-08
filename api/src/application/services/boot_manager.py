@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime
 from bson import ObjectId
 from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
 from api.src.application.services.execution_engine import ExecutionEngine
@@ -78,7 +79,6 @@ class BootManager:
                 for symbol, bots in symbol_map.items():
                     try:
                         # Obtenemos precio público (Binance default por ahora)
-                        # TODO: Podría usarse el exchange configurado en el bot si es necesario
                         price = await ccxt_service.get_public_current_price(symbol)
                         
                         # Notificar a cada usuario del bot
@@ -91,7 +91,11 @@ class BootManager:
                                 "timestamp": datetime.utcnow().isoformat()
                             })
                     except Exception as e:
-                        logger.error(f"Error streaming price for {symbol}: {e}")
+                        # Error de mercado o símbolo no encontrado - Logueamos una sola vez o con nivel info si es común
+                        if "does not have market symbol" in str(e).lower():
+                            logger.warning(f"⚠️ Símbolo {symbol} no disponible en el exchange. Saltando...")
+                        else:
+                            logger.error(f"Error streaming price for {symbol}: {e}")
 
             except Exception as e:
                 logger.error(f"Error crítico en _price_streaming_loop: {e}")
