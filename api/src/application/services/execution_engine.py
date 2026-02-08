@@ -27,72 +27,60 @@ class ExecutionEngine:
 
     async def process_signal(self, bot_instance, signal_data):
         """
-        Procesa una señal entrante. Soporta Long/Short y Flipping de posiciones.
-        Lanza eventos de socket para el monitor híbrido en cada operación.
+        Procesa una señal entrante. Soporta DCA, Flip y Open.
         """
         if bot_instance.get('status') != 'active':
             return None
 
+        # 1. Definir variables clave
         mode = bot_instance.get('mode', 'simulated')
         symbol = bot_instance['symbol']
-        signal = signal_data['signal'] # 1: Buy (Long), 2: Sell (Short)
         price = signal_data['price']
-        is_alert = signal_data.get('is_alert', False) # Flag para ignorar Profit Guard
-
-        # 1. Obtener monto de inversión (Tarea 3.3 - Refactor Sprint 3)
-        # Prioridad 1: Monto configurado en el Bot (Validado por Schema)
-        # Prioridad 2: Límite global (Safety net)
+        signal = signal_data['signal']
+        is_alert = signal_data.get('is_alert', False)
         
-        amount = bot_instance.get('amount', 10.0) 
-        
-        # Check Global Limits (Safety Net)
-        config = await self.db.db["app_configs"].find_one({"userId": bot_instance.get('user_id')})
-        global_limit = 1000.0 # High default
-        if config and 'investmentLimits' in config:
-             if bot_instance.get('market_type') in ['spot', 'cex']:
-                 global_limit = config['investmentLimits'].get('cexMaxAmount', 100.0)
-             else:
-                 global_limit = config['investmentLimits'].get('dexMaxAmount', 50.0)
+        # Validar Amount
+        amount = bot_instance.get('amount', 0)
+        if amount <= 0:
+             amount = 100.0 # Fallback safety net
 
-        # Enforce Hard Limit
-        if amount > global_limit:
-            self.logger.warning(f"⚠️ Bot amount {amount} exceeds global limit {global_limit}. Capping.")
-            amount = global_limit
-
-        # 2. Risk & Balance Check
+        # Check Limits & Risk
         if not await self._check_risk_and_balance(bot_instance, amount, price):
              return {"status": "blocked", "reason": "insufficient_balance_or_risk"}
 
-        # 3. Preparar datos de la posición actual
-        current_pos = bot_instance.get('position', {'qty': 0, 'avg_price': 0})
-        current_side = bot_instance.get('side') # "BUY" (Long) o "SELL" (Short)
-        unrealized_pnl_pct = self._calculate_pnl(bot_instance, price)
+        # 2. Analizar Estado Actual
+        current_pos = bot_instance.get('position', {})
+        current_qty = float(current_pos.get('qty', 0))
+        current_side = bot_instance.get('side') # "BUY" / "SELL"
+        signal_side = "BUY" if signal == 1 else "SELL"
 
-        # --- PROFIT GUARD ---
-        # No cerrar pnl negativo al menos que sea alerta
+        # Profit Guard (Only if not alert)
         if not is_alert and not await self._apply_profit_guard(bot_instance, signal, price):
-            self.logger.info(f"🛡️ Profit Guard bloqueó señal {signal} para {symbol} (PnL: {unrealized_pnl_pct:.2f}%)")
             return {"status": "blocked", "reason": "profit_guard"}
 
+        # 3. Determinar Acción Lógica
+        action = "OPEN"
+        if current_qty > 0:
+            if current_side == signal_side:
+                action = "DCA"
+            else:
+                action = "FLIP"
+
+        self.logger.info(f"🤖 Engine: {symbol} | Mode: {mode} | Action: {action} | Side: {signal_side}")
+
+        # 4. Ejecución (Real o Simulada)
         execution_result = None
 
-        # 2. Lógica de Inversión / Flip
-        # Si la señal pide cambiar de dirección, ejecutamos un flip atómico.
-        target_side = "BUY" if signal == BaseStrategy.SIGNAL_BUY else "SELL"
-        is_flip = current_side and current_side != target_side and current_pos.get('qty', 0) > 0
-
         if mode == 'simulated':
-            # Simulación: El SimulationService actualiza la posición internamente.
-            # Lo extendemos para soportar Shorts y Flips.
-            execution_result = await self._execute_simulated_trade(bot_instance, signal, price, amount, is_flip)
+            execution_result = await self._execute_simulated(bot_instance, action, signal_side, price, amount)
         else:
-            # Ejecución Real vía CCXT
-            execution_result = await self._execute_real_trade(bot_instance, signal, price, amount, is_flip)
+            # En REAL, pasamos la 'action' para que el método sepa si cerrar primero
+            execution_result = await self._execute_real(bot_instance, action, signal_side, price, amount)
 
-        # 3. Persistencia de la señal y la operación
+        # 5. Persistencia (Logs y Webhooks)
         await self._persist_signal(bot_instance, signal_data)
 
-        if execution_result and execution_result.get('status') == 'executed':
+        if execution_result and execution_result.get('success'):
             await self._persist_operation(bot_instance, signal_data, execution_result)
 
         return execution_result
@@ -128,130 +116,139 @@ class ExecutionEngine:
         except Exception as e:
             self.logger.error(f"Error persistiendo señal: {e}")
 
-    async def _execute_simulated_trade(self, bot_instance, signal, price, amount, is_flip):
-        """Ejecuta un trade simulado con soporte para flipping."""
-        bot_id = str(bot_instance.get('id') or bot_instance.get('_id'))
-        side = "buy" if signal == BaseStrategy.SIGNAL_BUY else "sell"
-        target_side = side.upper()
+    async def _execute_simulated(self, bot, action, side, price, amount):
+        """Ejecuta simulación actualizando DB."""
+        qty = amount / price
+        pnl = 0
 
-        current_pos = bot_instance.get('position', {'qty': 0, 'avg_price': 0})
-        current_side = bot_instance.get('side')
+        # Estado actual
+        curr_pos = bot.get('position', {})
+        current_qty = float(curr_pos.get('qty', 0))
+        current_avg = float(curr_pos.get('avg_price', 0))
 
-        # Si es flip, calculamos el PnL de cierre
-        closed_pnl = 0
-        if is_flip:
-             closed_pnl = self._calculate_pnl(bot_instance, price)
-             self.logger.info(f"🔄 SIM FLIP: Cerrando {current_side} con PnL: {closed_pnl:.2f}%")
+        new_qty = qty
+        new_avg_price = price
 
-        # Calculamos nueva posición
-        # En flip, el monto total es Amount (para la nueva dirección)
-        # Ignoramos la qty anterior porque se "cierra" virtualmente
-        new_qty = amount / price
-        updated_pos = {'qty': new_qty, 'avg_price': price}
+        if action == "FLIP":
+            # Calcular PnL de cierre virtual
+            pnl = self._calculate_pnl(bot, price)
+            self.logger.info(f"🔄 SIM FLIP: Closing with PnL {pnl:.2f}%")
+            # Open new position
+            new_qty = amount / price
+            new_avg_price = price
 
-        trade_log = {
-            "bot_id": bot_id,
-            "symbol": bot_instance['symbol'],
-            "side": side,
+        elif action == "DCA":
+            # Promediar Precio
+            total_qty = current_qty + qty
+            # Formula: (OldTotalVal + NewVal) / NewTotalQty
+            new_avg_price = ((current_qty * current_avg) + amount) / total_qty
+            new_qty = total_qty
+
+        # Actualizar DB
+        await self._update_bot_db(bot['_id'], side, new_qty, new_avg_price, pnl)
+
+        return {
+            "success": True,
+            "status": "executed",
             "price": price,
             "amount": amount,
-            "timestamp": datetime.now(),
-            "mode": "simulated",
-            "is_flip": is_flip,
-            "closed_pnl": closed_pnl
+            "side": side,
+            "pnl": pnl
         }
 
-        # Actualizar bot en DB
+    async def _execute_real(self, bot, action, side, price, amount):
+        """Ejecuta operaciones reales usando create_order."""
+        user_id = str(bot.get('user_id'))
+        exchange_id = bot.get('exchangeId') or bot.get('exchange_id', 'binance')
+        symbol = bot['symbol']
+
+        realized_pnl = 0
+
+        # 1. Si es FLIP, primero CERRAR la posición existente
+        if action == "FLIP":
+            close_side = "SELL" if bot.get('side') == "BUY" else "BUY"
+            current_qty = float(bot.get('position', {}).get('qty', 0))
+
+            if current_qty > 0:
+                self.logger.info(f"🔄 REAL FLIP: Closing {current_qty} {symbol} ({close_side})")
+                close_result = await self.real_exchange.create_order(
+                    user_id, exchange_id, symbol, "market", close_side, current_qty
+                )
+
+                if not close_result.success:
+                    return {"success": False, "reason": f"Flip Close Failed: {close_result.message}"}
+
+                # Calcular PnL Real
+                close_price = close_result.price or price
+                realized_pnl = self._calculate_realized_pnl_value(bot, close_price)
+
+        # 2. Abrir la nueva posición (o DCA)
+        # Nota: CCXT Spot amount suele ser en base currency (BTC).
+        # Si amount es USDT, calculamos estimado.
+        qty_to_buy = amount / price
+
+        # Params para quote order qty si es soportado (Binance)
+        params = {}
+        # if side == "BUY": params = {"cost": amount} # Optional optimization
+
+        open_result = await self.real_exchange.create_order(
+            user_id, exchange_id, symbol, "market", side, qty_to_buy, params=params
+        )
+
+        if not open_result.success:
+             return {"success": False, "reason": f"Open Failed: {open_result.message}"}
+
+        # 3. Calcular nuevos valores para DB
+        final_price = open_result.price or price
+        final_qty = open_result.amount or qty_to_buy
+        
+        if action == "DCA":
+            curr_pos = bot.get('position', {})
+            curr_q = float(curr_pos.get('qty', 0))
+            curr_avg = float(curr_pos.get('avg_price', 0))
+            
+            total_cost = (curr_q * curr_avg) + (final_qty * final_price)
+            final_qty += curr_q
+            final_price = total_cost / final_qty if final_qty > 0 else final_price
+
+        # Actualizar DB
+        await self._update_bot_db(bot['_id'], side, final_qty, final_price, realized_pnl)
+
+        return {
+            "success": True,
+            "status": "executed",
+            "price": final_price,
+            "side": side,
+            "order_id": open_result.order_id,
+            "pnl": realized_pnl
+        }
+
+    async def _update_bot_db(self, bot_id, side, qty, price, pnl):
         await self.db.db["bot_instances"].update_one(
             {"_id": ObjectId(bot_id)},
-            {"$set": {
-                "position": updated_pos,
-                "side": target_side,
-                "last_execution": datetime.now()
-            }}
-        )
-
-        return {"status": "executed", **trade_log}
-
-    async def _execute_real_trade(self, bot_instance, signal, price, amount, is_flip):
-        """Ejecuta un trade real vía CCXT corrigiendo cálculo de unidades."""
-        symbol = bot_instance['symbol']
-        side = 'buy' if signal == BaseStrategy.SIGNAL_BUY else 'sell'
-        target_side = side.upper()
-
-        from api.src.domain.entities.signal import SignalAnalysis, Decision, MarketType, TradingParameters
-
-        # 1. Calcular cuántas monedas queremos comprar/vender con el dinero (USDT)
-        # target_qty_base: Cantidad del activo base equivalente a la inversión deseada
-        # amount es en USDT (e.g. 50.0), price es el precio actual (e.g. 50000.0)
-        target_qty_base = amount / price 
-
-        # 2. Calcular tamaño total de la orden (Order Size)
-        current_qty = bot_instance.get('position', {}).get('qty', 0.0)
-        
-        exec_qty = target_qty_base
-        
-        if is_flip:
-            # Si es FLIP, necesitamos cerrar lo anterior + abrir lo nuevo.
-            market_type = bot_instance.get('market_type', 'spot').upper()
-            
-            if market_type == 'FUTURES':
-                # En Futuros, para flipear Long->Short o viceversa con una sola orden,
-                # necesitamos vender (qty_actual + qty_nueva).
-                exec_qty = target_qty_base + current_qty
-            else:
-                # SPOT: No existe flip atómico de posición negativa.
-                # Si la señal es SELL (Flip Long->Short): Vendemos TODO lo que tenemos.
-                # Spot no permite abrir Short real con este motor simple.
-                if side == 'sell':
-                    exec_qty = current_qty # Vender toda la tenencia
-                else:
-                    exec_qty = target_qty_base # Compra normal (inversión nueva)
-
-        # Validar precisión mínima (simple 6 decimales para crypto)
-        exec_qty = float(f"{exec_qty:.6f}")
-        if exec_qty <= 0:
-             self.logger.warning(f"Trade skipped: Calculated qty is zero or negative ({exec_qty}) for {symbol}")
-             return {"status": "skipped", "reason": "qty_zero"}
-
-        analysis = SignalAnalysis(
-            symbol=symbol,
-            decision=Decision.BUY if side == 'buy' else Decision.SELL,
-            market_type=bot_instance.get('market_type', 'spot').upper(),
-            confidence=0.9,
-            reasoning=f"Automated Bot {'Flip' if is_flip else 'Signal'}: {bot_instance.get('strategy_name')}",
-            parameters=TradingParameters(amount=exec_qty)
-        )
-
-        user_id = str(bot_instance.get('user_id', "default_user"))
-
-        try:
-            exchange_id = bot_instance.get("exchangeId") or bot_instance.get("exchange_id")
-            trade_result = await self.real_exchange.execute_trade(analysis, user_id, exchange_id=exchange_id)
-            if trade_result.success:
-                # Actualizar posición local
-                updated_pos = {'qty': amount / price, 'avg_price': trade_result.price or price}
-                bot_id = str(bot_instance.get('id') or bot_instance.get('_id'))
-                await self.db.db["bot_instances"].update_one(
-                    {"_id": ObjectId(bot_id)},
-                    {"$set": {
-                        "position": updated_pos,
-                        "side": target_side,
-                        "last_execution": datetime.now()
-                    }}
-                )
-                return {
-                    "status": "executed",
-                    "price": trade_result.price or price,
-                    "amount": amount,
+            {
+                "$set": {
                     "side": side,
-                    "order_id": trade_result.order_id
-                }
-            else:
-                return {"status": "failed", "reason": trade_result.error}
-        except Exception as e:
-            self.logger.error(f"Error en ejecución real: {e}")
-            return {"status": "error", "reason": str(e)}
+                    "position": {"qty": float(qty), "avg_price": float(price)},
+                    "last_execution": datetime.utcnow()
+                },
+                "$inc": {"total_pnl": float(pnl)}
+            }
+        )
+
+    def _calculate_realized_pnl_value(self, bot, exit_price):
+        """Calcula PnL realizado en valor monetario (USDT)."""
+        pos = bot.get('position', {})
+        qty = float(pos.get('qty', 0))
+        avg = float(pos.get('avg_price', 0))
+        side = bot.get('side')
+
+        if qty == 0 or avg == 0: return 0.0
+
+        if side == "BUY":
+            return (exit_price - avg) * qty
+        else:
+            return (avg - exit_price) * qty
 
     async def _persist_operation(self, bot_instance, signal_data, exec_result):
         """Guarda la señal y el trade en MongoDB."""
@@ -262,7 +259,7 @@ class ExecutionEngine:
             "side": exec_result.get('side').upper(),
             "price": exec_result.get('price'),
             "amount": exec_result.get('amount'),
-            "pnl": exec_result.get('closed_pnl', 0),
+            "pnl": exec_result.get('pnl', 0),
             "mode": bot_instance.get('mode'),
             "marketType": bot_instance.get('market_type'),
             "timestamp": datetime.utcnow()

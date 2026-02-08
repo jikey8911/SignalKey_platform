@@ -41,15 +41,17 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
         limit_amount = 100.0 if data.market_type == 'spot' else 50.0
 
     # Determinar monto final: Si el usuario manda uno, validamos que no exceda el límite global
-    # Si no manda, usamos el límite como default (o una fracción segura)
-    final_amount = data.amount if data.amount is not None else limit_amount
+    # Si no manda, o es <= 0, usamos el límite como default (o una fracción segura)
+    # FIX: Validar que el amount no sea 0 o negativo, incluso si viene en 'data'
+    final_amount = data.amount if (data.amount is not None and data.amount > 0) else limit_amount
     
     # Validation (Financial Consistency)
     if final_amount > limit_amount:
          raise HTTPException(status_code=400, detail=f"Amount {final_amount} exceeds your limit of {limit_amount} for this market.")
     
+    # Safety fallback (Double Check)
     if final_amount <= 0:
-         raise HTTPException(status_code=400, detail="Amount must be positive.")
+         final_amount = 100.0 # Default fallback
 
     # 2. Crear instancia usando Schema para validación estricta
     try:

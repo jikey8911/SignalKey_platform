@@ -279,62 +279,59 @@ class CcxtAdapter(IExchangePort):
             logger.error(f"Error fetching balance for user {user_id}: {e}")
             return []
 
-    async def execute_trade(self, analysis: SignalAnalysis, user_id: str, exchange_id: Optional[str] = None) -> TradeResult:
+    async def create_order(self, user_id: str, exchange_id: str, symbol: str, type: str, side: str, amount: float, price: float = None, params: Dict = {}) -> TradeResult:
         """
-        Ejecuta una operación en el exchange configurado para el usuario/bot.
-        Soporta Multi-Exchange (Binance, OKX) dinámicamente.
+        Wrapper directo para ccxt.create_order, resolviendo el cliente del usuario.
         """
         try:
-            # 1. Obtener instancia privada (con credenciales) para el usuario
-            # Nota: _get_client_for_user carga las credenciales desde DB config
             client = await self._get_client_for_user(user_id, exchange_id=exchange_id)
-
             if not client:
                  return TradeResult(success=False, message=f"Could not initialize exchange client for user {user_id}")
-            
-            # TODO: Add specific checks for keys presence
-            # For now relying on client initialization success
-            
-            symbol = analysis.symbol
-            # Fix: Use 'decision' instead of 'signal' and 'parameters.amount'
-            side = analysis.decision.lower() if hasattr(analysis.decision, 'lower') else str(analysis.decision).lower()
-            amount = analysis.parameters.amount
-            
-            if not amount:
-                 return TradeResult(success=False, message="Amount is zero")
 
-            logger.info(f"🚀 Executing REAL trade: {side.upper()} {symbol} Amt:{amount} via {client.id}")
-            
-            # 2. Ejecutar Orden (Market Order por simplicidad)
-            # En producción se usaría create_order con params específicos
+            logger.info(f"🚀 Creating Order: {side.upper()} {symbol} Amt:{amount} via {client.id} (Params: {params})")
+
             order = await client.create_order(
                 symbol=symbol,
-                type='market',
+                type=type,
                 side=side,
-                amount=amount
+                amount=amount,
+                price=price,
+                params=params
             )
-            
-            # 3. Formatear resultado
-            # Extraer precio promedio y fee si disponible
+
+            # Extraer precio promedio
             avg_price = order.get('average') or order.get('price')
             if not avg_price and order.get('fills'):
-                # Calcular promedio ponderado de fills
                 total_cost = sum(f['price'] * f['amount'] for f in order['fills'])
                 total_qty = sum(f['amount'] for f in order['fills'])
                 avg_price = total_cost / total_qty if total_qty > 0 else 0
-                
+
             return TradeResult(
                 success=True,
                 message="Order executed successfully",
                 order_id=order['id'],
                 price=avg_price,
                 amount=order['amount'],
-                timestamp=datetime.utcnow()
+                timestamp=datetime.utcnow(),
+                details=order
             )
-            
         except Exception as e:
-            logger.error(f"Error executing trade on {analysis.symbol}: {e}")
-            return TradeResult(success=False, message=str(e))
+            logger.error(f"Error creating order {symbol}: {e}")
+            return TradeResult(success=False, message=str(e), error=str(e))
+
+    async def execute_trade(self, analysis: SignalAnalysis, user_id: str, exchange_id: Optional[str] = None) -> TradeResult:
+        """
+        Ejecuta una operación en el exchange configurado para el usuario/bot.
+        Delega en create_order.
+        """
+        symbol = analysis.symbol
+        side = analysis.decision.lower() if hasattr(analysis.decision, 'lower') else str(analysis.decision).lower()
+        amount = analysis.parameters.amount
+
+        if not amount:
+             return TradeResult(success=False, message="Amount is zero")
+
+        return await self.create_order(user_id, exchange_id, symbol, 'market', side, amount)
 
     async def fetch_open_orders(self, user_id: str, symbol: Optional[str] = None) -> List[Order]:
         try:
