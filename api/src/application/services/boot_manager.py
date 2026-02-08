@@ -68,18 +68,21 @@ class BootManager:
                     await asyncio.sleep(10)
                     continue
 
-                # Agrupar por símbolo para optimizar llamadas a la API
-                symbol_map = {}
+                # Agrupar por (símbolo, exchange) para optimizar llamadas a la API
+                # Llave: (symbol, exchange_id)
+                group_map = {}
                 for bot in active_bots:
                     sym = bot.symbol
-                    if sym not in symbol_map:
-                        symbol_map[sym] = []
-                    symbol_map[sym].append(bot)
+                    ex_id = getattr(bot, 'exchange_id', None) or getattr(bot, 'exchangeId', 'binance')
+                    key = (sym, ex_id)
+                    if key not in group_map:
+                        group_map[key] = []
+                    group_map[key].append(bot)
 
-                for symbol, bots in symbol_map.items():
+                for (symbol, exchange_id), bots in group_map.items():
                     try:
-                        # Obtenemos precio público (Binance default por ahora)
-                        price = await ccxt_service.get_public_current_price(symbol)
+                        # Obtenemos precio público usando el exchange correcto
+                        price = await ccxt_service.get_public_current_price(symbol, exchange_id=exchange_id)
                         
                         # Notificar a cada usuario del bot
                         for bot in bots:
@@ -88,14 +91,15 @@ class BootManager:
                                 "bot_id": str(bot.id),
                                 "symbol": symbol,
                                 "price": price,
+                                "exchange_id": exchange_id,
                                 "timestamp": datetime.utcnow().isoformat()
                             })
                     except Exception as e:
                         # Error de mercado o símbolo no encontrado - Logueamos una sola vez o con nivel info si es común
-                        if "does not have market symbol" in str(e).lower():
-                            logger.warning(f"⚠️ Símbolo {symbol} no disponible en el exchange. Saltando...")
+                        if "does not have market symbol" in str(e).lower() or "symbol not found" in str(e).lower():
+                            logger.warning(f"⚠️ Símbolo {symbol} no disponible en el exchange {exchange_id}. Saltando...")
                         else:
-                            logger.error(f"Error streaming price for {symbol}: {e}")
+                            logger.error(f"Error streaming price for {symbol} on {exchange_id}: {e}")
 
             except Exception as e:
                 logger.error(f"Error crítico en _price_streaming_loop: {e}")
