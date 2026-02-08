@@ -174,6 +174,9 @@ logger.info("  - WebSocket router [OK]")
 from api.src.adapters.driving.api.routers import health_router
 logger.info("  - Health router [OK]")
 
+from api.src.adapters.driving.api.routers import ai_router
+logger.info("  - AI router [OK]")
+
 logger.info("✅ Todos los routers cargados.")
 
 # API Router (prefix /api)
@@ -188,6 +191,7 @@ api_router.include_router(bot_router.router)
 api_router.include_router(signal_router.router)
 api_router.include_router(trade_router.router)
 api_router.include_router(health_router.router)
+api_router.include_router(ai_router.router)
 
 app.include_router(api_router)
 

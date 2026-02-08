@@ -11,6 +11,7 @@ from api.src.application.services.ml_service import MLService
 from api.src.domain.entities.bot_instance import BotInstance
 from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
 from api.src.infrastructure.security.auth_deps import get_current_user
+from api.src.domain.models.schemas import StrategyOptimizationRequest, StrategyOptimizationResponse, SaveStrategyRequest
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +159,8 @@ async def run_backtest(
                 "gemini": "geminiApiKey",
                 "openai": "openaiApiKey",
                 "perplexity": "perplexityApiKey",
-                "grok": "grokApiKey"
+                "grok": "grokApiKey",
+                "groq": "groqApiKey"
             }
             
             has_key = False
@@ -167,6 +169,12 @@ async def run_backtest(
                     has_key = True
                     break
             
+            # Check ai_agents collection if no keys found in app_config
+            if not has_key:
+                active_agent = await db.ai_agents.find_one({"userId": user["_id"], "isActive": True})
+                if active_agent:
+                    has_key = True
+
             if not has_key:
                 raise HTTPException(
                     status_code=400,
@@ -331,3 +339,63 @@ async def get_virtual_balance(
         logger.error(f"Error fetching virtual balance for {current_user.get('openId')}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.post("/optimize", response_model=StrategyOptimizationResponse)
+async def optimize_strategy(
+    request: StrategyOptimizationRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Recibe métricas y trades de un backtest reciente y utiliza IA para
+    refactorizar el código de la estrategia y mejorar sus resultados.
+    """
+    try:
+        user = current_user
+        user_id = user["openId"]
+
+        from api.src.application.services.backtest_service import BacktestService
+        from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+
+        service = BacktestService(exchange_adapter=ccxt_service)
+
+        result = await service.optimize_strategy(
+            strategy_name=request.strategy_name,
+            market_type=request.market_type,
+            metrics=request.metrics,
+            trades=request.trades,
+            user_id=user_id,
+            feedback=request.user_feedback
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error optimizing strategy: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/strategies/save")
+async def save_strategy_endpoint(
+    request: SaveStrategyRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Guarda el código de una estrategia optimizada.
+    """
+    try:
+        # TODO: Add specific permission checks if needed
+
+        from api.src.application.services.backtest_service import BacktestService
+        from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+
+        service = BacktestService(exchange_adapter=ccxt_service)
+
+        result = await service.save_strategy(
+            strategy_name=request.strategy_name,
+            code=request.code,
+            market_type=request.market_type
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error saving strategy: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
