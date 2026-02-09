@@ -3,7 +3,7 @@ from typing import List, Optional
 # Ajustamos el import para seguir la convención 'api.src...'
 from api.src.domain.entities.signal import Signal
 
-class SignalRepository(ABC):
+class ISignalRepository(ABC):
     @abstractmethod
     async def save(self, signal: Signal) -> Signal:
         """Guarda una nueva señal."""
