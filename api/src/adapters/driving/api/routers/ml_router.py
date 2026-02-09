@@ -19,7 +19,7 @@ class TrainRequest(BaseModel):
     days: int = 365
     epochs: int = 20
     user_id: str = "default_user"
-    exchange: str = "binance"
+    exchange: str = "okx"
     market: str = "spot"
 
 class BatchTrainRequest(BaseModel):
@@ -28,7 +28,7 @@ class BatchTrainRequest(BaseModel):
     days: int = 365
     epochs: int = 20
     user_id: str = "default_user"
-    exchange: str = "binance"
+    exchange: str = "okx"
     market: str = "spot"
 
 class PredictRequest(BaseModel):

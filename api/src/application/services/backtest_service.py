@@ -136,7 +136,6 @@ class BacktestService:
         self.logger.info(f"🚀 Iniciando Backtest Tournament: {symbol} | {days}d | {timeframe}")
         
         # 1. Obtener datos históricos
-        # 1. Obtener datos históricos (Tarea 5.1: Sourcing de Datos Reales)
         try:
             df = await self.get_market_data(symbol, timeframe, days, exchange_id, user_id=user_id)
         except Exception as e:
@@ -144,7 +143,6 @@ class BacktestService:
             raise ValueError(f"No se pudieron obtener datos para {symbol}: {e}")
 
         # 2. Descubrir estrategias (Dynamic Discovery from Models Directory)
-        # El usuario solicita usar los modelos que YA existen en api/data/models/[market]
         model_dir_specific = os.path.normpath(os.path.join(self.models_dir, market_type.lower()))
         
         if not os.path.exists(model_dir_specific):
@@ -156,7 +154,6 @@ class BacktestService:
         self.logger.info(f"Available models for backtest in {market_type}: {strategies_to_test}")
 
         if not strategies_to_test:
-            # Fallback to trainer discovery if models dir is empty (maybe models are in root?)
             self.logger.info("No compiled models found, attempting to discover from source code...")
             strategies_to_test = self.trainer.discover_strategies(market_type)
         
@@ -177,7 +174,6 @@ class BacktestService:
                 model_path = os.path.join(model_dir_specific, f"{strat_name}.pkl").replace('\\', '/')
                 
                 if not os.path.exists(model_path):
-                    # Fallback: Check root models dir
                     model_path_root = os.path.normpath(os.path.join(self.models_dir, f"{strat_name}.pkl"))
                     if os.path.exists(model_path_root):
                         model_path = model_path_root
@@ -197,22 +193,18 @@ class BacktestService:
                 strategy_obj = StrategyClass()
                 features = strategy_obj.get_features()
 
-                # Preparar DataFrame con indicadores y contexto
-                # Tarea S9.4: Inyectar datos de contexto (Missing features fix)
                 df_processed = self.prepare_data_for_model(df.copy(), strategy_obj)
                 
                 if df_processed.empty or not all(c in df_processed.columns for c in features):
                     self.logger.warning(f"⏩ Skipping {strat_name}: Missing features.")
                     continue
 
-                # Determinar estep_investment (Monto por operación)
-                step_investment = initial_balance * 0.2 # Default 20%
+                step_investment = initial_balance * 0.2
                 
                 if trade_amount and trade_amount > 0:
                     step_investment = trade_amount
                     self.logger.info(f"💰 Usando monto fijo por parámetro: ${step_investment}")
                 else:
-                    # Fallback to DB
                     try:
                         from api.src.adapters.driven.persistence.mongodb import get_app_config
                         user_config = await get_app_config(user_id)
@@ -224,19 +216,13 @@ class BacktestService:
                     except Exception as e:
                         self.logger.warning(f"⚠️ No se pudo cargar configuración de usuario, usando default: {e}")
 
-                # Predicciones
-                # Ajustar features para incluir las nuevas columnas de contexto
-                # OJO: El orden debe ser EXACTAMENTE el mismo que en StrategyTrainer
                 model_features = features + ['in_position', 'current_pnl']
                 
-                # Validar que existan todas las columnas
                 valid_idx = df_processed[model_features].dropna().index
                 X = df_processed.loc[valid_idx, model_features]
                 df_processed.loc[valid_idx, 'ai_signal'] = model.predict(X)
                 df_processed['ai_signal'] = df_processed['ai_signal'].fillna(0)
 
-                # Simulación de trading con DCA y Flipping (Long/Short)
-                # Tarea 9.1: Lógica de Inversión / Flip (S9)
                 simulation_result = self._simulate_with_reversal(
                     df_processed, 
                     initial_balance=initial_balance,
@@ -245,7 +231,6 @@ class BacktestService:
                     sl=sl
                 )
                 
-                # Check if simulation failed or returned empty
                 if not simulation_result:
                      continue
 
@@ -257,7 +242,6 @@ class BacktestService:
                     "final_balance": simulation_result['final_balance']
                 })
                 
-                # Mantener datos detallados de la mejor
                 if simulation_result['profit_pct'] > highest_pnl:
                     highest_pnl = simulation_result['profit_pct']
                     best_strategy_data = {
@@ -272,11 +256,9 @@ class BacktestService:
         if not tournament_results:
             raise ValueError(f"No se pudo completar el backtest para ninguna estrategia en {exchange_id}.")
 
-        # 4. Ordenar resultados
         tournament_results.sort(key=lambda x: x['profit_pct'], reverse=True)
         winner = tournament_results[0]
         
-        # 5. Preparar Chart Data
         chart_data = []
         def sanitize(val):
             if pd.isna(val) or val == float('inf') or val == float('-inf'): return None
@@ -334,12 +316,10 @@ class BacktestService:
         limit += 100 # Buffer
         
         self.logger.info(f"🌍 FETCHING REAL DATA via CCXT for {symbol} (Limit: {limit} candles, User: {user_id}, Exchange: {exchange_id})")
-        # Use get_historical_data which now supports user-auth via _get_client_for_user and explicit exchange_id
         df = await self.exchange.get_historical_data(symbol, timeframe, limit=limit, user_id=user_id, exchange_id=exchange_id)
         if df.empty:
-            # Fallback to public if private fails or returns empty (though get_historical_data handles this)
             self.logger.warning("Empty data from auth client, retrying with public...")
-            df = await self.exchange.get_public_historical_data(symbol, timeframe, limit=limit, exchange_id=exchange_id)
+            df = await self.exchange.get_historical_data(symbol, timeframe, limit=limit, exchange_id=exchange_id)
             
         if df.empty:
             raise ValueError(f"No se pudieron obtener datos para {symbol}")
@@ -363,27 +343,19 @@ class BacktestService:
         
         from api.src.domain.strategies.base import BaseStrategy
 
-        # Iterate using range to access "next candle" for execution
-        # Fix Look-ahead bias: Signal at i executes at i+1 (Open)
-
         for i in range(len(df_processed) - 1):
             current_row = df_processed.iloc[i]
             next_row = df_processed.iloc[i+1]
 
-            # Signal comes from the completed candle (i)
             signal = current_row['ai_signal']
             
-            # Execution happens at the OPEN of the NEXT candle (i+1)
             price = next_row['open']
-            timestamp = next_row.name # Timestamp of the trade is the open time of i+1
+            timestamp = next_row.name
 
-            # Skip if signal is 0 (HOLD)
             if signal == 0:
                 continue
 
-            # --- Lógica de Inversión (Market Flip) ---
             if signal == BaseStrategy.SIGNAL_BUY: 
-                # Check for FLIP (Short -> Long)
                 if short_amount > 0:
                     pnl = short_invested - (short_amount * price)
                     balance += short_invested + pnl
@@ -399,14 +371,12 @@ class BacktestService:
                     else: loss_count += 1
                     short_amount, short_invested = 0, 0
                     
-                    # Reversal
                     if balance >= step_investment:
                         amount_to_buy = step_investment / price
                         long_amount, long_invested = amount_to_buy, step_investment
                         balance -= step_investment
                         trades.append({"time": int(timestamp.timestamp()), "type": "BUY", "price": price, "amount": amount_to_buy, "label": "FLIP_OPEN_LONG"})
                 
-                # Entry/DCA
                 elif balance >= step_investment:
                     is_dca = long_amount > 0
                     amount_to_buy = step_investment / price
@@ -416,7 +386,6 @@ class BacktestService:
                     trades.append({"time": int(timestamp.timestamp()), "type": "BUY", "price": price, "amount": amount_to_buy, "label": "DCA_LONG" if is_dca else "OPEN_LONG"})
                     
             elif signal == BaseStrategy.SIGNAL_SELL: 
-                # Check for FLIP (Long -> Short)
                 if long_amount > 0:
                     pnl = (long_amount * price) - long_invested
                     balance += (long_amount * price)
@@ -432,14 +401,12 @@ class BacktestService:
                     else: loss_count += 1
                     long_amount, long_invested = 0, 0
                     
-                    # Reversal
                     if balance >= step_investment:
                         amount_to_short = step_investment / price
                         short_amount, short_invested = amount_to_short, step_investment
                         balance -= step_investment
                         trades.append({"time": int(timestamp.timestamp()), "type": "SELL", "price": price, "amount": amount_to_short, "label": "FLIP_OPEN_SHORT"})
                         
-                # Entry/DCA
                 elif balance >= step_investment:
                     is_dca = short_amount > 0
                     amount_to_short = step_investment / price
@@ -448,7 +415,6 @@ class BacktestService:
                     balance -= step_investment
                     trades.append({"time": int(timestamp.timestamp()), "type": "SELL", "price": price, "amount": amount_to_short, "label": "DCA_SHORT" if is_dca else "OPEN_SHORT"})
 
-        # Calculate Final Stats
         final_balance = balance
         if long_amount > 0:
              final_balance += (long_amount * df_processed.iloc[-1]['close'])
@@ -479,24 +445,19 @@ class BacktestService:
         Prepara el DataFrame con los indicadores técnicos 
         y el contexto de posición requerido por los nuevos modelos (S9).
         """
-        # 1. Aplicar indicadores técnicos base de la estrategia
         df = strategy.apply(df)
         
-        # 2. Simular el contexto de posición (Igual que en el StrategyTrainer)
-        # Inicializar columnas para evitar NaN
         df['in_position'] = 0
         df['current_pnl'] = 0.0
         
         avg_price = 0.0
         in_pos = False
         
-        # Iteramos para reconstruir el estado que el modelo espera ver (Long/Short flipping)
         current_side = None
 
         for i in range(1, len(df)):
             prev_signal = df.iloc[i-1].get('signal')
 
-            # Cambio de dirección (Flip)
             if prev_signal == BaseStrategy.SIGNAL_BUY:
                 in_pos = True
                 current_side = "BUY"
@@ -516,3 +477,141 @@ class BacktestService:
                         df.at[df.index[i], 'current_pnl'] = (avg_price - current_price) / avg_price
                     
         return df
+
+    async def optimize_strategy(
+        self,
+        strategy_name: str,
+        market_type: str,
+        metrics: Dict,
+        trades: List[Dict],
+        user_id: str,
+        feedback: str = None
+    ) -> Dict[str, Any]:
+        """
+        Localiza el código fuente, prepara el resumen de trades y consulta a la IA.
+        """
+        import re
+
+        try:
+            filename = re.sub(r'(?<!^)(?=[A-Z])', '_', strategy_name).lower()
+
+            base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../domain/strategies"))
+            file_path = os.path.join(base_path, market_type.lower(), f"{filename}.py")
+
+            if not os.path.exists(file_path):
+                file_path = os.path.join(base_path, market_type.lower(), f"{strategy_name}.py")
+
+            if not os.path.exists(file_path):
+                file_path = os.path.join(base_path, f"{filename}.py")
+
+            if not os.path.exists(file_path):
+                found = False
+                for root, dirs, files in os.walk(base_path):
+                    if f"{filename}.py" in files:
+                        file_path = os.path.join(root, f"{filename}.py")
+                        found = True
+                        break
+                    if f"{strategy_name}.py" in files:
+                        file_path = os.path.join(root, f"{strategy_name}.py")
+                        found = True
+                        break
+                if not found:
+                     raise ValueError(f"No se encontró el archivo de estrategia para {strategy_name}")
+
+            with open(file_path, "r", encoding="utf-8") as f:
+                source_code = f.read()
+
+        except Exception as e:
+            self.logger.error(f"Could not read strategy file for {strategy_name}: {e}")
+            raise ValueError(f"No se encontró el código fuente para {strategy_name}")
+
+        sorted_trades = sorted(trades, key=lambda x: x.get('pnl', 0))
+        worst_trades = sorted_trades[:3]
+        best_trades = sorted_trades[-3:]
+        recent_trades = trades[-5:]
+
+        trades_summary = {
+            "worst_losses": worst_trades,
+            "best_wins": best_trades,
+            "recent_activity": recent_trades,
+            "total_count": len(trades)
+        }
+
+        from api.src.adapters.driven.persistence.mongodb import get_app_config, db
+
+        app_config = await get_app_config(user_id) or {}
+
+        active_agent = await db.ai_agents.find_one({"userId": app_config.get("userId"), "isPrimary": True})
+        if not active_agent:
+             active_agent = await db.ai_agents.find_one({"userId": app_config.get("userId"), "isActive": True})
+
+        if active_agent:
+            provider = active_agent.get("provider")
+            key_field_map = {
+                "gemini": "geminiApiKey",
+                "openai": "openaiApiKey",
+                "perplexity": "perplexityApiKey",
+                "grok": "grokApiKey",
+                "groq": "groqApiKey"
+            }
+            if provider in key_field_map:
+                app_config[key_field_map[provider]] = active_agent.get("apiKey")
+                app_config["aiProvider"] = provider
+
+        from api.src.application.services.ai_service import AIService
+        ai_service = AIService()
+
+        optimization_result = await ai_service.optimize_strategy_code(
+            source_code=source_code,
+            metrics=metrics,
+            trades_summary=trades_summary,
+            config=app_config,
+            feedback=feedback
+        )
+
+        await ai_service.close()
+
+        return {
+            "original_code": source_code,
+            "optimized_code": optimization_result.get("code"),
+            "analysis": optimization_result.get("analysis"),
+            "modifications": optimization_result.get("modifications", [])
+        }
+
+    async def save_strategy(
+        self,
+        strategy_name: str,
+        code: str,
+        market_type: str = "spot"
+    ) -> Dict[str, Any]:
+        """
+        Guarda el código de la estrategia en el sistema de archivos.
+        """
+        import re
+
+        try:
+            safe_name = re.sub(r'[^a-zA-Z0-9_]', '', strategy_name)
+            filename = f"{safe_name}.py"
+
+            base_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../domain/strategies"))
+            target_dir = os.path.join(base_path, market_type.lower())
+
+            if not os.path.exists(target_dir):
+                os.makedirs(target_dir, exist_ok=True)
+
+            file_path = os.path.join(target_dir, filename)
+
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(code)
+
+            self.logger.info(f"Strategy {strategy_name} saved to {file_path}")
+
+            return {
+                "success": True,
+                "message": f"Strategy saved as {filename}",
+                "path": file_path
+            }
+
+        except Exception as e:
+            self.logger.error(f"Error saving strategy {strategy_name}: {e}")
+            raise ValueError(f"Could not save strategy: {e}")

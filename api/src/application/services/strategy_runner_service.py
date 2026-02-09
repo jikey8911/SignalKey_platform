@@ -112,14 +112,14 @@ class StrategyRunnerService:
 
                 # 4. Obtener Datos de Mercado Recientes (Optimized via DataBuffer)
                 candles_df = None
-                buffer_data = DataBufferService().get_latest_data("binance", symbol, timeframe)  # Assuming binance for now or use bot.exchangeId
+                buffer_data = DataBufferService().get_latest_data("okx", symbol, timeframe)  # Assuming okx for now or use bot.exchangeId
                 
                 if buffer_data is not None and len(buffer_data) >= 50:
                     candles_df = buffer_data.tail(100) # Get last 100
                 
                 if candles_df is None or candles_df.empty:
                      # Fallback to API if buffer empty or insufficient
-                     candles_df = await self.ml_service.exchange.get_public_historical_data(
+                     candles_df = await self.ml_service.exchange.get_historical_data(
                         symbol=symbol,
                         timeframe=timeframe,
                         limit=100,
@@ -155,7 +155,7 @@ class StrategyRunnerService:
                 # 7. Persistencia y Emisión de Señal (Tarea 4.3/4.5: Emitir HOLD y otros)
                 confidence = prediction.get('confidence', 0.85)
                 try:
-                    from api.src.domain.models.signal import Signal, SignalStatus, Decision, MarketType
+                    from api.src.domain.entities.signal import Signal, SignalStatus, Decision, MarketType
                     from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
                     
                     signal_repo = MongoDBSignalRepository(db)

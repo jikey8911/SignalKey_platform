@@ -1,0 +1,15 @@
+REPORTE DE CONEXIÓN CCXT PRO - 2026-02-08 00:38:24.096412
+========================================
+
+Exchange: okx
+Símbolo: BTC/USDT
+Timeframe: 1m
+
+--- TICKER UPDATES ---
+
+--- CANDLE UPDATES ---
+
+--- ERRORES ---
+❌ Error al cargar mercados: okx GET https://api.okx.com/api/v3/exchangeInfo
+Error en Ticker: okx GET https://api.okx.com/api/v3/exchangeInfo
+Error en Velas: okx GET https://api.okx.com/api/v3/exchangeInfo

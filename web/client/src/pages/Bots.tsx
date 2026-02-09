@@ -26,47 +26,53 @@ const ExecutionMonitor = ({ bot }: any) => {
     const [candles, setCandles] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
 
-    // Fetch Initial Candles & Signal History
+    // Fetch Signal History (Now comes from WebSocket in bot object)
     useEffect(() => {
-        if (!bot?.id || !bot?.symbol) return;
+        if (!bot?.id) return;
 
-        const fetchData = async () => {
-            setLoading(true);
-            try {
-                // Fetch Candles
-                const candleRes = await fetch(`${CONFIG.API_BASE_URL}/market/candles?symbol=${encodeURIComponent(bot.symbol)}&timeframe=${bot.timeframe || '1h'}&limit=100`);
-                if (candleRes.ok) {
-                    const data = await candleRes.json();
-                    setCandles(data);
-                }
+        // Set candles and signals from bot object (Socket pre-loaded them)
+        if (bot.candles && bot.candles.length > 0) {
+            setCandles(bot.candles);
+        }
 
-                // Fetch History Signals (New Endpoint S9)
-                const signalRes = await fetch(`${CONFIG.API_BASE_URL}/bots/${bot.id}/signals`);
-                if (signalRes.ok) {
-                    const data = await signalRes.json();
-                    setHistorySignals(data);
-                }
-            } catch (e) {
-                console.error("Error fetching monitor data", e);
-            } finally {
-                setLoading(false);
-            }
-        };
-        fetchData();
+        if (bot.signals && bot.signals.length > 0) {
+            setHistorySignals(bot.signals);
+        }
+
         setLiveSignals([]); // Reset live signals when changing bot
-    }, [bot?.id, bot?.symbol, bot?.timeframe]);
+    }, [bot?.id, bot?.symbol, bot?.timeframe, bot?.candles, bot?.signals]);
 
-    // Integración real: Añadir señal del socket a la lista visual
+    // Integración real: Añadir señal y velas del socket
     useEffect(() => {
-        if (lastMessage && (lastMessage.event === 'signal_update' || lastMessage.event === 'live_execution_signal')) {
+        if (!lastMessage) return;
+
+        if (lastMessage.event === 'signal_update' || lastMessage.event === 'live_execution_signal') {
             const signalData = lastMessage.data;
             if (signalData?.bot_id === bot?.id) {
                 setLiveSignals(prev => [signalData, ...prev].slice(0, 5));
                 // Also add to history for chart
                 setHistorySignals(prev => [...prev, signalData]);
             }
+        } else if (lastMessage.event === 'candle_update') {
+            const { symbol, timeframe, exchange, candle } = lastMessage.data;
+            if (symbol === bot?.symbol && timeframe === bot?.timeframe) {
+                setCandles(prev => {
+                    // Si el 'time' es el mismo que la última vela, se actualiza.
+                    // Si es nuevo, se agrega.
+                    if (prev.length === 0) return [candle];
+                    const last = prev[prev.length - 1];
+                    if (last.time === candle.time) {
+                        const updated = [...prev];
+                        updated[updated.length - 1] = candle;
+                        return updated;
+                    } else if (candle.time > last.time) {
+                        return [...prev, candle].slice(-200); // Mantener buffer manejable
+                    }
+                    return prev;
+                });
+            }
         }
-    }, [lastMessage, bot?.id]);
+    }, [lastMessage, bot?.id, bot?.symbol, bot?.timeframe]);
 
     const combinedSignals = useMemo(() => {
         return [...historySignals];
@@ -99,12 +105,17 @@ const ExecutionMonitor = ({ bot }: any) => {
                             data={candles}
                             symbol={bot?.symbol}
                             timeframe={bot?.timeframe}
-                            trades={combinedSignals.map(s => ({
-                                time: new Date(s.createdAt || Date.now()).getTime(),
-                                price: s.price,
-                                side: (s.decision?.includes('BUY') || s.type === 'LONG' || s.side === 'buy') ? 'BUY' : 'SELL',
-                                label: s.decision || s.type || s.side
-                            }))}
+                            trades={combinedSignals
+                                .filter(s => {
+                                    const d = (s.decision || s.type || s.side || '').toUpperCase();
+                                    return d.includes('BUY') || d.includes('SELL') || d.includes('LONG') || d.includes('SHORT');
+                                })
+                                .map(s => ({
+                                    time: new Date(s.createdAt || Date.now()).getTime(),
+                                    price: s.price || s.parameters?.entry_price || s.entryPrice,
+                                    side: (s.decision?.toUpperCase().includes('BUY') || s.type === 'LONG' || s.side?.toLowerCase() === 'buy') ? 'BUY' : 'SELL',
+                                    label: s.decision || s.type || s.side
+                                }))}
                             height={320}
                         />
                     )}
@@ -120,7 +131,7 @@ const ExecutionMonitor = ({ bot }: any) => {
                                 <span className={(sig.decision?.includes('BUY') || sig.type === 'LONG' || sig.side === 'buy') ? 'text-blue-400' : 'text-amber-400'}>
                                     ● {sig.decision || sig.type || sig.side}
                                 </span>
-                                <span className="text-white font-mono">${sig.price?.toFixed(2)}</span>
+                                <span className="text-white font-mono">${sig.price?.toFixed(6)}</span>
                                 <span className="text-[10px] text-slate-500">
                                     {new Date(sig.createdAt || Date.now()).toLocaleTimeString()}
                                 </span>
@@ -182,7 +193,7 @@ const BotInfoModule = ({ bot }: { bot: any }) => {
                             <div className="flex gap-1">
                                 {(bot.takeProfits || []).map((tp: any, idx: number) => (
                                     <Badge key={idx} variant="outline" className={`text-[10px] ${tp.status === 'hit' ? 'bg-green-500/20 text-green-400' : 'text-slate-500'}`}>
-                                        {tp.price?.toFixed(2)}
+                                        {tp.price?.toFixed(6)}
                                     </Badge>
                                 ))}
                                 {(!bot.takeProfits || bot.takeProfits.length === 0) && <span className="text-xs text-slate-600">Auto (IA)</span>}
@@ -190,7 +201,7 @@ const BotInfoModule = ({ bot }: { bot: any }) => {
                         </div>
                         <div className="flex justify-between items-center">
                             <span className="text-slate-500 text-sm">Stop Loss:</span>
-                            <span className="font-mono text-red-400">${bot.stopLoss?.toFixed(4) || '---'}</span>
+                            <span className="font-mono text-red-400">${bot.stopLoss?.toFixed(6) || '---'}</span>
                         </div>
                         <div className="flex justify-between items-center">
                             <span className="text-slate-500 text-sm">Leverage:</span>
@@ -212,11 +223,11 @@ const BotInfoModule = ({ bot }: { bot: any }) => {
                     </div>
                     <div>
                         <p className="text-xs text-slate-500 mb-1">Precio Entrada</p>
-                        <p className="text-xl font-mono text-white">${bot.entryPrice?.toFixed(4)}</p>
+                        <p className="text-xl font-mono text-white">${bot.entryPrice?.toFixed(6)}</p>
                     </div>
                     <div>
                         <p className="text-xs text-slate-500 mb-1">Precio Actual</p>
-                        <p className="text-xl font-mono text-white">${bot.currentPrice?.toFixed(4) || '---'}</p>
+                        <p className="text-xl font-mono text-white">${bot.currentPrice?.toFixed(6) || '---'}</p>
                     </div>
                 </div>
             </Card>
@@ -224,29 +235,10 @@ const BotInfoModule = ({ bot }: { bot: any }) => {
     );
 }
 
-const SignalHistoryModule = ({ botId }: { botId: string }) => {
-    const [signals, setSignals] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
-
-    useEffect(() => {
-        const fetchHistory = async () => {
-            setLoading(true);
-            try {
-                const res = await fetch(`${CONFIG.API_BASE_URL}/bots/${botId}/signals`);
-                if (res.ok) {
-                    const data = await res.json();
-                    setSignals(data.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
-                }
-            } catch (e) {
-                console.error("Error fetching history", e);
-            } finally {
-                setLoading(false);
-            }
-        };
-        fetchHistory();
-    }, [botId]);
-
-    if (loading) return <div className="text-center py-10 text-slate-500 animate-pulse">Cargando historial...</div>;
+const SignalHistoryModule = ({ signals: initialSignals }: { signals: any[] }) => {
+    const signals = useMemo(() => {
+        return [...initialSignals].sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    }, [initialSignals]);
 
     return (
         <Card className="overflow-hidden bg-slate-900 border-white/10 animate-in fade-in slide-in-from-bottom-4">
@@ -280,7 +272,7 @@ const SignalHistoryModule = ({ botId }: { botId: string }) => {
                                         </Badge>
                                     </td>
                                     <td className="px-6 py-4 font-mono text-white">
-                                        {signal.price ? `$${signal.price.toFixed(2)}` : '---'}
+                                        {signal.price ? `$${signal.price.toFixed(6)}` : '---'}
                                     </td>
                                     <td className="px-6 py-4">
                                         {signal.confidence ? (
@@ -352,7 +344,7 @@ const GlobalSignalTicker = () => {
                                 <Badge variant="outline" className={`h-4 text-[9px] px-1 ${(sig.decision?.includes('BUY') || sig.type === 'LONG') ? 'text-green-400 border-green-500/30' : 'text-red-400 border-red-500/30'}`}>
                                     {sig.decision || sig.type}
                                 </Badge>
-                                <span className="text-[10px] font-mono text-white">${sig.price?.toFixed(2)}</span>
+                                <span className="text-[10px] font-mono text-white">${sig.price?.toFixed(6)}</span>
                             </div>
                         </div>
                     ))}
@@ -388,21 +380,65 @@ const BotsPage = () => {
 
     const activeBot = useMemo(() => bots.find(b => b.id === selectedId), [bots, selectedId]);
 
-    // Sync with Context
+    // Sync with Context & Fetch Details on change
     useEffect(() => {
         setSelectedBot(activeBot || null);
-    }, [activeBot, setSelectedBot]);
+        if (selectedId) {
+            sendMessage({ action: 'get_bot_details', bot_id: selectedId });
+        }
+    }, [selectedId, setSelectedBot, sendMessage]);
 
     // Also update on active_bot_update socket event if available
     useEffect(() => {
         if (!lastMessage) return;
 
         if (lastMessage.event === 'all_bots_list') {
-            setBots(lastMessage.data);
+            setBots(prev => {
+                const newData = lastMessage.data;
+                return newData.map((newBot: any) => {
+                    const existingBot = prev.find(b => b.id === newBot.id);
+                    // Preservar datos enriquecidos si ya existen para evitar "limpieza" al refrescar lista
+                    return {
+                        ...newBot,
+                        candles: existingBot?.candles || newBot.candles,
+                        signals: existingBot?.signals || newBot.signals,
+                        active_position: existingBot?.active_position || newBot.active_position,
+                        currentPrice: existingBot?.currentPrice || newBot.currentPrice
+                    };
+                });
+            });
             setLoading(false);
             if (lastMessage.data.length > 0 && !selectedId) {
                 setSelectedId(lastMessage.data[0].id);
             }
+        } else if (lastMessage.event === 'bot_details') {
+            const detailedBot = lastMessage.data;
+            setBots(prev => prev.map(b => b.id === detailedBot.id ? { ...b, ...detailedBot } : b));
+        } else if (lastMessage.event === 'price_update') {
+            const { bot_id, price } = lastMessage.data;
+            setBots(prev => {
+                const targetBot = prev.find(b => b.id === bot_id);
+                // Evitar actualizaciones innecesarias si el precio no cambió (como pidió el usuario)
+                if (targetBot && targetBot.currentPrice === price) return prev;
+
+                return prev.map(b => {
+                    if (b.id === bot_id) {
+                        // Recalcular PnL si hay una posición activa
+                        let newPnl = b.pnl;
+                        if (b.active_position && b.active_position.avgEntryPrice > 0) {
+                            const avg = b.active_position.avgEntryPrice;
+                            const side = b.active_position.side;
+                            if (side === 'BUY') {
+                                newPnl = ((price - avg) / avg) * 100;
+                            } else if (side === 'SELL') {
+                                newPnl = ((avg - price) / avg) * 100;
+                            }
+                        }
+                        return { ...b, currentPrice: price, pnl: newPnl };
+                    }
+                    return b;
+                });
+            });
         } else if (lastMessage.event === 'bot_update') {
             setBots(prev => prev.map(b => b.id === lastMessage.data.id ? { ...b, ...lastMessage.data } : b));
         } else if (lastMessage.event === 'bot_created') {
@@ -484,9 +520,14 @@ const BotsPage = () => {
                                 <div className="flex justify-between items-end">
                                     <p className="text-[10px] font-mono text-slate-400">{bot.symbol} | {bot.strategy_name}</p>
                                     {bot.pnl !== undefined && bot.pnl !== 0 && (
-                                        <span className={`text-xs font-bold font-mono ${bot.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                                            {bot.pnl > 0 ? '+' : ''}{bot.pnl.toFixed(2)}%
-                                        </span>
+                                        <div className="flex items-center gap-1">
+                                            <div className={`p-1 rounded-full ${bot.pnl >= 0 ? 'bg-green-500/10' : 'bg-red-500/10'}`}>
+                                                <TrendingUp className={`w-3 h-3 ${bot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`} />
+                                            </div>
+                                            <span className={`text-[10px] font-bold ${bot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                {bot.pnl > 0 ? '+' : ''}{bot.pnl.toFixed(6)}%
+                                            </span>
+                                        </div>
                                     )}
                                 </div>
                             </Card>
@@ -510,31 +551,42 @@ const BotsPage = () => {
                                     </TabsContent>
 
                                     <TabsContent value="monitor">
-                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-                                            <Card className="p-6 bg-gradient-to-br from-blue-500/5 to-transparent border-blue-500/10">
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                                            <Card className="p-4 bg-gradient-to-br from-blue-500/5 to-transparent border-blue-500/10">
                                                 <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Profit Actual</p>
-                                                <h3 className={`text-3xl font-black ${activeBot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                                                    {activeBot.pnl > 0 ? '+' : ''}{activeBot.pnl?.toFixed(2) || '0.00'}%
+                                                <h3 className={`text-2xl font-black ${activeBot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                                                    {activeBot.pnl > 0 ? '+' : ''}{activeBot.pnl?.toFixed(6) || '0.000000'}%
                                                 </h3>
                                             </Card>
-                                            <Card className="p-6 bg-slate-900/50 border-white/5">
+                                            <Card className="p-4 bg-slate-900/50 border-white/5">
                                                 <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Precio Actual</p>
-                                                <h3 className="text-2xl font-mono text-white">
-                                                    ${activeBot.currentPrice?.toFixed(2) || '---'}
+                                                <h3 className="text-xl font-mono text-white">
+                                                    ${activeBot.currentPrice === undefined || activeBot.currentPrice === 0
+                                                        ? (activeBot.active_position?.avgEntryPrice?.toFixed(6) || '---')
+                                                        : activeBot.currentPrice.toFixed(6)}
                                                 </h3>
                                             </Card>
-                                            <Card className="p-6 bg-slate-900/50 border-white/5">
-                                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Bot ID</p>
-                                                <h3 className="text-sm font-mono text-slate-400 truncate" title={activeBot.id}>
-                                                    {activeBot.id}
+                                            <Card className="p-4 bg-slate-900/50 border-white/5">
+                                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Precio Entrada (Promediado)</p>
+                                                <h3 className="text-xl font-mono text-blue-400">
+                                                    ${(activeBot.active_position?.avgEntryPrice || activeBot.entryPrice)?.toFixed(6) || '---'}
                                                 </h3>
                                             </Card>
+                                            <Card className="p-4 bg-slate-900/50 border-white/5">
+                                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Cantidad ({activeBot.symbol?.split('/')[0]})</p>
+                                                <h3 className="text-xl font-mono text-amber-500">
+                                                    {activeBot.active_position?.currentQty?.toFixed(6) || '0.000000'}
+                                                </h3>
+                                            </Card>
+                                        </div>
+                                        <div className="mb-6 opacity-40 hover:opacity-100 transition-opacity">
+                                            <p className="text-[10px] font-mono text-slate-500">Bot ID: {activeBot.id}</p>
                                         </div>
                                         <ExecutionMonitor bot={activeBot} />
                                     </TabsContent>
 
                                     <TabsContent value="history">
-                                        <SignalHistoryModule botId={activeBot.id} />
+                                        <SignalHistoryModule signals={activeBot.signals || []} />
                                     </TabsContent>
                                 </div>
                             </Tabs>

@@ -52,7 +52,7 @@ class MLService:
         for symbol in symbols:
             try:
                 # Usamos random_date=True para el entrenamiento y API pública
-                df = await self.exchange.get_public_historical_data(
+                df = await self.exchange.get_historical_data(
                     symbol, 
                     timeframe, 
                     limit=2000, 

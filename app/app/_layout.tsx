@@ -15,6 +15,7 @@ export default function RootLayout() {
           <Stack.Screen name="(auth)" options={{ headerShown: false }} />
           <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
           <Stack.Screen name="backtest" options={{ presentation: 'modal', headerShown: true, title: 'Backtest' }} />
+          <Stack.Screen name="analytics" options={{ headerShown: true, title: 'Performance Analytics' }} />
           <Stack.Screen name="training" options={{ headerShown: true, title: 'AI Training' }} />
           <Stack.Screen name="telegram" options={{ headerShown: true, title: 'Telegram Console' }} />
         </Stack>

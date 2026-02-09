@@ -21,6 +21,7 @@ class StrategyTrainer:
         # Assuming running from project root e:\antigravity\signaalKei_platform
         self.strategies_dir = strategies_dir
         self.models_dir = models_dir
+        self._class_cache = {} # Cache para evitar recargas constantes
         os.makedirs(self.models_dir, exist_ok=True)
 
     def discover_strategies(self, market_type: str = None) -> List[str]:
@@ -49,47 +50,48 @@ class StrategyTrainer:
         return sorted(list(strategies))
 
     def load_strategy_class(self, strategy_name: str, market_type: str = None):
-        """Dynamic strategy class loading."""
+        """Dynamic strategy class loading with caching."""
+        market = market_type.lower() if market_type else "spot"
+        cache_key = f"{market}:{strategy_name}"
+        
+        if cache_key in self._class_cache:
+            return self._class_cache[cache_key]
+
         try:
-            if market_type:
-                module_path = f"api.src.domain.strategies.{market_type.lower()}.{strategy_name}"
-            else:
-                module_path = f"api.src.domain.strategies.spot.{strategy_name}"
+            # La ruta debe ser estrictamente api.src.domain.strategies.[market_type].[strategy_name]
+            module_path = f"api.src.domain.strategies.{market}.{strategy_name}"
 
             try:
                 module = importlib.import_module(module_path)
             except ImportError:
-                # Fallback to root strategies if market-specific not found
-                if market_type:
-                    module_path = f"api.src.domain.strategies.spot.{strategy_name}"
-                    module = importlib.import_module(module_path)
-                else:
-                    raise
+                logger.error(f"Estrategia '{strategy_name}' no encontrada en la ruta obligatoria: {module_path}")
+                raise
             
-            # Try multiple class naming conventions
-            possible_names = []
-            
-            # 1. PascalCase (e.g. stochastic -> Stochastic)
-            pascal = "".join(w.title() for w in strategy_name.split("_"))
-            possible_names.append(pascal)
-            
-            # 2. PascalCase + Strategy (e.g. StochasticStrategy)
-            possible_names.append(pascal + "Strategy")
-            
-            # 3. UPPERCASE + Strategy (e.g. vwap -> VWAPStrategy)
-            possible_names.append(strategy_name.upper() + "Strategy")
-            
-            # 4. UPPERCASE (e.g. VWAP)
-            possible_names.append(strategy_name.upper())
+            # --- IMPROVED: Search for any class inheriting from BaseStrategy ---
+            import inspect
+            for name, obj in inspect.getmembers(module):
+                if inspect.isclass(obj):
+                    if any(base.__name__ == 'BaseStrategy' for base in obj.__mro__) and obj.__name__ != 'BaseStrategy':
+                        logger.info(f"Loaded strategy class '{name}' from {module_path}")
+                        self._class_cache[cache_key] = obj
+                        return obj
 
-            # 5. Original naming (lowercase or whatever filename is)
-            possible_names.append(strategy_name)
+            # Fallback to old name-based logic
+            possible_names = [
+                "".join(w.title() for w in strategy_name.split("_")), # rsi_strategy -> RsiStrategy
+                strategy_name.upper(), # rsi -> RSI
+                strategy_name.upper() + "Strategy", # rsi -> RSIStrategy
+                "".join(w.title() for w in strategy_name.split("_")) + "Strategy",
+                strategy_name
+            ]
 
             for name in possible_names:
                 if hasattr(module, name):
-                    return getattr(module, name)
+                    obj = getattr(module, name)
+                    self._class_cache[cache_key] = obj
+                    return obj
             
-            logger.error(f"Could not find strategy class in {module_path}. Checked: {possible_names}")
+            logger.error(f"Could not find strategy class in {module_path}.")
             return None
         except Exception as e:
             logger.error(f"Error loading strategy {strategy_name}: {e}")

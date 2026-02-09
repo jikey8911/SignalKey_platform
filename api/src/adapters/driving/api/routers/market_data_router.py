@@ -46,7 +46,7 @@ async def get_candles(symbol: str, timeframe: str = "1h", limit: int = 100):
     """
     try:
         # We use the public data fetcher which is robust
-        df = await ccxt_service.get_public_historical_data(symbol, timeframe, limit=limit)
+        df = await ccxt_service.get_historical_data(symbol, timeframe, limit=limit)
         
         if df.empty:
              return []

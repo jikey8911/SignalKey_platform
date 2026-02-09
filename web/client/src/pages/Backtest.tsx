@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Play, BarChart3, TrendingUp, TrendingDown, Loader2, Trophy, BrainCircuit, ChevronRight, Search, RotateCcw, CircleStop, X } from 'lucide-react';
@@ -6,10 +6,11 @@ import { toast } from 'sonner';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Progress } from '@/components/ui/progress';
 import { CONFIG } from '@/config';
 import { TradingViewChart } from '@/components/ui/TradingViewChart';
+import { wsService } from '@/lib/websocket'; // Importar servicio WS
 
 interface Candle {
   time: number;
@@ -118,156 +119,251 @@ export default function Backtest() {
 
   useEffect(() => {
     setLoadingExchanges(true);
+    console.log("[Backtest] Fetching exchanges from:", `${CONFIG.API_BASE_URL}/market/exchanges`);
     fetch(`${CONFIG.API_BASE_URL}/market/exchanges`)
-      .then(res => res.json())
+      .then(res => {
+        if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+        return res.json();
+      })
       .then(data => {
+        console.log("[Backtest] Exchanges loaded:", data);
         if (Array.isArray(data)) {
-          // Map string[] to object structure expected by UI
           setExchanges(data.map(e => ({ exchangeId: e, isActive: true })));
         }
       })
-      .catch(err => console.error("Error fetching exchanges:", err))
+      .catch(err => {
+        console.error("[Backtest] Error fetching exchanges:", err);
+        toast.error("Error al cargar exchanges");
+      })
       .finally(() => setLoadingExchanges(false));
   }, []);
+
+  // WebSocket Connection Initialization
+  useEffect(() => {
+    if (user?.openId) {
+      console.log(`[Backtest] Initializing WebSocket for user: ${user.openId}`);
+      wsService.connect(user.openId);
+    }
+    return () => {
+      // We don't necessarily want to disconnect here if other pages use it, 
+      // but wsService.connect handles existing connections.
+    };
+  }, [user?.openId]);
 
   // Fetch Markets
   const [markets, setMarkets] = useState<string[]>([]);
   const [loadingMarkets, setLoadingMarkets] = useState(false);
 
-  useEffect(() => {
-    if (!selectedExchange) {
+  const loadMarkets = useCallback((exchangeId: string) => {
+    if (!exchangeId) {
       setMarkets([]);
       return;
     }
     setLoadingMarkets(true);
-    fetch(`${CONFIG.API_BASE_URL}/market/exchanges/${selectedExchange}/markets`)
+    fetch(`${CONFIG.API_BASE_URL}/market/exchanges/${exchangeId}/markets`)
       .then(res => res.json())
       .then(data => {
         if (Array.isArray(data)) setMarkets(data);
       })
       .catch(err => console.error("Error fetching markets:", err))
       .finally(() => setLoadingMarkets(false));
-  }, [selectedExchange]);
+  }, []);
 
   // Fetch Symbols
   const [symbols, setSymbols] = useState<Symbol[]>([]);
   const [loadingSymbols, setLoadingSymbols] = useState(false);
 
-  // --- Semi-Auto Access ---
-  const [isScanning, setIsScanning] = useState(false);
-  const stopScanRef = useRef(false);
-  const [scanResults, setScanResults] = useState<BacktestResults[]>([]);
-  const [scanProgress, setScanProgress] = useState({ current: 0, total: 0 });
-  const [selectedResult, setSelectedResult] = useState<BacktestResults | null>(null);
+  const loadSymbols = useCallback((exchangeId: string, marketType: string) => {
+    if (!exchangeId || !marketType) return;
+    setLoadingSymbols(true);
+    fetch(`${CONFIG.API_BASE_URL}/market/exchanges/${exchangeId}/markets/${marketType}/symbols`)
+      .then(res => res.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          const mapped: Symbol[] = data.map(s => ({
+            symbol: s,
+            baseAsset: s.split('/')[0] || '',
+            quoteAsset: s.split('/')[1] || '',
+            price: 0,
+            priceChange: 0,
+            priceChangePercent: 0,
+            volume: 0
+          }));
+          setSymbols(mapped);
+          // Auto-select first symbol if none selected
+          if (mapped.length > 0 && !selectedSymbol) {
+            // Use ref or handle this in a way that doesn't cause loops
+          }
+        }
+      })
+      .catch(err => console.error("Error fetching symbols:", err))
+      .finally(() => setLoadingSymbols(false));
+  }, [selectedSymbol]);
 
-  const handleStopScan = () => {
-    stopScanRef.current = true;
-    toast.info("Deteniendo escaneo...");
+  // Handle Exchange Change
+  const handleExchangeChange = (exchangeId: string) => {
+    setSelectedExchange(exchangeId);
+    loadMarkets(exchangeId);
+    // Clear dependent states
+    setSymbols([]);
+    setSelectedSymbol('');
   };
 
-  const handleStartScan = async () => {
+  // Handle Market Change
+  const handleMarketChange = (marketType: string) => {
+    setSelectedMarket(marketType);
+    if (selectedExchange) {
+      loadSymbols(selectedExchange, marketType);
+    }
+    setSelectedSymbol('');
+  };
+
+  // --- Semi-Auto Access (WebSocket) ---
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanResults, setScanResults] = useState<BacktestResults[]>([]);
+  const [scanProgress, setScanProgress] = useState({ current: 0, total: 0, percent: 0, symbol: '' });
+  const [selectedResult, setSelectedResult] = useState<BacktestResults | null>(null);
+
+  // Escuchar eventos WebSocket
+  useEffect(() => {
+    const handleBacktestStart = (data: any) => {
+      setIsScanning(true);
+      setScanResults([]);
+      setScanProgress({ current: 0, total: data.total || 0, percent: 0, symbol: 'Iniciando...' });
+      toast.info(`Iniciando escaneo de ${data.total} símbolos...`);
+    };
+
+    const handleBacktestProgress = (data: any) => {
+      setScanProgress({
+        current: data.current,
+        total: data.total,
+        percent: data.percent,
+        symbol: data.symbol
+      });
+    };
+
+    const handleBacktestResult = (data: any) => {
+      // Transformar datos del WS a la estructura BacktestResults
+      // Nota: 'details' viene serializado como en el endpoint single run
+      const details = data.details || {};
+
+      const normalizeTime = (t: any): number => {
+        if (typeof t === 'string') return new Date(t).getTime();
+        if (typeof t === 'number' && t < 20000000000) return t * 1000;
+        return t;
+      };
+
+      const transformedTrades: Trade[] = details.trades?.map((t: any) => ({
+        time: normalizeTime(t.time),
+        price: t.price,
+        side: t.type as 'BUY' | 'SELL',
+        profit: t.pnl,
+        amount: t.amount,
+        avg_price: t.avg_price,
+        label: t.label,
+        pnl_percent: t.pnl_percent
+      })) || [];
+
+      const candles: Candle[] = details.chart_data?.map((c: any) => ({
+        time: normalizeTime(c.time),
+        open: c.open,
+        high: c.high,
+        low: c.low,
+        close: c.close
+      })) || [];
+
+      const result: BacktestResults = {
+        symbol: data.symbol,
+        timeframe: timeframe, // Usamos el estado local ya que es el mismo para todos
+        days: days,
+        totalTrades: data.trades,
+        winRate: data.win_rate,
+        profitFactor: details.metrics?.profit_factor?.toString() || '0',
+        maxDrawdown: details.metrics?.max_drawdown?.toFixed(2) || '0',
+        totalReturn: data.pnl?.toFixed(2) || '0',
+        sharpeRatio: details.metrics?.sharpe_ratio?.toString() || '0',
+        candles: candles,
+        trades: transformedTrades,
+        botConfiguration: details.bot_configuration,
+        metrics: details.metrics,
+        tournamentResults: details.tournament_results,
+        winner: details.winner,
+        strategy_name: data.strategy,
+        initial_balance: details.initial_balance,
+        final_balance: details.final_balance
+      };
+
+      setScanResults(prev => {
+        const newResults = [...prev, result];
+        return newResults.sort((a, b) => parseFloat(b.totalReturn) - parseFloat(a.totalReturn));
+      });
+    };
+
+    const handleBacktestComplete = (data: any) => {
+      setIsScanning(false);
+      setScanProgress({ ...scanProgress, percent: 100, symbol: 'Completado' });
+      toast.success("Escaneo completado exitosamente");
+    };
+
+    const handleBacktestError = (data: any) => {
+      console.error("Backtest Error:", data);
+      toast.error(`Error en backtest: ${data.message || data.error}`);
+      if (data.message && data.message.includes("Critical")) {
+        setIsScanning(false);
+      }
+    };
+
+    const handleSymbolError = (data: any) => {
+      console.warn(`Error en símbolo ${data.symbol}: ${data.error}`);
+    }
+
+    wsService.on('backtest_start', handleBacktestStart);
+    wsService.on('backtest_progress', handleBacktestProgress);
+    wsService.on('backtest_result', handleBacktestResult);
+    wsService.on('backtest_complete', handleBacktestComplete);
+    wsService.on('backtest_error', handleBacktestError);
+    wsService.on('backtest_symbol_error', handleSymbolError);
+
+    return () => {
+      wsService.off('backtest_start', handleBacktestStart);
+      wsService.off('backtest_progress', handleBacktestProgress);
+      wsService.off('backtest_result', handleBacktestResult);
+      wsService.off('backtest_complete', handleBacktestComplete);
+      wsService.off('backtest_error', handleBacktestError);
+      wsService.off('backtest_symbol_error', handleSymbolError);
+    };
+  }, [timeframe, days]); // Dependencias para el contexto de result mapping
+
+  const handleStartScan = () => {
     if (!user?.openId || !selectedExchange || !selectedMarket) {
       toast.error("Configuración incompleta");
       return;
     }
 
+    // Enviar comando por WS
+    wsService.send({
+      action: "run_batch_backtest",
+      data: {
+        exchangeId: selectedExchange,
+        marketType: selectedMarket,
+        timeframe: timeframe,
+        days: days,
+        initialBalance: initialBalance,
+        tradeAmount: tradeAmount
+      }
+    });
+
+    // Reset UI state implicitly handled by 'backtest_start' event
+    // But we can set loading state here just in case WS lags a bit
     setIsScanning(true);
-    stopScanRef.current = false;
     setScanResults([]);
+  };
 
-    // Filter symbols to scan - Now taking ALL symbols as requested by user
-    // We execute them sequentially to avoid rate limits/DoS.
-    const targetSymbols = symbols.map(s => s.symbol);
-    setScanProgress({ current: 0, total: targetSymbols.length });
-
-    for (let i = 0; i < targetSymbols.length; i++) {
-      if (stopScanRef.current) {
-        setIsScanning(false);
-        toast.success("Escaneo detenido");
-        return;
-      }
-
-      const sym = targetSymbols[i];
-      try {
-        // Call Backtest API
-        const response = await fetch(
-          `${CONFIG.API_BASE_URL}/backtest/run?` + new URLSearchParams({
-            symbol: sym,
-            exchange_id: selectedExchange,
-            days: days.toString(),
-            timeframe: timeframe,
-            market_type: selectedMarket, // Usamos el mercado seleccionado (spot/futures)
-            initial_balance: initialBalance.toString(),
-            trade_amount: tradeAmount.toString()
-          }), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include'
-        }
-        );
-
-        if (response.ok) {
-          const data = await response.json();
-
-          // Transform Data (Reuse logic from single run)
-          const transformedTrades: Trade[] = data.trades?.map((t: any) => ({
-            time: (typeof t.time === 'string' ? new Date(t.time).getTime() : t.time * 1000),
-            price: t.price,
-            side: t.type as 'BUY' | 'SELL',
-            profit: t.pnl,
-            amount: t.amount,
-            avg_price: t.avg_price,
-            label: t.label,
-            pnl_percent: t.pnl_percent
-          })) || [];
-
-          const candles: Candle[] = data.chart_data?.map((c: any) => ({
-            time: c.time * 1000,
-            open: c.open,
-            high: c.high,
-            low: c.low,
-            close: c.close
-          })) || [];
-
-          const result: BacktestResults = {
-            symbol: data.symbol || sym,
-            timeframe,
-            days,
-            totalTrades: data.metrics?.total_trades || 0,
-            winRate: data.metrics?.win_rate || 0,
-            profitFactor: data.metrics?.profit_factor?.toString() || '0',
-            maxDrawdown: data.metrics?.max_drawdown?.toFixed(2) || '0',
-            totalReturn: data.metrics?.profit_pct?.toFixed(2) || '0',
-            sharpeRatio: data.metrics?.sharpe_ratio?.toString() || '0',
-            candles,
-            trades: transformedTrades,
-            botConfiguration: data.bot_configuration,
-            metrics: data.metrics,
-            tournamentResults: data.tournament_results,
-            winner: data.winner,
-            strategy_name: data.strategy_name || "Unknown",
-            initial_balance: data.initial_balance,
-            final_balance: data.final_balance
-          };
-
-          setScanResults(prev => {
-            const newResults = [...prev, result];
-            // Sort descending by Total Return
-            return newResults.sort((a, b) => parseFloat(b.totalReturn) - parseFloat(a.totalReturn));
-          });
-        }
-
-      } catch (e) {
-        console.error(`Error scanning ${sym}`, e);
-      } finally {
-        setScanProgress(prev => ({ ...prev, current: prev.current + 1 }));
-        // Small delay to be kind to the rate limits and keep UI snappy
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-    }
-
+  const handleStopScan = () => {
+    // No implemented explicit stop in backend yet, but we can simulate locally or reload
+    // For now just warn user
+    toast.info("La detención del proceso en servidor no está implementada, recarga la página si deseas cancelar la visualización.");
     setIsScanning(false);
-    toast.success("Escaneo de mercado completado");
   };
 
   useEffect(() => {
@@ -555,7 +651,7 @@ export default function Backtest() {
                 ) : (
                   <select
                     value={selectedExchange}
-                    onChange={(e) => setSelectedExchange(e.target.value)}
+                    onChange={(e) => handleExchangeChange(e.target.value)}
                     className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
                   >
                     <option value="">Seleccionar exchange</option>
@@ -580,7 +676,7 @@ export default function Backtest() {
                 ) : (
                   <select
                     value={selectedMarket}
-                    onChange={(e) => setSelectedMarket(e.target.value)}
+                    onChange={(e) => handleMarketChange(e.target.value)}
                     disabled={!selectedExchange || markets.length === 0}
                     className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
                   >
@@ -1044,11 +1140,11 @@ export default function Backtest() {
                 ) : (
                   <select
                     value={selectedExchange}
-                    onChange={(e) => setSelectedExchange(e.target.value)}
+                    onChange={(e) => handleExchangeChange(e.target.value)}
                     className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
                   >
-                    <option value="">Seleccionar</option>
-                    {exchanges.map((ex: Exchange) => (
+                    <option value="">Seleccionar Exchange</option>
+                    {exchanges.map((ex) => (
                       <option key={ex.exchangeId} value={ex.exchangeId}>
                         {ex.exchangeId.toUpperCase()}
                       </option>
@@ -1057,20 +1153,20 @@ export default function Backtest() {
                 )}
               </div>
 
-              {/* Market */}
+              {/* Market Type */}
               <div>
                 <label className="block text-sm font-semibold text-foreground mb-2">
                   Mercado
                 </label>
                 {loadingMarkets ? (
-                  <div className="flex items-center gap-2 px-4 py-2 border border-slate-700 rounded-lg bg-slate-900">
-                    <Loader2 className="animate-spin" size={16} />
-                    <span className="text-muted-foreground">Cargando...</span>
+                  <div className="flex items-center gap-2 px-4 py-2 bg-slate-900 rounded-lg border border-slate-700 h-[42px]">
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                    <span className="text-muted-foreground text-sm">Cargando...</span>
                   </div>
                 ) : (
                   <select
                     value={selectedMarket}
-                    onChange={(e) => setSelectedMarket(e.target.value)}
+                    onChange={(e) => handleMarketChange(e.target.value)}
                     disabled={!selectedExchange}
                     className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
                   >
@@ -1118,6 +1214,32 @@ export default function Backtest() {
               </div>
             </div>
 
+            {/* Simulation Config for Semi-Auto */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 border-t border-border pt-4">
+              <div>
+                <label className="block text-sm font-semibold text-foreground mb-2">
+                  Balance Inicial (USDT)
+                </label>
+                <input
+                  type="number"
+                  value={initialBalance}
+                  onChange={(e) => setInitialBalance(parseFloat(e.target.value) || 0)}
+                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-foreground mb-2">
+                  Inversión por Entrada
+                </label>
+                <input
+                  type="number"
+                  value={tradeAmount}
+                  onChange={(e) => setTradeAmount(parseFloat(e.target.value) || 0)}
+                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+            </div>
+
             <div className="flex justify-end gap-4">
               {isScanning && (
                 <Button
@@ -1137,7 +1259,7 @@ export default function Backtest() {
                 {isScanning ? (
                   <>
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Escaneando Mercado... ({scanProgress.current}/{scanProgress.total})
+                    Escaneando {scanProgress.symbol} ({scanProgress.current}/{scanProgress.total})
                   </>
                 ) : (
                   <>
@@ -1152,10 +1274,10 @@ export default function Backtest() {
           {isScanning && (
             <div className="space-y-2">
               <div className="flex justify-between text-xs text-muted-foreground">
-                <span>Progreso del escaneo</span>
-                <span>{Math.round((scanProgress.current / (scanProgress.total || 1)) * 100)}%</span>
+                <span>Progreso: {scanProgress.symbol}</span>
+                <span>{Math.round(scanProgress.percent)}%</span>
               </div>
-              <Progress value={(scanProgress.current / (scanProgress.total || 1)) * 100} className="h-2" />
+              <Progress value={scanProgress.percent} className="h-2" />
             </div>
           )}
 
@@ -1273,5 +1395,3 @@ export default function Backtest() {
     </div>
   );
 }
-
-

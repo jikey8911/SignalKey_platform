@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from api.src.application.services.cex_service import CEXService
 from api.src.application.services.dex_service import DEXService
 from api.src.domain.models.schemas import AnalysisResult, ExecutionResult
-from api.src.domain.models.signal import Decision
+from api.src.domain.entities.signal import Decision
 
 @pytest.mark.asyncio
 async def test_cex_service_get_price():

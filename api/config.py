@@ -29,7 +29,7 @@ class Config:
     MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
     MONGODB_DB_NAME = os.getenv("MONGODB_DB_NAME", get_default_db_name(MONGODB_URI))
     # CEX Config (Example for CCXT)
-    EXCHANGE_ID = os.getenv("EXCHANGE_ID", "binance")
+    #EXCHANGE_ID = os.getenv("EXCHANGE_ID", )
     CEX_API_KEY = os.getenv("CEX_API_KEY")
     CEX_SECRET = os.getenv("CEX_SECRET")
     CEX_PASSWORD = os.getenv("CEX_PASSWORD") # También conocido como Passphrase

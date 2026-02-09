@@ -6,9 +6,18 @@ from openai import AsyncOpenAI
 import httpx
 import re
 from typing import List
-from perplexity import AsyncPerplexity
+try:
+    from perplexity import AsyncPerplexity
+except ImportError:
+    AsyncPerplexity = None
+
+try:
+    from groq import AsyncGroq
+except ImportError:
+    AsyncGroq = None
+
 from api.src.domain.ports.output.ai_port import IAIPort
-from api.src.domain.models.signal import RawSignal, SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
+from api.src.domain.entities.signal import RawSignal, SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
 from api.config import Config
 import importlib
 
@@ -19,12 +28,15 @@ class AIAdapter(IAIPort):
         self.default_model = "gemini"
         self._httpx_client = httpx.AsyncClient(timeout=60.0)
         self._pplx_client = None # Lazy initialization
+        self._groq_client = None # Lazy initialization
 
     async def close(self):
         """Cierra el cliente HTTP y de Perplexity"""
         await self._httpx_client.aclose()
         if self._pplx_client:
-            await self._pplx_client.close() # El SDK de PPLX usa .close()
+            await self._pplx_client.close()
+        if self._groq_client:
+            await self._groq_client.close()
 
     async def test_connection(self, provider: str, config: dict) -> bool:
         """Prueba una conexión simple con el proveedor especificado"""
@@ -44,6 +56,8 @@ class AIAdapter(IAIPort):
                 await self._call_perplexity(prompt, api_key)
             elif provider == "grok":
                 await self._call_grok(prompt, api_key)
+            elif provider == "groq":
+                await self._call_groq(prompt, api_key)
             else:
                 return False
                 
@@ -54,7 +68,7 @@ class AIAdapter(IAIPort):
 
     async def analyze_signal(self, signal: RawSignal, config: dict = None) -> List[SignalAnalysis]:
         # Lista de proveedores en orden de prioridad para el failover
-        all_providers = ["gemini", "openai", "perplexity", "grok"]
+        all_providers = ["gemini", "openai", "perplexity", "grok", "groq"]
         
         # Obtener el proveedor primario (seleccionado por el usuario)
         primary_provider = config.get("aiProvider", "gemini") if config else "gemini"
@@ -80,6 +94,8 @@ class AIAdapter(IAIPort):
                     content = await self._call_perplexity(self._build_prompt(signal.text), api_key)
                 elif provider == "grok":
                     content = await self._call_grok(self._build_prompt(signal.text), api_key)
+                elif provider == "groq":
+                    content = await self._call_groq(self._build_prompt(signal.text), api_key)
                 else:
                     continue
 
@@ -153,7 +169,7 @@ class AIAdapter(IAIPort):
             
             # Obtener proveedor y API key
             primary_provider = config.get("aiProvider", "gemini") if config else "gemini"
-            all_providers = ["gemini", "openai", "perplexity", "grok"]
+            all_providers = ["gemini", "openai", "perplexity", "grok", "groq"]
             priority_list = [primary_provider] + [p for p in all_providers if p != primary_provider]
             
             analysis = None
@@ -173,6 +189,8 @@ class AIAdapter(IAIPort):
                         content = await self._call_perplexity(prompt, api_key)
                     elif provider == "grok":
                         content = await self._call_grok(prompt, api_key)
+                    elif provider == "groq":
+                        content = await self._call_groq(prompt, api_key)
                     
                     if not content: continue
                     
@@ -197,6 +215,48 @@ class AIAdapter(IAIPort):
         logger.info(f"Batch analysis complete: {len(results)} signals generated")
         return results
 
+    # --- NEW METHOD FOR STRATEGY OPTIMIZATION (Generic Content Generation) ---
+    async def generate_content(self, prompt: str, config: dict = None) -> str:
+        """
+        Genera contenido de texto libre usando el proveedor configurado.
+        Ideal para refactorización de código y tareas generales.
+        """
+        provider = config.get("aiProvider", "gemini") if config else "gemini"
+        api_key = self._get_api_key(provider, config)
+
+        if not api_key:
+             # Try failover
+             all_providers = ["gemini", "openai", "perplexity", "grok", "groq"]
+             for p in all_providers:
+                 api_key = self._get_api_key(p, config)
+                 if api_key:
+                     provider = p
+                     break
+
+        if not api_key:
+            raise ValueError("No API Key available for any provider")
+
+        logger.info(f"Generating content with provider: {provider}")
+
+        if provider == "gemini":
+            return await self._call_gemini(prompt, api_key)
+        elif provider == "openai":
+            # For code generation, we use normal chat completion without JSON enforcement unless specified
+            client = AsyncOpenAI(api_key=api_key)
+            response = await client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.choices[0].message.content
+        elif provider == "perplexity":
+             return await self._call_perplexity(prompt, api_key)
+        elif provider == "grok":
+             return await self._call_grok(prompt, api_key)
+        elif provider == "groq":
+             return await self._call_groq(prompt, api_key)
+        else:
+            raise ValueError(f"Unknown provider: {provider}")
+
     def _get_api_key(self, provider: str, config: dict) -> str:
         if config:
             # Primero intentar el campo específico del nuevo esquema
@@ -204,7 +264,8 @@ class AIAdapter(IAIPort):
                 "gemini": "geminiApiKey",
                 "openai": "openaiApiKey",
                 "perplexity": "perplexityApiKey",
-                "grok": "grokApiKey"
+                "grok": "grokApiKey",
+                "groq": "groqApiKey"
             }
             key = config.get(key_map.get(provider, ""))
             if key: return key
@@ -218,7 +279,8 @@ class AIAdapter(IAIPort):
             "gemini": "GEMINI_API_KEY",
             "openai": "OPENAI_API_KEY",
             "perplexity": "PERPLEXITY_API_KEY",
-            "grok": "XAI_API_KEY"
+            "grok": "XAI_API_KEY",
+            "groq": "GROQ_API_KEY"
         }
         return getattr(Config, env_keys.get(provider, ""), None)
 
@@ -381,6 +443,21 @@ class AIAdapter(IAIPort):
         response = await self._httpx_client.post(url, json=payload, headers=headers)
         response.raise_for_status()
         return response.json()['choices'][0]['message']['content']
+
+    async def _call_groq(self, prompt: str, api_key: str) -> str:
+        if not AsyncGroq:
+            raise ImportError("Groq library not installed")
+
+        if not self._groq_client:
+            self._groq_client = AsyncGroq(api_key=api_key)
+        else:
+            self._groq_client = AsyncGroq(api_key=api_key)
+
+        response = await self._groq_client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.3-70b-versatile",
+        )
+        return response.choices[0].message.content
 
     def _parse_response(self, content: str) -> List[SignalAnalysis]:
         content = content.strip()

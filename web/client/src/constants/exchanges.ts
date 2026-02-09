@@ -1,7 +1,7 @@
 // All CCXT supported exchanges (130+)
 export const CCXT_EXCHANGES = [
     'alpaca', 'apex', 'arkham', 'ascendex', 'aster', 'backpack', 'bequant', 'bigone',
-    'binance', 'binancecoinm', 'binanceus', 'binanceusdm', 'bingx', 'bit2c', 'bitbank',
+    'okx', 'okxcoinm', 'okxus', 'okxusdm', 'bingx', 'bit2c', 'bitbank',
     'bitbns', 'bitfinex', 'bitflyer', 'bitget', 'bithumb', 'bitmart', 'bitmex', 'bitopro',
     'bitrue', 'bitso', 'bitstamp', 'bitteam', 'bittrade', 'bitvavo', 'blockchaincom',
     'blofin', 'btcalpha', 'btcbox', 'btcmarkets', 'btcturk', 'bullish', 'bybit', 'bydfi',
@@ -19,5 +19,5 @@ export const CCXT_EXCHANGES = [
 
 // Popular exchanges for quick access
 export const POPULAR_EXCHANGES = [
-    'binance', 'okx', 'bybit', 'kucoin', 'gateio', 'bitget', 'mexc', 'kraken', 'coinbase'
+    'okx', 'okx', 'bybit', 'kucoin', 'gateio', 'bitget', 'mexc', 'kraken', 'coinbase'
 ];

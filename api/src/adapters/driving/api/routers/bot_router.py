@@ -20,7 +20,7 @@ class CreateBotSchema(BaseModel):
     mode: str = "simulated"
     amount: Optional[float] = None # Optional initial override, otherwise uses default
     status: str = "active"
-    exchange_id: Optional[str] = "binance"
+    exchange_id: Optional[str] = "okx"
 
 @router.post("/")
 async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get_current_user)):
@@ -41,15 +41,17 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
         limit_amount = 100.0 if data.market_type == 'spot' else 50.0
 
     # Determinar monto final: Si el usuario manda uno, validamos que no exceda el límite global
-    # Si no manda, usamos el límite como default (o una fracción segura)
-    final_amount = data.amount if data.amount is not None else limit_amount
+    # Si no manda, o es <= 0, usamos el límite como default (o una fracción segura)
+    # FIX: Validar que el amount no sea 0 o negativo, incluso si viene en 'data'
+    final_amount = data.amount if (data.amount is not None and data.amount > 0) else limit_amount
     
     # Validation (Financial Consistency)
     if final_amount > limit_amount:
          raise HTTPException(status_code=400, detail=f"Amount {final_amount} exceeds your limit of {limit_amount} for this market.")
     
+    # Safety fallback (Double Check)
     if final_amount <= 0:
-         raise HTTPException(status_code=400, detail="Amount must be positive.")
+         final_amount = 100.0 # Default fallback
 
     # 2. Crear instancia usando Schema para validación estricta
     try:
@@ -63,7 +65,7 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
             market_type=data.market_type,
             mode=data.mode,
             status=data.status,
-            exchange_id=data.exchange_id or "binance"
+            exchange_id=data.exchange_id or "okx"
         )
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Validation error: {e}")
@@ -122,24 +124,23 @@ async def list_user_bots(current_user: dict = Depends(get_current_user)):
     
     for bot in bots:
         b_dict = bot.to_dict()
+        bot_id_obj = ObjectId(b_dict["id"]) if isinstance(b_dict.get("id"), str) else b_dict.get("_id")
         
-        # Enrich with active trade data if exists
-        # We assume one active trade per symbol/user context usually
-        active_trade = await db.trades.find_one({
-            "userId": user_id,
-            "symbol": bot.symbol,
-            "status": "active"
+        # 1. Buscar posición activa en la nueva colección 'positions'
+        active_position = await db.db["positions"].find_one({
+            "botId": bot_id_obj,
+            "status": "OPEN"
         })
         
-        if active_trade:
-            b_dict["active_trade_id"] = str(active_trade["_id"])
-            b_dict["pnl"] = active_trade.get("pnl", 0.0)
-            b_dict["current_price"] = active_trade.get("currentPrice", 0.0)
-            b_dict["status"] = "active" # Force active status if trade is running
+        if active_position:
+            b_dict["active_position"] = _serialize_mongo(active_position)
+            # Para compatibilidad con legacy frontend:
+            b_dict["pnl"] = active_position.get("roi", 0.0)
+            b_dict["entryPrice"] = active_position.get("avgEntryPrice", 0.0)
+            b_dict["currentQty"] = active_position.get("currentQty", 0.0)
         else:
-            b_dict["active_trade_id"] = None
+            b_dict["active_position"] = None
             b_dict["pnl"] = 0.0
-            b_dict["current_price"] = 0.0
             
         result.append(b_dict)
         
@@ -157,21 +158,6 @@ def _serialize_mongo(obj):
         return str(obj)
     return obj
 
-@router.patch("/{bot_id}/status")
-async def toggle_bot_status(bot_id: str, status: str):
-    if status not in ["active", "paused"]:
-        raise HTTPException(status_code=400, detail="Invalid status")
-    await repo.update_status(bot_id, status)
-    
-    # Emitir actualización de estado
-    bot_doc = await repo.collection.find_one({"_id": ObjectId(bot_id)})
-    if bot_doc:
-        u_id = bot_doc.get("userId")
-        await socket_service.emit_to_user(u_id, "bot_update", {
-            "id": bot_id,
-            "status": status
-        })
-        
 @router.patch("/{bot_id}/status")
 async def toggle_bot_status(bot_id: str, status: str):
     if status not in ["active", "paused"]:

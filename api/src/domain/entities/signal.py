@@ -29,6 +29,12 @@ class TakeProfit:
     price: float
     percent: float
 
+    def to_dict(self):
+        return {
+            "price": self.price,
+            "percent": self.percent
+        }
+
 @dataclass
 class TradingParameters:
     entry_price: Optional[float] = None
@@ -38,6 +44,17 @@ class TradingParameters:
     leverage: int = 1
     amount: Optional[float] = None
     network: Optional[str] = None
+
+    def to_dict(self):
+        return {
+            "entry_price": self.entry_price,
+            "entry_type": self.entry_type,
+            "tp": [tp.to_dict() if hasattr(tp, 'to_dict') else tp for tp in self.tp],
+            "sl": self.sl,
+            "leverage": self.leverage,
+            "amount": self.amount,
+            "network": self.network
+        }
 
 @dataclass
 class SignalAnalysis:
@@ -49,6 +66,12 @@ class SignalAnalysis:
     is_safe: bool = True
     risk_score: float = 0.0
     parameters: TradingParameters = field(default_factory=TradingParameters)
+
+@dataclass
+class RawSignal:
+    source: str
+    text: str
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 @dataclass
 class Signal:
@@ -64,5 +87,27 @@ class Signal:
     confidence: Optional[float] = None
     reasoning: Optional[str] = None
     riskScore: Optional[float] = None
+    botId: Optional[str] = None
     tradeId: Optional[str] = None
     executionMessage: Optional[str] = None
+    parameters: Optional[TradingParameters] = None
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "userId": self.userId,
+            "source": self.source,
+            "rawText": self.rawText,
+            "status": self.status.value if hasattr(self.status, 'value') else str(self.status),
+            "createdAt": self.createdAt.isoformat() + ("Z" if not self.createdAt.tzinfo else "") if hasattr(self.createdAt, 'isoformat') else str(self.createdAt),
+            "symbol": self.symbol,
+            "marketType": self.marketType.value if hasattr(self.marketType, 'value') else (str(self.marketType) if self.marketType else None),
+            "decision": self.decision.value if hasattr(self.decision, 'value') else (str(self.decision) if self.decision else None),
+            "confidence": self.confidence,
+            "reasoning": self.reasoning,
+            "riskScore": self.riskScore,
+            "botId": self.botId,
+            "tradeId": self.tradeId,
+            "executionMessage": self.executionMessage,
+            "parameters": self.parameters.to_dict() if self.parameters and hasattr(self.parameters, 'to_dict') else (self.parameters if self.parameters else None)
+        }
