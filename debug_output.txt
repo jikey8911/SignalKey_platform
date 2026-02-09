@@ -1,0 +1,28 @@
+--- EXHAUSTIVE SYSTEM DATA CHECK ---
+
+All Collections: ['appconfigs', 'virtual_balances', 'app_configs', 'db.trades', 'positions', 'una', 'trading_signals', 'bot_instances', 'trades', 'users', 'db.positions']
+
+--- app_configs entries ---
+  User: 6969ec789229511d1787166b | demoMode: True | isAutoEnabled: True
+  User: 6981083459e211af7db553d3 | demoMode: True | isAutoEnabled: True
+  User: 69899691333d111911f7e659 | demoMode: True | isAutoEnabled: True
+
+--- appconfigs entries ---
+  User: 6969ec789229511d1787166b | demoMode: True | isAutoEnabled: None
+
+--- REAL MODE OPERATIONS SEARCH ---
+  Collection 'trades': Found 0 real operations.
+  Collection 'bot_instances': Found 0 real operations.
+
+--- Searching for ZEUS/USDT ---
+  [trades] User: juank8911 | Mode: simulated | Status: None
+  [trades] User: juank8911 | Mode: simulated | Status: None
+  [trades] User: juank8911 | Mode: simulated | Status: None
+  [trades] User: juank8911 | Mode: simulated | Status: None
+  [trades] User: juank8911 | Mode: simulated | Status: None
+
+--- Searching for AAVE/USDT ---
+  [trades] User: juank8911 | Mode: simulated | Status: None
+  [trades] User: juank8911 | Mode: simulated | Status: None
+  [trades] User: juank8911 | Mode: simulated | Status: None
+  [trades] User: juank8911 | Mode: simulated | Status: None

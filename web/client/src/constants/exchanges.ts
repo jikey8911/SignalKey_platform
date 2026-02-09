@@ -1,5 +1,5 @@
 // All CCXT supported exchanges (130+)
-export const CCXT_EXCHANGES = [
+export const CCXT_EXCHANGES = Array.from(new Set([
     'alpaca', 'apex', 'arkham', 'ascendex', 'aster', 'backpack', 'bequant', 'bigone',
     'okx', 'okxcoinm', 'okxus', 'okxusdm', 'bingx', 'bit2c', 'bitbank',
     'bitbns', 'bitfinex', 'bitflyer', 'bitget', 'bithumb', 'bitmart', 'bitmex', 'bitopro',
@@ -11,13 +11,13 @@ export const CCXT_EXCHANGES = [
     'digifinex', 'dydx', 'exmo', 'fmfwio', 'foxbit', 'gate', 'gateio', 'gemini', 'hashkey',
     'hibachi', 'hitbtc', 'hollaex', 'htx', 'huobi', 'hyperliquid', 'independentreserve',
     'indodax', 'kraken', 'krakenfutures', 'kucoin', 'kucoinfutures', 'latoken', 'lbank',
-    'luno', 'mercado', 'mexc', 'modetrade', 'myokx', 'ndax', 'novadax', 'okx', 'okxus',
+    'luno', 'mercado', 'mexc', 'modetrade', 'myokx', 'ndax', 'novadax',
     'onetrading', 'oxfun', 'p2b', 'paradex', 'paymium', 'phemex', 'poloniex', 'probit',
     'timex', 'tokocrypto', 'toobit', 'upbit', 'wavesexchange', 'whitebit', 'woo', 'woofipro',
     'xt', 'yobit', 'zaif', 'zebpay', 'zonda'
-].sort();
+])).sort();
 
 // Popular exchanges for quick access
 export const POPULAR_EXCHANGES = [
-    'okx', 'okx', 'bybit', 'kucoin', 'gateio', 'bitget', 'mexc', 'kraken', 'coinbase'
+    'okx', 'bybit', 'kucoin', 'gateio', 'bitget', 'mexc', 'kraken', 'coinbase'
 ];
