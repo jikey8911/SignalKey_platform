@@ -119,7 +119,7 @@ class StrategyRunnerService:
                 
                 if candles_df is None or candles_df.empty:
                      # Fallback to API if buffer empty or insufficient
-                     candles_df = await self.ml_service.exchange.get_public_historical_data(
+                     candles_df = await self.ml_service.exchange.get_historical_data(
                         symbol=symbol,
                         timeframe=timeframe,
                         limit=100,

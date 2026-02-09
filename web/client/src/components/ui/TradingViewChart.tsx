@@ -81,30 +81,42 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
     const markers = useMemo(() => {
         if (!trades || trades.length === 0 || formattedData.length === 0) return [];
 
+        const firstCandleTime = formattedData[0].time as number;
+        const lastCandleTime = formattedData[formattedData.length - 1].time as number;
+
         const candleTimes = new Set(formattedData.map(d => d.time as number));
         const sortedCandleTimes = formattedData.map(d => d.time as number);
 
-        return trades.map(t => {
-            const tradeTime = toSeconds(t.time) as number;
-            let validTime = tradeTime;
+        return trades
+            .map(t => {
+                const tradeTime = toSeconds(t.time) as number;
 
-            if (!candleTimes.has(tradeTime)) {
-                const found = sortedCandleTimes.slice().reverse().find(ct => ct <= tradeTime);
-                if (found) validTime = found;
-            }
+                // CRITICAL FIX: Only show markers that are within our visible candle range
+                // A marker at time 0 or too far in the past/future stretches the price scale to infinity
+                if (tradeTime < firstCandleTime - 3600 * 24 || tradeTime > lastCandleTime + 3600) {
+                    return null;
+                }
 
-            return {
-                time: validTime as Time,
-                position: t.side === 'BUY' ? 'belowBar' : 'aboveBar',
-                color: t.side === 'BUY' ? '#22c55e' : '#ef4444',
-                shape: t.side === 'BUY' ? 'arrowUp' : 'arrowDown',
-                text: t.label || t.side,
-                size: 2
-            } as SeriesMarker<Time>;
-        }).sort((a, b) => (a.time as number) - (b.time as number));
+                let validTime = tradeTime;
+                if (!candleTimes.has(tradeTime)) {
+                    const found = sortedCandleTimes.slice().reverse().find(ct => ct <= tradeTime);
+                    if (found) validTime = found;
+                }
+
+                return {
+                    time: validTime as Time,
+                    position: t.side === 'BUY' ? 'belowBar' : 'aboveBar',
+                    color: t.side === 'BUY' ? '#22c55e' : '#ef4444',
+                    shape: t.side === 'BUY' ? 'arrowUp' : 'arrowDown',
+                    text: t.label || t.side,
+                    size: 2
+                } as SeriesMarker<Time>;
+            })
+            .filter((m): m is SeriesMarker<Time> => m !== null)
+            .sort((a, b) => (a.time as number) - (b.time as number));
     }, [trades, formattedData]);
 
-    // EFECTO 1: Crear y Destruir el Gráfico
+    // EFECTO 1: Crear y Destruir el Gráfico (SOLO UNA VEZ o cambios de layout)
     useEffect(() => {
         if (!chartContainerRef.current) return;
 
@@ -122,6 +134,15 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
             timeScale: {
                 timeVisible: true,
                 secondsVisible: false,
+                rightOffset: 12,
+                barSpacing: 6,
+            },
+            leftPriceScale: {
+                visible: false,
+            },
+            rightPriceScale: {
+                visible: true,
+                autoScale: true,
             }
         });
 
@@ -138,14 +159,12 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
             },
         });
 
-        candlestickSeries.setData(formattedData);
-
         // Asignamos las referencias
         seriesRef.current = candlestickSeries;
         chartRef.current = chart;
 
         // Pintamos marcadores iniciales si existen
-        const markersPrimitive = createSeriesMarkers(candlestickSeries, markers);
+        const markersPrimitive = createSeriesMarkers(candlestickSeries, []);
         markersPrimitiveRef.current = markersPrimitive;
 
         const handleResize = () => {
@@ -158,55 +177,48 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
         return () => {
             window.removeEventListener('resize', handleResize);
             chart.remove();
-            // IMPORTANTE: Limpiar referencias para evitar llamar métodos en objetos destruidos
             chartRef.current = null;
             seriesRef.current = null;
             markersPrimitiveRef.current = null;
         };
-    }, [formattedData, colors, height]);
+    }, [colors, height]);
+
+    // EFECTO 1.5: Actualizar Datos (Sin recrear gráfico)
+    useEffect(() => {
+        if (seriesRef.current && formattedData.length > 0) {
+            seriesRef.current.setData(formattedData);
+        }
+    }, [formattedData]);
 
     // EFECTO 2: Actualizar Marcadores Dinámicamente
     useEffect(() => {
-        // Verificamos que el primitivo de marcadores exista ANTES de intentar usarlo
         if (markersPrimitiveRef.current && markers) {
             try {
                 markersPrimitiveRef.current.setMarkers(markers);
             } catch (e) {
-                console.warn("No se pudieron pintar los marcadores (gráfico posiblemente desmontado)", e);
+                console.warn("No se pudieron pintar los marcadores", e);
             }
         }
     }, [markers]);
 
-    // EFECTO 3: Ajuste de Zoom (VisibleRange) por Timeframe
+    // EFECTO 3: Ajuste de Zoom (VisibleRange) y Auto-Fit al cambiar de Bot
     useEffect(() => {
-        if (!chartRef.current || formattedData.length === 0 || !timeframe) return;
-
-        // Parse Timeframe to Seconds
-        let secondsPerCandle = 3600; // default 1h
-        const unit = timeframe.slice(-1);
-        const val = parseInt(timeframe.slice(0, -1)) || 1;
-
-        if (unit === 'm') secondsPerCandle = val * 60;
-        if (unit === 'h') secondsPerCandle = val * 3600;
-        if (unit === 'd') secondsPerCandle = val * 86400;
-
-        // Show approx 100 candles
-        const visibleCandles = 100;
-        const rangeSeconds = secondsPerCandle * visibleCandles;
-
-        const lastTime = formattedData[formattedData.length - 1].time as number;
-        const fromTime = lastTime - rangeSeconds;
+        if (!chartRef.current || formattedData.length === 0) return;
 
         try {
-            chartRef.current.timeScale().setVisibleRange({
-                from: fromTime as Time,
-                to: lastTime as Time,
-            });
-        } catch (e) {
-            console.warn("Zoom adjustment failed", e);
-        }
+            // "Centrar" las velas: fitContent es lo más robusto para lo que pide el usuario
+            chartRef.current.timeScale().fitContent();
 
-    }, [timeframe, formattedData]);
+            // Si el usuario quiere ver los últimos N datos específicamente:
+            /*
+            const lastTime = formattedData[formattedData.length - 1].time as number;
+            const fromTime = lastTime - (secondsPerCandle * 100);
+            chartRef.current.timeScale().setVisibleRange({ from: fromTime as Time, to: lastTime as Time });
+            */
+        } catch (e) {
+            console.warn("Auto-centering failed", e);
+        }
+    }, [symbol, timeframe]); // Solo disparar cuando cambia el bot (representado por symbol/timeframe)
 
     return <div ref={chartContainerRef} className="w-full shadow-xl rounded-lg overflow-hidden border border-slate-800" />;
 };

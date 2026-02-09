@@ -319,7 +319,7 @@ class BacktestService:
         df = await self.exchange.get_historical_data(symbol, timeframe, limit=limit, user_id=user_id, exchange_id=exchange_id)
         if df.empty:
             self.logger.warning("Empty data from auth client, retrying with public...")
-            df = await self.exchange.get_public_historical_data(symbol, timeframe, limit=limit, exchange_id=exchange_id)
+            df = await self.exchange.get_historical_data(symbol, timeframe, limit=limit, exchange_id=exchange_id)
             
         if df.empty:
             raise ValueError(f"No se pudieron obtener datos para {symbol}")

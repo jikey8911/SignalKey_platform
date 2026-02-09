@@ -41,28 +41,14 @@ class CEXAdapter(IExchangePort):
             for ex_cfg in active_exchanges:
                 ex_id = ex_cfg["exchangeId"]
                 try:
-                    # Use CCXT service to fetch
-                     # NOTE: In a pure hexagonal world this would call another internal method or use a different 'Driver'
-                     # For now, we reuse the robust CCXTService but via 'create_public_instance' logic if needed
-                     # Replicating logic from legacy CEXService.fetch_ticker_price
+                    # Usamos el método unificado _get_exchange que maneja credenciales internamente
+                    instance = await ccxt_service._get_exchange(ex_id, user_id)
                     
-                    instance = await ccxt_service.get_private_instance(
-                        ex_id, 
-                        ex_cfg["apiKey"], 
-                        ex_cfg["secret"], 
-                        ex_cfg.get("password"), 
-                        ex_cfg.get("uid")
-                    )
-                    
-                    if not instance:
-                        # Fallback to public
-                        instance = await ccxt_service.create_public_instance(ex_id)
-
                     if instance:
                          if not instance.markets: await instance.load_markets()
-                         if symbol in instance.symbols:
-                             ticker = await instance.fetch_ticker(symbol)
-                             return float(ticker['last'])
+                         # Intentar obtener ticker de CCXT directamente
+                         ticker = await instance.fetch_ticker(symbol)
+                         return float(ticker['last'])
 
                 except Exception as e:
                     logger.debug(f"CEXAdapter: {ex_id} failed for {symbol}: {e}")
@@ -94,25 +80,12 @@ class CEXAdapter(IExchangePort):
                  logger.warning(f"CEXAdapter: No active exchange config found for user {user_id}")
                  return []
 
-            # Call legacy service which returns raw dict
-            raw_balance = await ccxt_service.fetch_balance_private(
-                ex_cfg["exchangeId"], 
-                ex_cfg["apiKey"], 
-                ex_cfg["secret"], 
-                ex_cfg.get("password"), 
-                ex_cfg.get("uid")
+            # Call unified fetch_balance method
+            balances_list = await ccxt_service.fetch_balance(
+                user_id,
+                ex_cfg["exchangeId"]
             )
-            
-            # Map to Domain Entity
-            balances = []
-            if raw_balance and 'total' in raw_balance:
-                 for asset, amount in raw_balance['total'].items():
-                     if amount > 0: # Only non-zero
-                         free = raw_balance.get(asset, {}).get('free', 0) if isinstance(raw_balance.get(asset), dict) else raw_balance.get('free', {}).get(asset, 0)
-                         used = raw_balance.get(asset, {}).get('used', 0) if isinstance(raw_balance.get(asset), dict) else raw_balance.get('used', {}).get(asset, 0)
-                         balances.append(Balance(asset=asset, free=free, used=used, total=amount))
-            
-            return balances
+            return balances_list
 
         except Exception as e:
             logger.error(f"CEXAdapter: Balance fetch error: {e}")
@@ -176,31 +149,25 @@ class CEXAdapter(IExchangePort):
             if not ex_cfg:
                  return TradeResult(success=False, message="No active exchange for real trading")
 
-            instance = await ccxt_service.get_private_instance(
-                ex_cfg["exchangeId"], 
-                ex_cfg["apiKey"], 
-                ex_cfg["secret"], 
-                ex_cfg.get("password"), 
-                ex_cfg.get("uid")
+            trade_result_dict = await ccxt_service.execute_trade(
+                symbol=symbol,
+                side=side,
+                amount=amount,
+                price=analysis.parameters.entry_price,
+                user_id=user_id,
+                exchange_id=ex_cfg["exchangeId"]
             )
 
-            if not instance:
-                return TradeResult(success=False, message="Failed to connect to exchange")
-            
-            symbol = self._normalize_symbol(analysis.symbol)
-            side = str(analysis.decision.value).lower()
-            amount = analysis.parameters.amount if analysis.parameters.amount else 0.001 # min default
-
-            await instance.load_markets()
-            order = await instance.create_order(symbol, 'market', side, amount)
-            
-            return TradeResult(
-                success=True, 
-                message="Order executed", 
-                order_id=order['id'],
-                price=order.get('average'),
-                amount=order.get('amount')
-            )
+            if trade_result_dict.get("success"):
+                return TradeResult(
+                    success=True, 
+                    message="Order executed", 
+                    order_id=trade_result_dict.get('order_id'),
+                    price=trade_result_dict.get('details', {}).get('average'),
+                    amount=trade_result_dict.get('details', {}).get('amount')
+                )
+            else:
+                return TradeResult(success=False, message=trade_result_dict.get("message", "Execution failed"))
 
         except Exception as e:
             logger.error(f"CEXAdapter: Trade execution failed: {e}")

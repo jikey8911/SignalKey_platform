@@ -7,23 +7,21 @@ from datetime import datetime
 
 logger = logging.getLogger("CCXTAdapter")
 
-class CCXTService:
+class CcxtAdapter:
     """
     Adaptador para CCXT Pro.
-    Implementa WebSockets para datos en tiempo real y métodos REST para ejecución.
+    Centraliza conexiones WebSocket (watch) y peticiones REST (fetch/execute).
     """
     def __init__(self, **kwargs):
         self.exchanges: Dict[str, ccxtpro.Exchange] = {}
         self._locks: Dict[str, asyncio.Lock] = {}
-        self.db = kwargs.get('db_adapter') # Guardamos si se provee
+        self.db = kwargs.get('db_adapter')
 
     async def _get_exchange(self, exchange_id: str, user_id: str = None) -> ccxtpro.Exchange:
         """
-        Obtiene o crea una instancia de exchange Pro.
-        TODO: En el futuro, cargar las credenciales del user_id desde la DB.
+        Obtiene una instancia de exchange. Si se provee user_id, intenta cargar credenciales.
         """
         eid = exchange_id.lower()
-        # Clave única por exchange (y usuario si tuviera credenciales distintas)
         instance_key = f"{eid}:{user_id}" if user_id else eid
         
         if instance_key not in self._locks:
@@ -31,31 +29,67 @@ class CCXTService:
             
         async with self._locks[instance_key]:
             if instance_key not in self.exchanges:
-                exchange_class = getattr(ccxtpro, eid)
-                self.exchanges[instance_key] = exchange_class({
+                # 1. Configuración Base
+                config = {
                     'enableRateLimit': True,
                     'options': {
                         'defaultType': 'spot',
                         'fetchCurrencies': False
                     }
-                })
+                }
+
+                # 2. Cargar Credenciales si hay usuario
+                if user_id:
+                    try:
+                        # Importación diferida para evitar ciclos
+                        from api.src.adapters.driven.persistence.mongodb import get_app_config
+                        user_config = await get_app_config(user_id)
+                        
+                        if user_config and "exchanges" in user_config:
+                            # Buscar configuración para este exchange específico
+                            exchange_conf = next((e for e in user_config["exchanges"] 
+                                                if e.get("exchangeId") == eid and e.get("isActive", True)), None)
+                            
+                            if exchange_conf:
+                                if exchange_conf.get('apiKey'):
+                                    config['apiKey'] = exchange_conf.get('apiKey')
+                                if exchange_conf.get('secret'):
+                                    config['secret'] = exchange_conf.get('secret')
+                                if exchange_conf.get('password'):
+                                    config['password'] = exchange_conf.get('password')
+                                if exchange_conf.get('uid'):
+                                    config['uid'] = exchange_conf.get('uid')
+                                
+                                # Ajustar tipo de mercado si está configurado
+                                if exchange_conf.get('marketType'):
+                                    config['options']['defaultType'] = exchange_conf.get('marketType')
+                                    
+                    except Exception as e:
+                        logger.warning(f"No se pudieron cargar credenciales para {user_id} en {eid}: {e}")
+
+                # 3. Instanciar
+                try:
+                    exchange_class = getattr(ccxtpro, eid)
+                    self.exchanges[instance_key] = exchange_class(config)
+                except AttributeError:
+                    logger.error(f"Exchange {eid} no soportado por CCXT Pro")
+                    raise ValueError(f"Exchange {eid} not supported")
+
             return self.exchanges[instance_key]
 
-    # --- MÉTODOS DE STREAMING (WEBSOCKETS) ---
+    # --- WEBSOCKETS (EVENT-DRIVEN) ---
 
     async def watch_ticker(self, exchange_id: str, symbol: str) -> AsyncGenerator[Dict[str, Any], None]:
-        """Generador asíncrono para Tickers en tiempo real."""
         exchange = await self._get_exchange(exchange_id)
         while True:
             try:
                 ticker = await exchange.watch_ticker(symbol)
                 yield ticker
             except Exception as e:
-                logger.error(f"Error en watch_ticker ({exchange_id}:{symbol}): {e}")
-                await asyncio.sleep(5)
+                logger.error(f"Error WS Ticker ({exchange_id}:{symbol}): {e}")
+                await asyncio.sleep(10)
 
     async def watch_ohlcv(self, exchange_id: str, symbol: str, timeframe: str) -> AsyncGenerator[list, None]:
-        """Generador asíncrono para Velas (OHLCV) en tiempo real."""
         exchange = await self._get_exchange(exchange_id)
         while True:
             try:
@@ -63,68 +97,76 @@ class CCXTService:
                 if ohlcv:
                     yield ohlcv
             except Exception as e:
-                logger.error(f"Error en watch_ohlcv ({exchange_id}:{symbol}:{timeframe}): {e}")
-                await asyncio.sleep(5)
+                logger.error(f"Error WS OHLCV ({exchange_id}:{symbol}:{timeframe}): {e}")
+                await asyncio.sleep(10)
 
-    # --- MÉTODOS DE DATOS HISTÓRICOS (REST) ---
+    # --- REST METHODS ---
 
-    async def get_historical_data(self, symbol: str, timeframe: str, limit: int = 100, user_id: str = None, exchange_id: str = 'okx') -> pd.DataFrame:
-        """Obtiene velas históricas vía REST para inicializar buffers o análisis."""
+    async def execute_trade(self, symbol: str, side: str, amount: float, price: Optional[float] = None, user_id: str = None, exchange_id: str = 'binance') -> Dict[str, Any]:
         exchange = await self._get_exchange(exchange_id, user_id)
+        
+        # Validar si tenemos credenciales antes de intentar operar
+        if not getattr(exchange, 'apiKey', None):
+             return {"success": False, "message": f"No API Credentials found for {exchange_id}"}
+
         try:
-            ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            side_low = side.lower()
+            if not price:
+                order = await exchange.create_market_order(symbol, side_low, amount)
+            else:
+                order = await exchange.create_limit_order(symbol, side_low, amount, price)
+            
+            return {"success": True, "order_id": order.get('id'), "status": order.get('status'), "details": order}
+        except Exception as e:
+            logger.error(f"Error executing trade on {exchange_id}: {e}")
+            return {"success": False, "message": str(e)}
+
+    async def get_historical_data(self, symbol: str, timeframe: str, limit: int = 100, user_id: str = None, exchange_id: str = 'binance', use_random_date: bool = False, **kwargs) -> pd.DataFrame:
+        """
+        Obtiene datos históricos (velas).
+        Si use_random_date = True, busca un punto aleatorio en el tiempo (para entrenamiento ML).
+        """
+        exchange = await self._get_exchange(exchange_id, user_id)
+        
+        since = None
+        if use_random_date:
+            import random
+            from datetime import timedelta
+            # Elegir un punto aleatorio en los últimos 2 años
+            days_back = random.randint(30, 730)
+            start_date = datetime.utcnow() - timedelta(days=days_back)
+            since = int(start_date.timestamp() * 1000)
+
+        try:
+            ohlcv = await exchange.fetch_ohlcv(symbol, timeframe, limit=limit, since=since)
+            if not ohlcv:
+                return pd.DataFrame()
+                
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             df.set_index('timestamp', inplace=True)
             return df
         except Exception as e:
-            logger.error(f"Error fetching historical data: {e}")
+            logger.error(f"Error fetching historical data for {symbol}: {e}")
             return pd.DataFrame()
 
-    async def get_public_current_price(self, symbol: str, exchange_id: str = 'okx') -> float:
+    async def get_public_current_price(self, symbol: str, exchange_id: str = 'binance') -> float:
         """Obtiene el precio actual rápido vía REST."""
         exchange = await self._get_exchange(exchange_id)
         try:
             ticker = await exchange.fetch_ticker(symbol)
             return float(ticker['last'])
         except Exception as e:
-            logger.error(f"Error fetching public price for {symbol}: {e}")
+            logger.error(f"Error fetching public price for {symbol} on {exchange_id}: {e}")
             return 0.0
 
-    # --- MÉTODOS DE EJECUCIÓN (REQUERIDOS POR CEXService) ---
-
-    async def execute_trade(self, symbol: str, side: str, amount: float, price: Optional[float] = None, user_id: str = None, exchange_id: str = 'okx') -> Dict[str, Any]:
-        """Ejecuta una orden en el exchange."""
+    async def fetch_balance(self, user_id: str, exchange_id: str = 'okx') -> List[Any]:
         exchange = await self._get_exchange(exchange_id, user_id)
-        try:
-            order_type = 'limit' if price else 'market'
-            if order_type == 'market':
-                order = await exchange.create_market_order(symbol, side.lower(), amount)
-            else:
-                order = await exchange.create_limit_order(symbol, side.lower(), amount, price)
-            
-            return {
-                "success": True,
-                "order_id": order.get('id'),
-                "status": order.get('status'),
-                "details": order
-            }
-        except Exception as e:
-            logger.error(f"Error executing trade on {exchange_id}: {e}")
-            return {"success": False, "message": str(e)}
-
-    async def fetch_open_orders(self, symbol: Optional[str] = None, user_id: str = None, exchange_id: str = 'okx') -> List[Dict[str, Any]]:
-        """Consulta órdenes abiertas."""
-        exchange = await self._get_exchange(exchange_id, user_id)
-        try:
-            return await exchange.fetch_open_orders(symbol)
-        except Exception as e:
-            logger.error(f"Error fetching open orders on {exchange_id}: {e}")
+        
+        if not getattr(exchange, 'apiKey', None):
+            logger.warning(f"Attempted fetch_balance on {exchange_id} without API Key for user {user_id}")
             return []
 
-    async def fetch_balance(self, user_id: str, exchange_id: str = 'okx') -> List[Any]:
-        """Consulta el balance del usuario."""
-        exchange = await self._get_exchange(exchange_id, user_id)
         try:
             balance_data = await exchange.fetch_balance()
             from api.src.domain.entities.trading import Balance
@@ -132,46 +174,29 @@ class CCXTService:
             if 'total' in balance_data:
                 for asset, total in balance_data['total'].items():
                     if total > 0:
-                        free = balance_data['free'].get(asset, 0.0)
-                        used = balance_data['used'].get(asset, 0.0)
-                        balances.append(Balance(asset=asset, free=free, used=used, total=total))
+                        balances.append(Balance(
+                            asset=asset, 
+                            free=balance_data['free'].get(asset, 0.0),
+                            used=balance_data['used'].get(asset, 0.0),
+                            total=total
+                        ))
             return balances
         except Exception as e:
             logger.error(f"Error fetching balance for {user_id} on {exchange_id}: {e}")
             return []
 
-    async def get_markets(self, exchange_id: str) -> List[str]:
-        """Carga y retorna los tipos de mercado disponibles."""
-        exchange = await self._get_exchange(exchange_id)
+    async def fetch_open_orders(self, symbol: Optional[str] = None, user_id: str = None, exchange_id: str = 'binance') -> List[Dict[str, Any]]:
+        exchange = await self._get_exchange(exchange_id, user_id)
         try:
-            await exchange.load_markets()
-            market_types = {market.get('type') for market in exchange.markets.values() if market.get('type')}
-            return sorted(list(market_types))
+            return await exchange.fetch_open_orders(symbol)
         except Exception as e:
-            logger.error(f"Error fetching markets for {exchange_id}: {e}")
+            logger.error(f"Error fetching open orders on {exchange_id}: {e}")
             return []
-
-    async def get_symbols(self, exchange_id: str, market_type: str) -> List[str]:
-        """Retorna los símbolos disponibles para un tipo de mercado."""
-        exchange = await self._get_exchange(exchange_id)
-        try:
-            await exchange.load_markets()
-            symbols = [s for s, m in exchange.markets.items() if m.get('type') == market_type and m.get('active', True)]
-            return sorted(symbols)
-        except Exception as e:
-            logger.error(f"Error fetching symbols for {exchange_id} ({market_type}): {e}")
-            return []
-
-    async def get_public_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False, exchange_id: str = "okx") -> pd.DataFrame:
-        """Alias para compatibilidad con Backtest y MLService."""
-        return await self.get_historical_data(symbol, timeframe, limit=limit, use_random_date=use_random_date, exchange_id=exchange_id)
 
     async def close_all(self):
-        """Cierra todas las conexiones activas."""
         for exchange in self.exchanges.values():
             await exchange.close()
-        logger.info("Todas las conexiones de CCXT Pro han sido cerradas.")
+        logger.info("Conexiones CCXT Pro cerradas.")
 
-# Instancia global para ser importada por otros servicios
-CcxtAdapter = CCXTService
-ccxt_service = CCXTService()
+# Exportar para compatibilidad
+ccxt_service = CcxtAdapter()

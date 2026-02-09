@@ -26,47 +26,53 @@ const ExecutionMonitor = ({ bot }: any) => {
     const [candles, setCandles] = useState<any[]>([]);
     const [loading, setLoading] = useState(false);
 
-    // Fetch Initial Candles & Signal History
+    // Fetch Signal History (Now comes from WebSocket in bot object)
     useEffect(() => {
-        if (!bot?.id || !bot?.symbol) return;
+        if (!bot?.id) return;
 
-        const fetchData = async () => {
-            setLoading(true);
-            try {
-                // Fetch Candles
-                const candleRes = await fetch(`${CONFIG.API_BASE_URL}/market/candles?symbol=${encodeURIComponent(bot.symbol)}&timeframe=${bot.timeframe || '1h'}&limit=100`);
-                if (candleRes.ok) {
-                    const data = await candleRes.json();
-                    setCandles(data);
-                }
+        // Set candles and signals from bot object (Socket pre-loaded them)
+        if (bot.candles && bot.candles.length > 0) {
+            setCandles(bot.candles);
+        }
 
-                // Fetch History Signals (New Endpoint S9)
-                const signalRes = await fetch(`${CONFIG.API_BASE_URL}/bots/${bot.id}/signals`);
-                if (signalRes.ok) {
-                    const data = await signalRes.json();
-                    setHistorySignals(data);
-                }
-            } catch (e) {
-                console.error("Error fetching monitor data", e);
-            } finally {
-                setLoading(false);
-            }
-        };
-        fetchData();
+        if (bot.signals && bot.signals.length > 0) {
+            setHistorySignals(bot.signals);
+        }
+
         setLiveSignals([]); // Reset live signals when changing bot
-    }, [bot?.id, bot?.symbol, bot?.timeframe]);
+    }, [bot?.id, bot?.symbol, bot?.timeframe, bot?.candles, bot?.signals]);
 
-    // Integración real: Añadir señal del socket a la lista visual
+    // Integración real: Añadir señal y velas del socket
     useEffect(() => {
-        if (lastMessage && (lastMessage.event === 'signal_update' || lastMessage.event === 'live_execution_signal')) {
+        if (!lastMessage) return;
+
+        if (lastMessage.event === 'signal_update' || lastMessage.event === 'live_execution_signal') {
             const signalData = lastMessage.data;
             if (signalData?.bot_id === bot?.id) {
                 setLiveSignals(prev => [signalData, ...prev].slice(0, 5));
                 // Also add to history for chart
                 setHistorySignals(prev => [...prev, signalData]);
             }
+        } else if (lastMessage.event === 'candle_update') {
+            const { symbol, timeframe, exchange, candle } = lastMessage.data;
+            if (symbol === bot?.symbol && timeframe === bot?.timeframe) {
+                setCandles(prev => {
+                    // Si el 'time' es el mismo que la última vela, se actualiza.
+                    // Si es nuevo, se agrega.
+                    if (prev.length === 0) return [candle];
+                    const last = prev[prev.length - 1];
+                    if (last.time === candle.time) {
+                        const updated = [...prev];
+                        updated[updated.length - 1] = candle;
+                        return updated;
+                    } else if (candle.time > last.time) {
+                        return [...prev, candle].slice(-200); // Mantener buffer manejable
+                    }
+                    return prev;
+                });
+            }
         }
-    }, [lastMessage, bot?.id]);
+    }, [lastMessage, bot?.id, bot?.symbol, bot?.timeframe]);
 
     const combinedSignals = useMemo(() => {
         return [...historySignals];
@@ -229,29 +235,10 @@ const BotInfoModule = ({ bot }: { bot: any }) => {
     );
 }
 
-const SignalHistoryModule = ({ botId }: { botId: string }) => {
-    const [signals, setSignals] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
-
-    useEffect(() => {
-        const fetchHistory = async () => {
-            setLoading(true);
-            try {
-                const res = await fetch(`${CONFIG.API_BASE_URL}/bots/${botId}/signals`);
-                if (res.ok) {
-                    const data = await res.json();
-                    setSignals(data.sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
-                }
-            } catch (e) {
-                console.error("Error fetching history", e);
-            } finally {
-                setLoading(false);
-            }
-        };
-        fetchHistory();
-    }, [botId]);
-
-    if (loading) return <div className="text-center py-10 text-slate-500 animate-pulse">Cargando historial...</div>;
+const SignalHistoryModule = ({ signals: initialSignals }: { signals: any[] }) => {
+    const signals = useMemo(() => {
+        return [...initialSignals].sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    }, [initialSignals]);
 
     return (
         <Card className="overflow-hidden bg-slate-900 border-white/10 animate-in fade-in slide-in-from-bottom-4">
@@ -393,10 +380,13 @@ const BotsPage = () => {
 
     const activeBot = useMemo(() => bots.find(b => b.id === selectedId), [bots, selectedId]);
 
-    // Sync with Context
+    // Sync with Context & Fetch Details on change
     useEffect(() => {
         setSelectedBot(activeBot || null);
-    }, [activeBot, setSelectedBot]);
+        if (selectedId) {
+            sendMessage({ action: 'get_bot_details', bot_id: selectedId });
+        }
+    }, [selectedId, setSelectedBot, sendMessage]);
 
     // Also update on active_bot_update socket event if available
     useEffect(() => {
@@ -407,9 +397,12 @@ const BotsPage = () => {
                 const newData = lastMessage.data;
                 return newData.map((newBot: any) => {
                     const existingBot = prev.find(b => b.id === newBot.id);
-                    // Preservar el currentPrice del estado local para evitar parpadeos si el DB es lento
+                    // Preservar datos enriquecidos si ya existen para evitar "limpieza" al refrescar lista
                     return {
                         ...newBot,
+                        candles: existingBot?.candles || newBot.candles,
+                        signals: existingBot?.signals || newBot.signals,
+                        active_position: existingBot?.active_position || newBot.active_position,
                         currentPrice: existingBot?.currentPrice || newBot.currentPrice
                     };
                 });
@@ -418,6 +411,9 @@ const BotsPage = () => {
             if (lastMessage.data.length > 0 && !selectedId) {
                 setSelectedId(lastMessage.data[0].id);
             }
+        } else if (lastMessage.event === 'bot_details') {
+            const detailedBot = lastMessage.data;
+            setBots(prev => prev.map(b => b.id === detailedBot.id ? { ...b, ...detailedBot } : b));
         } else if (lastMessage.event === 'price_update') {
             const { bot_id, price } = lastMessage.data;
             setBots(prev => {
@@ -590,7 +586,7 @@ const BotsPage = () => {
                                     </TabsContent>
 
                                     <TabsContent value="history">
-                                        <SignalHistoryModule botId={activeBot.id} />
+                                        <SignalHistoryModule signals={activeBot.signals || []} />
                                     </TabsContent>
                                 </div>
                             </Tabs>

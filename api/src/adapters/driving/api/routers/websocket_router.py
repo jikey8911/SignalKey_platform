@@ -138,34 +138,78 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                     action = message.get("action")
 
                     if action == "get_bots":
-                        # Recuperar bots del usuario
+                        # Recuperar bots del usuario (Lightweight list)
                         bots = await repo.get_all_by_user(user_id)
                         result = []
 
                         for bot in bots:
                             b_dict = bot.to_dict()
-                            bot_id_obj = ObjectId(b_dict["id"]) if isinstance(b_dict.get("id"), str) else b_dict.get("_id")
-
-                            # 1. Buscar posición activa en 'positions'
+                            bot_id_obj = ObjectId(b_dict.get("id"))
+                            
+                            # Posición activa mínima info
                             active_position = await db.db["positions"].find_one({
                                 "botId": bot_id_obj,
                                 "status": "OPEN"
                             })
+                            if active_position:
+                                b_dict["pnl"] = active_position.get("roi", 0.0)
+                            else:
+                                b_dict["pnl"] = 0.0
+                            
+                            result.append(b_dict)
 
+                        # Enviar lista aplanada
+                        serialized_result = _serialize_mongo(result)
+                        await socket_service.emit_to_user(user_id, "all_bots_list", serialized_result)
+
+                    elif action == "get_bot_details":
+                        bot_id = str(message.get("bot_id"))
+                        bot_doc = await repo.collection.find_one({"_id": ObjectId(bot_id)})
+                        
+                        if bot_doc:
+                            b_dict = _serialize_mongo(bot_doc)
+                            bot_id_obj = ObjectId(bot_id)
+                            
+                            from api.src.application.services.buffer_service import DataBufferService
+                            buffer_service = DataBufferService()
+
+                            # 1. Posición Completa
+                            active_position = await db.db["positions"].find_one({
+                                "botId": bot_id_obj,
+                                "status": "OPEN"
+                            })
                             if active_position:
                                 b_dict["active_position"] = _serialize_mongo(active_position)
                                 b_dict["pnl"] = active_position.get("roi", 0.0)
                                 b_dict["entryPrice"] = active_position.get("avgEntryPrice", 0.0)
                                 b_dict["currentQty"] = active_position.get("currentQty", 0.0)
-                            else:
-                                b_dict["active_position"] = None
-                                b_dict["pnl"] = 0.0
+                            
+                            # 2. Velas
+                            symbol = b_dict.get("symbol")
+                            timeframe = b_dict.get("timeframe", "1h")
+                            exchange_id = b_dict.get("exchangeId", "binance")
+                            
+                            candles_df = buffer_service.get_latest_data(exchange_id, symbol, timeframe)
+                            candles = []
+                            if candles_df is not None and not candles_df.empty:
+                                for ts, row in candles_df.tail(100).iterrows():
+                                    candles.append({
+                                        "time": int(ts.timestamp()),
+                                        "open": row["open"],
+                                        "high": row["high"],
+                                        "low": row["low"],
+                                        "close": row["close"],
+                                        "volume": row["volume"]
+                                    })
+                            b_dict["candles"] = candles
 
-                            result.append(b_dict)
+                            # 3. Señales
+                            from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
+                            signal_repo = MongoDBSignalRepository(db.db)
+                            signals = await signal_repo.find_by_bot_id(bot_id)
+                            b_dict["signals"] = [s.to_dict() for s in signals[:20]]
 
-                        # Enviar respuesta serializada
-                        serialized_result = _serialize_mongo(result)
-                        await socket_service.emit_to_user(user_id, "all_bots_list", serialized_result)
+                            await socket_service.emit_to_user(user_id, "bot_details", b_dict)
 
                     elif action == "run_batch_backtest":
                         # Lanzar backtest masivo en background

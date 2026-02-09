@@ -21,6 +21,7 @@ class StrategyTrainer:
         # Assuming running from project root e:\antigravity\signaalKei_platform
         self.strategies_dir = strategies_dir
         self.models_dir = models_dir
+        self._class_cache = {} # Cache para evitar recargas constantes
         os.makedirs(self.models_dir, exist_ok=True)
 
     def discover_strategies(self, market_type: str = None) -> List[str]:
@@ -49,11 +50,15 @@ class StrategyTrainer:
         return sorted(list(strategies))
 
     def load_strategy_class(self, strategy_name: str, market_type: str = None):
-        """Dynamic strategy class loading."""
+        """Dynamic strategy class loading with caching."""
+        market = market_type.lower() if market_type else "spot"
+        cache_key = f"{market}:{strategy_name}"
+        
+        if cache_key in self._class_cache:
+            return self._class_cache[cache_key]
+
         try:
             # La ruta debe ser estrictamente api.src.domain.strategies.[market_type].[strategy_name]
-            # Si no se provee market_type, se asume 'spot' por defecto pero dentro de esa estructura.
-            market = market_type.lower() if market_type else "spot"
             module_path = f"api.src.domain.strategies.{market}.{strategy_name}"
 
             try:
@@ -63,16 +68,15 @@ class StrategyTrainer:
                 raise
             
             # --- IMPROVED: Search for any class inheriting from BaseStrategy ---
-            # Use MRO check to be robust against duplicate BaseStrategy imports via different paths
             import inspect
             for name, obj in inspect.getmembers(module):
                 if inspect.isclass(obj):
-                    # Check if any class in inheritance tree is named BaseStrategy
                     if any(base.__name__ == 'BaseStrategy' for base in obj.__mro__) and obj.__name__ != 'BaseStrategy':
                         logger.info(f"Loaded strategy class '{name}' from {module_path}")
+                        self._class_cache[cache_key] = obj
                         return obj
 
-            # Fallback to old name-based logic if no explicitly inheriting class found
+            # Fallback to old name-based logic
             possible_names = [
                 "".join(w.title() for w in strategy_name.split("_")), # rsi_strategy -> RsiStrategy
                 strategy_name.upper(), # rsi -> RSI
@@ -83,7 +87,9 @@ class StrategyTrainer:
 
             for name in possible_names:
                 if hasattr(module, name):
-                    return getattr(module, name)
+                    obj = getattr(module, name)
+                    self._class_cache[cache_key] = obj
+                    return obj
             
             logger.error(f"Could not find strategy class in {module_path}.")
             return None
