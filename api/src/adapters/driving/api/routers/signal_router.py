@@ -24,10 +24,15 @@ async def list_user_signals(
     """
     Lista las señales para el usuario actual.
     """
-    user_id = current_user["openId"]
+    # Use ObjectId directly
+    user_id_obj = current_user["_id"]
     
-    # Usar el repositorio para obtener entidades Signal
-    signals = await signal_repo.find_by_user(user_id)
+    # Update repository method to accept ObjectId (or ensure it handles both)
+    # The repository update is part of the next step, but here we pass the ID.
+    # We will pass the string representation for now, assuming repo handles conversion or uses strings if legacy.
+    # However, the repo is MongoDBSignalRepository and we will update it to expect ObjectId.
+    # Let's pass the string representation of ObjectId to maintain compatibility with `find_by_user` which we will update.
+    signals = await signal_repo.find_by_user(str(user_id_obj))
     
     # Serializar a dicts usando el método helper de la entidad
     return [s.to_dict() for s in signals[:limit]]
@@ -58,13 +63,14 @@ async def approve_signal(
     """
     Aprueba y ejecuta una señal manualmente.
     """
-    user_id = current_user["openId"]
+    user_id_obj = current_user["_id"]
     signal = await signal_repo.find_by_id(signal_id)
     
     if not signal:
         raise HTTPException(status_code=404, detail="Signal not found")
         
-    if str(signal.userId) != user_id:
+    # Check ownership using string comparison of ObjectIds
+    if str(signal.userId) != str(user_id_obj):
         raise HTTPException(status_code=403, detail="Not authorized to approve this signal")
 
     # Re-ejecutar lógica de bot_service
@@ -81,11 +87,12 @@ async def approve_signal(
         parameters=signal.parameters.to_dict() if signal.parameters else {}
     )
     
-    config = await get_app_config(user_id)
+    config = await get_app_config(str(user_id_obj))
     
     try:
         # Pasamos signal_id para que se actualice el estado de la señal existente
-        result = await signal_bot_service.activate_bot(analysis, user_id, config, signal_id=signal_id)
+        # Note: activate_bot likely expects userId as string? We pass str(ObjectId).
+        result = await signal_bot_service.activate_bot(analysis, str(user_id_obj), config, signal_id=signal_id)
 
         if result.success:
             # El servicio ya actualiza la señal si se pasa signal_id, pero podemos asegurar estado

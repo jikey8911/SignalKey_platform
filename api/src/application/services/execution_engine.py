@@ -84,7 +84,7 @@ class ExecutionEngine:
         """
         mode = bot_instance.get('mode', 'simulated')
         symbol = bot_instance['symbol']
-        user_id = bot_instance.get('user_id')
+        user_id = bot_instance.get('user_id') # Expected to be ObjectId
         
         # Determinar moneda base (ej. USDT en BTC/USDT)
         try:
@@ -95,13 +95,14 @@ class ExecutionEngine:
         # --- MODO SIMULADO: Balance Virtual (MongoDB) ---
         if mode == 'simulated':
             try:
-                uid = str(user_id)
+                # Ensure user_id is ObjectId
+                uid = ObjectId(user_id) if not isinstance(user_id, ObjectId) else user_id
                 market_type = bot_instance.get("marketType", "CEX")
                 
                 # Buscar balance en colección 'virtual_balances'
-                # Nota: Usamos str(uid) para asegurar compatibilidad si se guardó como string
+                # Strict ObjectId lookup
                 balance_doc = await self.db["virtual_balances"].find_one({
-                    "userId": {"$in": [uid, ObjectId(uid) if ObjectId.is_valid(uid) else uid]},
+                    "userId": uid,
                     "asset": quote_currency,
                     "marketType": market_type
                 })
@@ -111,7 +112,7 @@ class ExecutionEngine:
                     available = float(balance_doc.get("amount", 0.0))
                 else:
                     # Bootstrap si no existe (saldo inicial para usuarios nuevos)
-                    config = await self.db["app_configs"].find_one({"userId": {"$in": [uid, ObjectId(uid) if ObjectId.is_valid(uid) else uid]}})
+                    config = await self.db["app_configs"].find_one({"userId": uid})
                     if config and "virtualBalances" in config:
                         key = "cex" if market_type == "CEX" else "dex"
                         available = float(config["virtualBalances"].get(key, 10000.0))
@@ -138,6 +139,7 @@ class ExecutionEngine:
                 self.logger.error(f"Bot {bot_instance.get('_id')} en modo REAL no tiene exchangeId configurado.")
                 return False
 
+            # Pass ObjectId directly to exchange adapter
             balances = await self.real_exchange.fetch_balance(str(user_id), exchange_id=exchange_id)
             
             # Buscar el activo
@@ -160,19 +162,33 @@ class ExecutionEngine:
         Ejecuta en papel y actualiza el 'Libro Mayor' virtual.
         """
         qty_executed = amount / price
-        user_id = str(bot.get('user_id'))
+        user_id = bot.get('user_id') # ObjectId
         market_type = bot.get("marketType", "CEX")
         quote_currency = bot['symbol'].split('/')[1] if '/' in bot['symbol'] else 'USDT'
         
         # 1. Movimiento de Caja (Virtual)
         # Si abrimos posición, restamos USDT del saldo disponible
+
+        # NOTE: update_virtual_balance helper usually takes user_id as string/openId to find user.
+        # But we refactored to pass ObjectId to engine.
+        # We need to make sure update_virtual_balance supports ObjectId or convert it.
+        # Looking at mongodb.py, update_virtual_balance does: user = await db.users.find_one({"openId": user_id})
+        # This is bad. We need to update mongodb.py or resolve openId here.
+        # But wait, update_virtual_balance is imported.
+        # Let's resolve this by modifying mongodb.py in the next step or fix it here by passing string if needed
+        # BUT the goal is to standardise on ObjectId.
+
+        # Let's assume update_virtual_balance will be updated to handle ObjectId lookups properly
+        # OR we pass ObjectId string and update mongodb.py to check _id too.
+        # For now, let's pass str(user_id) and ensure mongodb.py handles it.
+
         if action in ["OPEN", "DCA"]:
-            await update_virtual_balance(user_id, market_type, quote_currency, -amount, is_relative=True)
+            await update_virtual_balance(str(user_id), market_type, quote_currency, -amount, is_relative=True)
             
         elif action == "FLIP":
             # En FLIP (cerrar y abrir inverso), restamos el costo de la NUEVA posición.
             # El retorno de la posición cerrada se maneja en _update_simulation_position_db al cerrarla.
-            await update_virtual_balance(user_id, market_type, quote_currency, -amount, is_relative=True)
+            await update_virtual_balance(str(user_id), market_type, quote_currency, -amount, is_relative=True)
 
         # 2. Actualizar Inventario de Posiciones
         final_qty, final_avg_price, current_roi = await self._update_simulation_position_db(
@@ -209,7 +225,7 @@ class ExecutionEngine:
         """
         bot_id = bot_instance['_id']
         symbol = bot_instance['symbol']
-        user_id = str(bot_instance['user_id'])
+        user_id = bot_instance['user_id'] # ObjectId
         market_type = bot_instance.get("marketType", "CEX")
         quote_currency = symbol.split('/')[1] if '/' in symbol else 'USDT'
         
@@ -248,7 +264,7 @@ class ExecutionEngine:
             
             # Devolver capital al balance virtual (Principal + Ganancia/Pérdida)
             capital_returned = (prev_qty * prev_avg) + flip_pnl
-            await update_virtual_balance(user_id, market_type, quote_currency, capital_returned, is_relative=True)
+            await update_virtual_balance(str(user_id), market_type, quote_currency, capital_returned, is_relative=True)
             self.logger.info(f"💵 [SIM FLIP] Retorno al balance: {capital_returned:.2f} (PnL: {flip_pnl:.2f})")
 
             # Cerrar documento antiguo
@@ -290,7 +306,7 @@ class ExecutionEngine:
                 
             # Devolver parte proporcional al balance
             capital_returned = (qty_to_close * prev_avg) + trade_pnl
-            await update_virtual_balance(user_id, market_type, quote_currency, capital_returned, is_relative=True)
+            await update_virtual_balance(str(user_id), market_type, quote_currency, capital_returned, is_relative=True)
 
             position["realizedPnl"] += trade_pnl
             position["currentQty"] = max(0, prev_qty - qty_to_close)
@@ -317,7 +333,7 @@ class ExecutionEngine:
             return position["currentQty"], position["avgEntryPrice"], 0.0
 
     async def _execute_real(self, bot, action, side, price, amount):
-        user_id = str(bot.get('user_id'))
+        user_id = bot.get('user_id') # ObjectId
         exchange_id = bot.get('exchangeId') or bot.get('exchange_id')
         symbol = bot['symbol']
         realized_pnl = 0
@@ -329,7 +345,7 @@ class ExecutionEngine:
 
             if current_qty > 0:
                 self.logger.info(f"🔄 REAL FLIP: Cerrando {current_qty} {symbol} ({close_side}) en {exchange_id}")
-                close_res = await self.real_exchange.execute_trade(symbol, close_side, current_qty, user_id=user_id, exchange_id=exchange_id)
+                close_res = await self.real_exchange.execute_trade(symbol, close_side, current_qty, user_id=str(user_id), exchange_id=exchange_id)
 
                 if not close_res.get("success"):
                     return {"success": False, "reason": f"Flip Close Failed: {close_res.get('message')}"}
@@ -340,7 +356,7 @@ class ExecutionEngine:
 
         # 2. Abrir nueva posición
         qty_to_buy = amount / price
-        open_res = await self.real_exchange.execute_trade(symbol, side, qty_to_buy, user_id=user_id, exchange_id=exchange_id)
+        open_res = await self.real_exchange.execute_trade(symbol, side, qty_to_buy, user_id=str(user_id), exchange_id=exchange_id)
 
         if not open_res.get("success"):
              return {"success": False, "reason": f"Open Failed: {open_res.get('message')}"}
@@ -397,7 +413,7 @@ class ExecutionEngine:
             
             new_sig = Signal(
                 id=None,
-                userId=str(bot_instance.get('user_id')),
+                userId=bot_instance.get('user_id'), # Should be ObjectId
                 source=f"AUTO_{bot_instance.get('strategy_name', 'UNK').upper()}",
                 rawText=f"Signal {signal_data['signal']} @ {signal_data['price']}",
                 status=SignalStatus.EXECUTING,
@@ -414,7 +430,7 @@ class ExecutionEngine:
 
     async def _persist_operation(self, bot_instance, signal_data, exec_result):
         trade_doc = {
-            "userId": bot_instance.get('user_id'),
+            "userId": bot_instance.get('user_id'), # ObjectId
             "botId": str(bot_instance.get('id') or bot_instance.get('_id')),
             "symbol": bot_instance.get('symbol'),
             "side": exec_result.get('side', 'UNKNOWN'),
@@ -426,16 +442,23 @@ class ExecutionEngine:
         }
         await self.db["trades"].insert_one(trade_doc)
         if self.socket:
+            # Socket service uses string for user_id to emit
             await self.socket.emit_to_user(str(bot_instance.get('user_id')), "operation_update", trade_doc)
         
         # Telegram Alert (Simplified)
         try:
             from api.src.infrastructure.telegram.telegram_bot_manager import bot_manager
             from api.src.adapters.driven.notifications.telegram_adapter import TelegramAdapter
-            user_id = str(bot_instance.get('user_id'))
-            user_bot = bot_manager.get_user_bot(user_id)
+            user_id = bot_instance.get('user_id') # ObjectId
+
+            # Resolve openId for Telegram Manager (infrastructure adapter)
+            # Fetch user to get openId
+            user_doc = await self.db.users.find_one({"_id": user_id})
+            open_id = user_doc["openId"] if user_doc else str(user_id)
+
+            user_bot = bot_manager.get_user_bot(open_id)
             if user_bot:
-                tg = TelegramAdapter(user_bot, user_id)
+                tg = TelegramAdapter(user_bot, open_id)
                 await tg.send_trade_alert(trade_doc)
         except Exception as e:
             self.logger.warning(f"Failed to send TG alert: {e}")

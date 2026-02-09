@@ -24,10 +24,10 @@ class CreateBotSchema(BaseModel):
 
 @router.post("/")
 async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get_current_user)):
-    user_id = current_user["openId"]
+    user_id_obj = current_user["_id"]
     
     # 1. Resolver Amount inicial con consistencia financiera
-    app_config = await get_app_config(user_id)
+    app_config = await get_app_config(str(user_id_obj))
     limit_amount = 0.0
     
     # Default limits based on user tier/config
@@ -56,7 +56,7 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
     # 2. Crear instancia usando Schema para validación estricta
     try:
         new_bot_data = BotInstanceSchema(
-            user_id=user_id,
+            user_id=user_id_obj, # Pass ObjectId directly
             name=data.name,
             symbol=data.symbol,
             amount=final_amount,
@@ -77,7 +77,7 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
     
     bot_entity = BotInstance(
         id=None,
-        user_id=new_bot_data.user_id,
+        user_id=new_bot_data.user_id, # Should be ObjectId
         name=new_bot_data.name,
         symbol=new_bot_data.symbol,
         strategy_name=new_bot_data.strategy_name,
@@ -92,7 +92,7 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
     bot_id = await repo.save(bot_entity)
     
     # Emitir evento de creación
-    await socket_service.emit_to_user(user_id, "bot_created", {
+    await socket_service.emit_to_user(str(user_id_obj), "bot_created", {
         "id": bot_id,
         **new_bot_data.dict(by_alias=True, exclude={'id'})
     })
@@ -117,9 +117,9 @@ async def get_bot_signals(
 
 @router.get("/")
 async def list_user_bots(current_user: dict = Depends(get_current_user)): 
-    user_id = current_user["openId"]
+    user_id_obj = current_user["_id"]
     
-    bots = await repo.get_all_by_user(user_id)
+    bots = await repo.get_all_by_user(user_id_obj) # Pass ObjectId
     result = []
     
     for bot in bots:
@@ -167,8 +167,8 @@ async def toggle_bot_status(bot_id: str, status: str):
     # Emitir actualización de estado
     bot_doc = await repo.collection.find_one({"_id": ObjectId(bot_id)})
     if bot_doc:
-        u_id = bot_doc.get("userId")
-        await socket_service.emit_to_user(u_id, "bot_update", {
+        u_id = bot_doc.get("userId") # This should be ObjectId now
+        await socket_service.emit_to_user(str(u_id), "bot_update", {
             "id": bot_id,
             "status": status
         })
@@ -184,10 +184,15 @@ class UpdateBotSchema(BaseModel):
 
 @router.put("/{bot_id}")
 async def update_bot(bot_id: str, data: UpdateBotSchema, current_user: dict = Depends(get_current_user)):
-    user_id = current_user["openId"]
+    user_id_obj = current_user["_id"]
     
     # 1. Recuperar bot actual
-    existing_bot = await repo.collection.find_one({"_id": ObjectId(bot_id), "userId": user_id})
+    existing_bot = await repo.collection.find_one({"_id": ObjectId(bot_id), "userId": user_id_obj}) # Ensure we query by ObjectId
+
+    # Fallback to string openId if not found (during transition/migration just in case)
+    if not existing_bot:
+         existing_bot = await repo.collection.find_one({"_id": ObjectId(bot_id), "user_id": str(user_id_obj)})
+
     if not existing_bot:
         raise HTTPException(status_code=404, detail="Bot not found")
 
@@ -197,7 +202,7 @@ async def update_bot(bot_id: str, data: UpdateBotSchema, current_user: dict = De
     if "amount" in updates:
         new_amount = updates["amount"]
         # Retrieve limits
-        app_config = await get_app_config(user_id)
+        app_config = await get_app_config(str(user_id_obj))
         limit_amount = 100.0
         if app_config:
              limits = app_config.get('investmentLimits', {})
@@ -217,7 +222,7 @@ async def update_bot(bot_id: str, data: UpdateBotSchema, current_user: dict = De
         await repo.collection.update_one({"_id": ObjectId(bot_id)}, {"$set": updates})
         
         # Emitir
-        await socket_service.emit_to_user(user_id, "bot_updated", {
+        await socket_service.emit_to_user(str(user_id_obj), "bot_updated", {
             "id": bot_id,
             **updates
         })
@@ -259,10 +264,10 @@ async def receive_external_signal(data: SignalWebhook):
 
 @router.delete("/{bot_id}")
 async def delete_bot(bot_id: str, current_user: dict = Depends(get_current_user)):
-    user_id = current_user["openId"]
+    user_id_obj = current_user["_id"]
     await repo.delete(bot_id)
     
     # Emitir evento de eliminación
-    await socket_service.emit_to_user(user_id, "bot_deleted", {"id": bot_id})
+    await socket_service.emit_to_user(str(user_id_obj), "bot_deleted", {"id": bot_id})
     
     return {"message": "Bot deleted"}

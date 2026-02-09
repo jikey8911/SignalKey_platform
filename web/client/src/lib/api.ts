@@ -50,6 +50,7 @@ export async function fetchTelegramLogs() {
 
 export async function fetchConfig(openId: string) {
   // openId not required for URL as it relies on session cookie
+  // Keeping openId param for compatibility if used elsewhere, but not using in URL
   try {
     const data = await fetchJson<{ config: any }>(`${API_BASE}/config/`);
     return data.config;
@@ -69,9 +70,9 @@ export async function updateConfig(openId: string, config: any) {
 }
 
 export async function fetchSignals(openId: string) {
-  if (!openId) return [];
+  // openId deprecated, using cookie
   try {
-    return await fetchJson<any[]>(`${API_BASE}/signals?user_id=${openId}&limit=50`);
+    return await fetchJson<any[]>(`${API_BASE}/signals?limit=50`);
   } catch (e) {
     console.error("Error fetching signals:", e);
     return [];
@@ -79,9 +80,9 @@ export async function fetchSignals(openId: string) {
 }
 
 export async function fetchTrades(openId: string) {
-  if (!openId) return [];
+  // openId deprecated, using cookie
   try {
-    return await fetchJson<any[]>(`${API_BASE}/trades?user_id=${openId}&limit=100`);
+    return await fetchJson<any[]>(`${API_BASE}/trades?limit=100`);
   } catch (e) {
     console.error("Error fetching trades:", e);
     return [];
@@ -89,9 +90,9 @@ export async function fetchTrades(openId: string) {
 }
 
 export async function fetchBalances(openId: string) {
-  if (!openId) return [];
+  // openId deprecated, using cookie
   try {
-    return await fetchJson<any[]>(`${API_BASE}/balances/${openId}`);
+    return await fetchJson<any[]>(`${API_BASE}/balances`);
   } catch (e) {
     console.error("Error fetching balances:", e);
     return [];

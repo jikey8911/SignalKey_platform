@@ -63,26 +63,26 @@ class MongoModel:
         await db[collection_name].update_one(query, {"$set": data, "$setOnInsert": {"createdAt": datetime.utcnow()}}, upsert=True)
 
 # Helper functions for specific collections
-async def get_app_config(user_id: str):
+async def get_app_config(user_id: Any):
     """Get app config for user and ensure it has the correct structure"""
     import logging
     logger = logging.getLogger(__name__)
     
-    # user_id can be the openId or the ObjectId string
-    # First try by openId in users collection to get the ObjectId
-    user = await db.users.find_one({"openId": user_id})
-
-    # If not found by openId, try by _id
-    if not user:
-        try:
-            if ObjectId.is_valid(user_id):
-                 user = await db.users.find_one({"_id": ObjectId(user_id)})
-        except Exception:
-            pass
+    # Accept ObjectId or string (openId or hex)
+    user = None
+    if isinstance(user_id, ObjectId):
+        user = await db.users.find_one({"_id": user_id})
+    else:
+        # Try finding by openId
+        user = await db.users.find_one({"openId": user_id})
+        # If not found, try as ObjectId string
+        if not user and ObjectId.is_valid(user_id):
+             user = await db.users.find_one({"_id": ObjectId(user_id)})
 
     if not user:
         return None
     
+    # Use strict ObjectId lookup for app_configs
     config = await db.app_configs.find_one({"userId": user["_id"]})
     
     if config:
@@ -91,13 +91,13 @@ async def get_app_config(user_id: str):
         
         # Si tiene geminiApiKey pero no aiApiKey, migrar
         if "geminiApiKey" in config and config.get("geminiApiKey") and not config.get("aiApiKey"):
-            logger.info(f"Migrating legacy geminiApiKey to aiApiKey for user {user_id}")
+            logger.info(f"Migrating legacy geminiApiKey to aiApiKey for user {user['_id']}")
             config["aiApiKey"] = config["geminiApiKey"]
             needs_migration = True
         
         # Si no tiene aiProvider definido, establecer gemini como default
         if "aiProvider" not in config:
-            logger.info(f"Setting default aiProvider=gemini for user {user_id}")
+            logger.info(f"Setting default aiProvider=gemini for user {user['_id']}")
             config["aiProvider"] = "gemini"
             needs_migration = True
         
@@ -117,11 +117,24 @@ async def save_trade(trade_data: Dict[str, Any]):
     trade_data["createdAt"] = datetime.utcnow()
     return await db.trades.insert_one(trade_data)
 
-async def update_virtual_balance(user_id: str, market_type: str, asset: str, amount: float, is_relative: bool = False):
-    user = await db.users.find_one({"openId": user_id})
+async def update_virtual_balance(user_id: Any, market_type: str, asset: str, amount: float, is_relative: bool = False):
+    """
+    Updates virtual balance for a user.
+    user_id: Can be ObjectId, openId string, or ObjectId string.
+    """
+    user = None
+    if isinstance(user_id, ObjectId):
+        user = await db.users.find_one({"_id": user_id})
+    else:
+        user = await db.users.find_one({"openId": user_id})
+        if not user and ObjectId.is_valid(user_id):
+             user = await db.users.find_one({"_id": ObjectId(user_id)})
+
     if not user:
+        logger.warning(f"update_virtual_balance: User not found for id {user_id}")
         return
     
+    # Use ObjectId for virtual_balances operations
     if is_relative:
         # Sumar o restar al balance existente
         await db.virtual_balances.update_one(
@@ -140,9 +153,9 @@ async def update_virtual_balance(user_id: str, market_type: str, asset: str, amo
             upsert=True
         )
     
-    # Emitir cambio por socket
+    # Emitir cambio por socket using openId (string) as per frontend expectation/socket service
     from api.src.adapters.driven.notifications.socket_service import socket_service
-    await socket_service.emit_to_user(user_id, "balance_update", {
+    await socket_service.emit_to_user(user["openId"], "balance_update", {
         "marketType": market_type,
         "asset": asset,
         "amount": amount,

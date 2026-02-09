@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from api.src.domain.services.exchange_port import IExchangePort
 from api.src.domain.entities.trading import Ticker, Balance, Order, TradeResult
 from api.src.domain.entities.signal import SignalAnalysis

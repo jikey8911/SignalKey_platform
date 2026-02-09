@@ -4,6 +4,7 @@ from typing import Optional
 import jwt
 from datetime import datetime, timedelta
 import os
+from bson import ObjectId
 
 from api.src.adapters.driven.database.user_repository import UserRepository
 from api.src.adapters.driven.database.mongodb_connection import get_database
@@ -91,7 +92,11 @@ async def register(
         
         return AuthResponse(
             success=True,
-            user={'openId': new_user['openId'], 'name': new_user.get('name', request.username)},
+            user={
+                'id': str(new_user['_id']),
+                'openId': new_user['openId'],
+                'name': new_user.get('name', request.username)
+            },
             token=token
         )
     
@@ -167,7 +172,11 @@ async def login(
 
         return AuthResponse(
             success=True,
-            user={'openId': user['openId'], 'name': user.get('name', request.username)},
+            user={
+                'id': str(user['_id']),
+                'openId': user['openId'],
+                'name': user.get('name', request.username)
+            },
             token=token
         )
     
@@ -249,6 +258,7 @@ async def get_current_user(
 
         return {
             'user': {
+                'id': str(user['_id']),
                 'openId': user['openId'],
                 'name': user.get('name'),
                 'email': user.get('email'),

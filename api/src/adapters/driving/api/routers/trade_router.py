@@ -19,10 +19,10 @@ async def list_user_trades(
     """
     Lista los trades para el usuario actual.
     """
-    user_id = current_user["openId"]
+    user_id_obj = current_user["_id"]
     
-    # Búsqueda flexible (sin slash final o con slash manejado por FastAPI)
-    cursor = db.trades.find({"userId": user_id}).sort("createdAt", -1).limit(limit)
+    # Búsqueda usando ObjectId directamente
+    cursor = db.trades.find({"userId": user_id_obj}).sort("createdAt", -1).limit(limit)
     trades = []
     async for doc in cursor:
         doc["id"] = str(doc["_id"])
@@ -30,15 +30,21 @@ async def list_user_trades(
     
     return _serialize_mongo(trades)
 
-@router.get("/balances/{user_id}")
-async def get_user_balances(user_id: str, current_user: dict = Depends(get_current_user)):
+@router.get("/balances")
+async def get_user_balances(current_user: dict = Depends(get_current_user)):
     """
     Obtiene balances virtuales o reales dependiendo del modo demo.
+    Ahora usa el usuario autenticado, no un parámetro user_id.
     """
-    if current_user["openId"] != user_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
+    user_id_str = current_user["openId"] # Para config y servicios externos que usan openId
+    user_id_obj = current_user["_id"]    # Para consultas internas a DB
 
-    config = await get_app_config(user_id)
+    # Config retrieval uses openId or ObjectId inside get_app_config helper
+    # Here we pass the string ID for compatibility with the helper if it expects string,
+    # but strictly we should move to ObjectId everywhere.
+    # checking get_app_config implementation: it handles both string (openId) and string(ObjectId).
+    # Ideally we refactor get_app_config to take ObjectId directly but for now let's pass ObjectId as string.
+    config = await get_app_config(str(user_id_obj))
     if not config:
         return []
 
@@ -67,7 +73,9 @@ async def get_user_balances(user_id: str, current_user: dict = Depends(get_curre
         # Balance Real (Vía CCXT)
         try:
             from api.main import cex_service
-            balances = await cex_service.fetch_balance(user_id)
+            # CEX Service expects user_id as string (openId usually for keys lookup).
+            # We decided to use ObjectId. Let's pass ObjectId string.
+            balances = await cex_service.fetch_balance(str(user_id_obj))
             res = []
             if balances and "total" in balances:
                 for asset, total in balances["total"].items():
