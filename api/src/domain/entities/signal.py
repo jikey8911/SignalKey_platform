@@ -10,8 +10,15 @@ class MarketType(str, Enum):
     FUTURES = "FUTURES"
 
 class Decision(str, Enum):
+    APPROVED = "approved"
+    REJECTED = "rejected"
     BUY = "BUY"
     SELL = "SELL"
+    HOLD = "HOLD"
+
+class Direction(str, Enum):
+    LONG = "LONG"
+    SHORT = "SHORT"
     HOLD = "HOLD"
 
 class SignalStatus(str, Enum):
@@ -28,6 +35,8 @@ class SignalStatus(str, Enum):
 class TakeProfit:
     price: float
     percent: float
+    qty: Optional[float] = None
+    status: str = "pending" # pending, hit
 
     def to_dict(self):
         return {
@@ -43,6 +52,7 @@ class TradingParameters:
     sl: Optional[float] = None
     leverage: int = 1
     amount: Optional[float] = None
+    investment: Optional[float] = None # Recommended investment value
     network: Optional[str] = None
 
     def to_dict(self):
@@ -59,6 +69,7 @@ class TradingParameters:
 @dataclass
 class SignalAnalysis:
     decision: Decision
+    direction: Direction
     symbol: str
     market_type: MarketType
     confidence: float

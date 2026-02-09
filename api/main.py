@@ -84,6 +84,7 @@ async def run_background_startup():
         
         # Iniciar tareas asíncronas
         asyncio.create_task(monitor_service.start_monitoring())
+        await telegram_trade_service.start() # Iniciar monitoreo de señales de Telegram
         await signal_bot_service.start()
         
         logger.info("🎉 [BACKGROUND] SISTEMA COMPLETAMENTE OPERATIVO")
@@ -130,10 +131,12 @@ app.add_middleware(
 )
 
 # Inicialización de adaptadores base (Ligeros)
+from api.src.infrastructure.di.container import container
 from api.src.adapters.driven.exchange.ccxt_adapter import CcxtAdapter
 from api.src.adapters.driven.exchange.stream_service import MarketStreamService
 ccxt_adapter = CcxtAdapter(db_adapter=db) 
-market_stream_service = MarketStreamService()
+market_stream_service = container.stream_service
+price_alert_manager = container.price_alert_manager
 
 logger.info(f"[INIT] Config loaded. JWT Prefix: {Config.JWT_SECRET[:4]}...")
 
@@ -149,12 +152,24 @@ backtest_service = BacktestService(exchange_adapter=ccxt_adapter)
 from api.src.adapters.driven.notifications.socket_service import socket_service
 execution_engine = ExecutionEngine(db, socket_service=socket_service, exchange_adapter=ccxt_adapter)
 
+# Nuevo Servicio de Trades para Telegram (Arquitectura Hexagonal)
+from api.src.application.services.telegram_trade_service import TelegramTradeService
+telegram_trade_service = TelegramTradeService(
+    cex_service=cex_service, 
+    trade_repository=container.telegram_trade_repository,
+    stream_service=market_stream_service,
+    alert_manager=price_alert_manager
+)
+
 signal_bot_service = SignalBotService(
     cex_service=cex_service, 
     dex_service=dex_service,
     stream_service=market_stream_service,
     engine=execution_engine
 )
+# Inyectar el nuevo método en el bot_service para compatibilidad con el use case actual
+# o mejor, pasar el servicio correcto al contenedor.
+signal_bot_service.create_telegram_trade = telegram_trade_service.create_telegram_trade
 
 # --- ROUTERS ---
 from fastapi import APIRouter
@@ -213,6 +228,12 @@ api_router.include_router(trade_router.router)
 api_router.include_router(health_router.router)
 api_router.include_router(ai_router.router)
 
+# --- ENDPOINTS AUXILIARES ---
+@api_router.get("/status/{user_id}")
+async def get_user_status(user_id: str):
+    # Implementación simplificada para health check rápido
+    return {"status": "online", "user_id": user_id, "system_booting": boot_task is not None and not boot_task.done()}
+
 app.include_router(api_router)
 
 # WebSocket Router (Root level /ws)
@@ -240,11 +261,6 @@ async def process_signal_task(signal: TradingSignal, user_id: str = "default_use
     except Exception as e:
         logger.error(f"Error procesando señal: {e}")
 
-# --- ENDPOINTS AUXILIARES ---
-@app.get("/status/{user_id}")
-async def get_user_status(user_id: str):
-    # Implementación simplificada para health check rápido
-    return {"status": "online", "user_id": user_id, "system_booting": boot_task is not None and not boot_task.done()}
 
 # --- SERVIR FRONTEND ---
 frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web", "dist", "public")

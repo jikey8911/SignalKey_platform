@@ -100,7 +100,7 @@ class ExecutionEngine:
                 
                 # Buscar balance en colección 'virtual_balances'
                 # Nota: Usamos str(uid) para asegurar compatibilidad si se guardó como string
-                balance_doc = await self.db.db["virtual_balances"].find_one({
+                balance_doc = await self.db["virtual_balances"].find_one({
                     "userId": {"$in": [uid, ObjectId(uid) if ObjectId.is_valid(uid) else uid]},
                     "asset": quote_currency,
                     "marketType": market_type
@@ -111,7 +111,7 @@ class ExecutionEngine:
                     available = float(balance_doc.get("amount", 0.0))
                 else:
                     # Bootstrap si no existe (saldo inicial para usuarios nuevos)
-                    config = await self.db.db["app_configs"].find_one({"userId": {"$in": [uid, ObjectId(uid) if ObjectId.is_valid(uid) else uid]}})
+                    config = await self.db["app_configs"].find_one({"userId": {"$in": [uid, ObjectId(uid) if ObjectId.is_valid(uid) else uid]}})
                     if config and "virtualBalances" in config:
                         key = "cex" if market_type == "CEX" else "dex"
                         available = float(config["virtualBalances"].get(key, 10000.0))
@@ -213,7 +213,7 @@ class ExecutionEngine:
         market_type = bot_instance.get("marketType", "CEX")
         quote_currency = symbol.split('/')[1] if '/' in symbol else 'USDT'
         
-        positions_coll = self.db.db["positions"]
+        positions_coll = self.db["positions"]
         position = await positions_coll.find_one({
             "botId": ObjectId(bot_id),
             "status": "OPEN"
@@ -369,7 +369,7 @@ class ExecutionEngine:
         }
 
     async def _update_bot_db(self, bot_id, side, qty, price, pnl):
-        await self.db.db["bot_instances"].update_one(
+        await self.db["bot_instances"].update_one(
             {"_id": ObjectId(bot_id)},
             {
                 "$set": {
@@ -424,7 +424,7 @@ class ExecutionEngine:
             "mode": bot_instance.get('mode'),
             "timestamp": datetime.utcnow()
         }
-        await self.db.db["trades"].insert_one(trade_doc)
+        await self.db["trades"].insert_one(trade_doc)
         if self.socket:
             await self.socket.emit_to_user(str(bot_instance.get('user_id')), "operation_update", trade_doc)
         

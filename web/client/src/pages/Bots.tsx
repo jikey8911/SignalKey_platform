@@ -21,10 +21,12 @@ interface Bot {
 
 interface Signal {
     id?: string;
-    type: 'BUY' | 'SELL';
+    decision: string;
     price: number;
-    timestamp: number | string;
+    timestamp?: number | string;
+    createdAt?: string;
     status?: string;
+    type?: 'BUY' | 'SELL'; // Compatibilidad legacy
 }
 
 interface Position {
@@ -46,7 +48,7 @@ export default function BotsPage() {
     const [isLoadingChart, setIsLoadingChart] = useState(false);
 
     // Hook de WebSocket
-    const { lastJsonMessage, sendJsonMessage, readyState } = useSocket();
+    const { lastMessage, sendMessage, isConnected } = useSocket();
 
     // 1. Cargar lista de bots al montar el componente
     useEffect(() => {
@@ -56,14 +58,16 @@ export default function BotsPage() {
     const fetchBots = async () => {
         try {
             const response = await api.get('/bots');
-            const data = response.data || [];
+            // Asegurar que 'data' sea un array antes de actualizar el estado
+            const data = Array.isArray(response.data) ? response.data : [];
             setBots(data);
-            // Seleccionar el primer bot si no hay selección actual
+            // Seleccionar el primer bot si no hay selección actual y hay datos
             if (data.length > 0 && !selectedBot) {
                 setSelectedBot(data[0]);
             }
         } catch (error) {
             console.error("Error cargando bots:", error);
+            setBots([]); // Resetear a vacío en caso de error
         }
     };
 
@@ -97,71 +101,101 @@ export default function BotsPage() {
         fetchHistory();
 
         // B) Suscribirse al Bot específico vía WebSocket
-        if (readyState === 1) { // 1 = OPEN
-            console.log(`[Bots] Suscribiendo al ID: ${selectedBot.id}`);
-            sendJsonMessage({
-                action: 'SUBSCRIBE_BOT',
+        if (isConnected) {
+            sendMessage({
+                action: "SUBSCRIBE_BOT",
                 bot_id: selectedBot.id
             });
         }
 
         // C) Limpieza: Desuscribirse al cambiar de bot o desmontar
         return () => {
-            if (readyState === 1) {
-                console.log(`[Bots] Desuscribiendo ID: ${selectedBot.id}`);
-                sendJsonMessage({
-                    action: 'UNSUBSCRIBE_BOT',
+            if (isConnected && selectedBot) {
+                sendMessage({
+                    action: "UNSUBSCRIBE_BOT",
                     bot_id: selectedBot.id
                 });
             }
         };
-    }, [selectedBot?.id, readyState]);
+    }, [selectedBot, isConnected]);
 
-    // 3. Procesador de Mensajes en Tiempo Real
+    // 3. Procesar Mensajes de WebSocket
     useEffect(() => {
-        if (!lastJsonMessage) return;
+        if (!lastMessage) return;
 
-        const msg = lastJsonMessage as any;
+        const msg = lastMessage as any;
+        const event = msg.event || msg.type; // Compatible con ambos formatos
 
-        // Solo procesar mensajes si son relevantes para el contexto actual
-        // (Opcional: verificar msg.bot_id si el backend lo envía en todos los eventos)
-
-        if (msg.type === 'bot_snapshot') {
-            // Snapshot inicial recibido al suscribirse
-            console.log("Snapshot recibido:", msg);
-            if (msg.signals) setSignals(msg.signals);
-            if (msg.positions) setPositions(msg.positions);
-            // Si el backend enviara 'candles' en el snapshot, podríamos actualizar chartData aquí también
+        if (event === 'bot_snapshot') {
+            // Inicialización completa desde el servidor
+            if (msg.bot_id === selectedBot?.id) {
+                setSignals(msg.signals || []);
+                setPositions(msg.positions || []);
+                if (msg.config) {
+                    setSelectedBot(prev => ({ ...prev, ...msg.config }));
+                }
+            }
         }
-        else if (msg.type === 'signal_new' || msg.type === 'signal_update') {
-            // Nueva señal generada
-            console.log("Nueva señal:", msg.data);
-            setSignals(prev => [...prev, msg.data]);
+        else if (event === 'bot_update') {
+            const data = msg.data || msg;
+            if (data.id === selectedBot?.id) {
+                // Actualizar PnL y Precio en tiempo real en la cabecera/lista
+                setSelectedBot(prev => prev ? { ...prev, ...data } : null);
+                // Si hay posiciones, podemos actualizarlas si el mensaje trae info
+            }
         }
-        else if (msg.type === 'position_update') {
-            // Actualización de posiciones
-            setPositions(msg.data);
+        else if (event === 'candle_update') {
+            const data = msg.data || msg;
+            if (data.symbol === selectedBot?.symbol) {
+                // Actualizar gráfico
+                setChartData(prev => {
+                    const last = prev[prev.length - 1];
+                    if (last && last.time === data.candle.time) {
+                        const updated = [...prev];
+                        updated[updated.length - 1] = data.candle;
+                        return updated;
+                    }
+                    return [...prev, data.candle];
+                });
+            }
         }
-        // Nota: Las actualizaciones de precio (velas) se pasan directamente al gráfico vía props
+        else if (event === 'signal_alert' || event === 'new_signal') {
+            const data = msg.data || msg;
+            if (data.botId === selectedBot?.id) {
+                setSignals(prev => [...prev, data]);
+            }
+        }
+        else if (event === 'position_update' || event === 'operation_update') {
+            const data = msg.data || msg;
+            if (data.botId === selectedBot?.id) {
+                // Actualizar lista de posiciones
+                // Depende de si es un trade individual o el array completo
+                setPositions(prev => {
+                    // Lógica simplificada: si existe lo actualizamos, si no lo añadimos?
+                    // Para SignalKey solemos tener una única posición por bot.
+                    return [data];
+                });
+            }
+        }
 
-    }, [lastJsonMessage]);
+    }, [lastMessage, selectedBot]);
 
-    // Transformar señales en marcadores para el gráfico
-    const chartMarkers = signals.map(sig => ({
-        time: typeof sig.timestamp === 'string' ? new Date(sig.timestamp).getTime() / 1000 : sig.timestamp,
-        position: sig.type === 'BUY' ? 'belowBar' : 'aboveBar',
-        color: sig.type === 'BUY' ? '#2196F3' : '#E91E63',
-        shape: sig.type === 'BUY' ? 'arrowUp' : 'arrowDown',
-        text: sig.type,
-        size: 2, // Tamaño relativo del marcador
-    }));
+    // Transformar señales en marcadores para el gráfico (Adaptar a TradeMarker interface)
+    const botTrades = signals.map(sig => {
+        const side = (sig.decision === 'SELL' || sig.type === 'SELL') ? 'SELL' : 'BUY';
+        return {
+            time: sig.createdAt || sig.timestamp || Date.now(),
+            side: side as 'BUY' | 'SELL',
+            price: sig.price,
+            label: sig.decision || sig.type
+        };
+    });
 
     // Manejadores de acciones
     const handleStartBot = async () => {
         if (!selectedBot) return;
         try {
             await api.post(`/bots/${selectedBot.id}/start`);
-            // Actualizamos la lista localmente o refrescamos
             setBots(prev => prev.map(b => b.id === selectedBot.id ? { ...b, status: 'running' } : b));
             setSelectedBot(prev => prev ? { ...prev, status: 'running' } : null);
         } catch (e) {
@@ -200,13 +234,13 @@ export default function BotsPage() {
                 </div>
                 <ScrollArea className="flex-1 p-3">
                     <div className="space-y-2">
-                        {bots.map((bot) => (
+                        {Array.isArray(bots) && bots.map((bot) => (
                             <div
                                 key={bot.id}
                                 onClick={() => setSelectedBot(bot)}
                                 className={`group flex flex-col gap-2 p-3 rounded-xl border cursor-pointer transition-all duration-200 ${selectedBot?.id === bot.id
-                                        ? 'bg-primary/5 border-primary/50 shadow-sm'
-                                        : 'bg-card hover:bg-accent/50 border-border hover:border-primary/20'
+                                    ? 'bg-primary/5 border-primary/50 shadow-sm'
+                                    : 'bg-card hover:bg-accent/50 border-border hover:border-primary/20'
                                     }`}
                             >
                                 <div className="flex justify-between items-start">
@@ -232,6 +266,11 @@ export default function BotsPage() {
                                 </div>
                             </div>
                         ))}
+                        {(!Array.isArray(bots) || bots.length === 0) && (
+                            <div className="text-center p-4 text-xs text-muted-foreground opacity-50">
+                                No se encontraron bots activos
+                            </div>
+                        )}
                     </div>
                 </ScrollArea>
             </div>
@@ -282,9 +321,9 @@ export default function BotsPage() {
                         )}
                         <div className="h-6 w-px bg-border mx-2" />
                         <div className="flex items-center gap-2 text-xs font-medium">
-                            <div className={`h-2.5 w-2.5 rounded-full shadow-sm transition-colors ${readyState === 1 ? 'bg-green-500 shadow-green-500/50' : 'bg-red-500'}`} />
-                            <span className={readyState === 1 ? 'text-green-600' : 'text-red-500'}>
-                                {readyState === 1 ? 'En Línea' : 'Desconectado'}
+                            <div className={`h-2.5 w-2.5 rounded-full shadow-sm transition-colors ${isConnected ? 'bg-green-500 shadow-green-500/50' : 'bg-red-500'}`} />
+                            <span className={isConnected ? 'text-green-600' : 'text-red-500'}>
+                                {isConnected ? 'En Línea' : 'Desconectado'}
                             </span>
                         </div>
                     </div>
@@ -311,9 +350,8 @@ export default function BotsPage() {
                                     <TradingViewChart
                                         data={chartData}
                                         symbol={selectedBot.symbol}
-                                        interval={selectedBot.timeframe}
-                                        socketData={lastJsonMessage} // Pasa actualizaciones de velas en tiempo real
-                                        markers={chartMarkers}       // Pinta las señales de compra/venta
+                                        timeframe={selectedBot.timeframe}
+                                        trades={botTrades}
                                     />
                                 </CardContent>
                             </Card>
@@ -334,8 +372,8 @@ export default function BotsPage() {
                                                 <div key={idx} className="p-4 border-b last:border-0 flex flex-col gap-2 hover:bg-muted/5">
                                                     <div className="flex justify-between items-center">
                                                         <Badge variant="outline" className={`${pos.side === 'LONG'
-                                                                ? 'bg-green-500/10 text-green-600 border-green-200'
-                                                                : 'bg-red-500/10 text-red-600 border-red-200'
+                                                            ? 'bg-green-500/10 text-green-600 border-green-200'
+                                                            : 'bg-red-500/10 text-red-600 border-red-200'
                                                             }`}>
                                                             {pos.side}
                                                         </Badge>
@@ -376,30 +414,33 @@ export default function BotsPage() {
                                             <div className="min-w-full inline-block align-middle">
                                                 {signals.length > 0 ? (
                                                     <div className="divide-y">
-                                                        {signals.slice().reverse().map((sig, idx) => (
-                                                            <div key={idx} className="flex items-center justify-between p-3 hover:bg-muted/5 transition-colors">
-                                                                <div className="flex items-center gap-3">
-                                                                    <div className={`w-1 h-8 rounded-full ${sig.type === 'BUY' ? 'bg-green-500' : 'bg-red-500'}`} />
-                                                                    <div className="flex flex-col">
-                                                                        <span className="font-medium text-sm flex items-center gap-2">
-                                                                            {sig.type === 'BUY' ? 'Compra Detectada' : 'Venta Detectada'}
-                                                                        </span>
-                                                                        <span className="text-xs text-muted-foreground font-mono">
-                                                                            {new Date(Number(sig.timestamp)).toLocaleString()}
-                                                                        </span>
+                                                        {signals.slice().reverse().map((sig, idx) => {
+                                                            const isBuy = sig.decision === 'BUY' || sig.type === 'BUY';
+                                                            return (
+                                                                <div key={idx} className="flex items-center justify-between p-3 hover:bg-muted/5 transition-colors">
+                                                                    <div className="flex items-center gap-3">
+                                                                        <div className={`w-1 h-8 rounded-full ${isBuy ? 'bg-green-500' : 'bg-red-500'}`} />
+                                                                        <div className="flex flex-col">
+                                                                            <span className="font-medium text-sm flex items-center gap-2">
+                                                                                {isBuy ? 'Compra Detectada' : 'Venta Detectada'}
+                                                                            </span>
+                                                                            <span className="text-xs text-muted-foreground font-mono">
+                                                                                {new Date(sig.createdAt || sig.timestamp || Date.now()).toLocaleString()}
+                                                                            </span>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="flex items-center gap-4 text-sm">
+                                                                        <div className="flex flex-col items-end">
+                                                                            <span className="text-muted-foreground text-xs">Precio Señal</span>
+                                                                            <span className="font-mono font-medium">{sig.price}</span>
+                                                                        </div>
+                                                                        <Badge variant={isBuy ? 'default' : 'destructive'} className="w-20 justify-center">
+                                                                            {sig.decision || sig.type}
+                                                                        </Badge>
                                                                     </div>
                                                                 </div>
-                                                                <div className="flex items-center gap-4 text-sm">
-                                                                    <div className="flex flex-col items-end">
-                                                                        <span className="text-muted-foreground text-xs">Precio Señal</span>
-                                                                        <span className="font-mono font-medium">{sig.price}</span>
-                                                                    </div>
-                                                                    <Badge variant={sig.type === 'BUY' ? 'default' : 'destructive'} className="w-20 justify-center">
-                                                                        {sig.type}
-                                                                    </Badge>
-                                                                </div>
-                                                            </div>
-                                                        ))}
+                                                            );
+                                                        })}
                                                     </div>
                                                 ) : (
                                                     <div className="h-full flex flex-col items-center justify-center text-muted-foreground opacity-60 p-6 min-h-[200px]">

@@ -13,15 +13,18 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Instancias globales o inyectadas
-socket_manager = SocketService() # Tu manejador de conexiones
-# Necesitarás una forma de obtener estos repositorios dentro del socket, 
-# a menudo usando un contenedor de inyección de dependencias o instanciándolos aquí si son simples.
-# bot_repo = BotRepository(...) 
+# Instancias globales
+from api.src.adapters.driven.notifications.socket_service import socket_service
+from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
+from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
+from api.src.adapters.driven.persistence.mongodb import db
 
-@router.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await socket_manager.connect(websocket)
+bot_repo = MongoBotRepository()
+signal_repo = MongoDBSignalRepository(db)
+
+@router.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    await socket_service.connect(websocket, user_id)
     try:
         while True:
             data = await websocket.receive_text()
@@ -43,7 +46,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 await websocket.send_json({"type": "PONG"})
 
     except WebSocketDisconnect:
-        socket_manager.disconnect(websocket)
+        socket_service.disconnect(websocket, user_id)
     except Exception as e:
         logger.error(f"Error en websocket: {e}")
         try:
@@ -59,59 +62,65 @@ async def handle_bot_subscription(websocket: WebSocket, bot_id: str):
     """
     logger.info(f"Cliente suscribiéndose al bot {bot_id}")
     
-    # A) OBTENER DATOS (Simulado - conecta con tus repositorios reales)
-    # bot = await bot_repo.get_by_id(bot_id)
-    # signals = await signal_repo.get_recent_by_bot(bot_id, limit=50)
-    # positions = await trade_repo.get_open_positions(bot_id)
+    # A) OBTENER DATOS REALES
+    bot_doc = await bot_repo.collection.find_one({"_id": ObjectId(bot_id)})
+    if not bot_doc:
+        logger.warning(f"Suspensión fallida: Bot {bot_id} no encontrado.")
+        return
+
+    # Mapear para el frontend
+    bot_id_str = str(bot_doc["_id"])
+    symbol = bot_doc.get("symbol", "BTC/USDT")
+    timeframe = bot_doc.get("timeframe", "1h")
+    exchange_id = (bot_doc.get("exchangeId") or bot_doc.get("exchange_id") or "binance").lower()
+
+    # Obtener señales recientes
+    signals = await signal_repo.find_by_bot_id(bot_id)
     
-    # --- Datos Mock simulando la DB del Bot ---
-    # Recuperamos la configuración vital: Exchange, Symbol, Timeframe
-    bot_mock_config = {
-        "id": bot_id,
-        "name": "Bot Trading V1",
-        "symbol": "BTC/USDT",       # Símbolo
-        "timeframe": "1m",          # Temporalidad
-        "exchange_id": "binance",   # Exchange específico (IMPORTANTE)
-        "status": "running",
-        "strategy": "RSI_Reversion_V2"
-    }
+    # Obtener posición activa
+    active_position = await db["positions"].find_one({
+        "botId": bot_doc["_id"],
+        "status": "OPEN"
+    })
 
     snapshot_data = {
         "type": "bot_snapshot",
-        "bot_id": bot_id,
-        "config": bot_mock_config,
-        "positions": [
-            # Ejemplo: Consultar DB de posiciones abiertas
-            {"symbol": "BTC/USDT", "side": "LONG", "entryPrice": 64500, "amount": 0.01, "unrealizedPnL": 1.5}
-        ],
-        "signals": [
-            # Ejemplo: Consultar DB de señales históricas
-            {"type": "BUY", "price": 64000, "timestamp": 1709900000000, "status": "EXECUTED"},
-            {"type": "SELL", "price": 65000, "timestamp": 1709910000000, "status": "EXECUTED"}
-        ]
+        "bot_id": bot_id_str,
+        "config": {
+            "id": bot_id_str,
+            "name": bot_doc.get("name"),
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "exchange_id": exchange_id,
+            "status": bot_doc.get("status")
+        },
+        "positions": [_serialize_mongo(active_position)] if active_position else [],
+        "signals": [s.to_dict() for s in signals]
     }
     
     # B) ENVIAR SNAPSHOT
     await websocket.send_json(snapshot_data)
     
     # C) GESTIONAR SUSCRIPCIÓN EN EL SOCKET MANAGER
-    # 1. Suscribir a eventos del bot (señales, alertas)
-    await socket_manager.subscribe_to_topic(websocket, topic=f"bot:{bot_id}")
+    await socket_service.subscribe_to_topic(websocket, topic=f"bot:{bot_id}")
     
-    # 2. Suscribir a datos de mercado (Velas en tiempo real)
-    # Usamos exchange_id + symbol + timeframe para identificar el stream único
-    exchange_id = bot_mock_config.get("exchange_id")
-    symbol = bot_mock_config.get("symbol")
-    timeframe = bot_mock_config.get("timeframe")
-
-    if exchange_id and symbol and timeframe:
-        # Formato sugerido: candles:exchange:symbol:timeframe
-        market_topic = f"candles:{exchange_id}:{symbol}:{timeframe}"
-        logger.info(f"Suscribiendo socket a stream de mercado: {market_topic}")
-        await socket_manager.subscribe_to_topic(websocket, topic=market_topic)
+    # D) SUSCRIBIR A VELAS
+    market_topic = f"candles:{exchange_id}:{symbol}:{timeframe}"
+    logger.info(f"Suscribiendo socket a stream de mercado: {market_topic}")
+    await socket_service.subscribe_to_topic(websocket, topic=market_topic)
 
 async def handle_bot_unsubscription(websocket: WebSocket, bot_id: str):
     logger.info(f"Cliente desuscribiéndose del bot {bot_id}")
-    await socket_manager.unsubscribe_from_topic(websocket, topic=f"bot:{bot_id}")
-    # Nota: La desuscripción de velas puede ser compleja si el usuario tiene múltiples bots 
-    # viendo el mismo mercado. Idealmente, el SocketService maneja contadores de referencia.
+    await socket_service.unsubscribe_from_topic(websocket, topic=f"bot:{bot_id}")
+    # Nota: También deberíamos desuscribir de las velas, pero esto requiere 
+    # saber qué velas estaba viendo este bot.
+    # Por ahora simplificado.
+
+def _serialize_mongo(obj):
+    from bson import ObjectId
+    if isinstance(obj, list): return [_serialize_mongo(i) for i in obj]
+    if isinstance(obj, dict): return {k: _serialize_mongo(v) for k, v in obj.items()}
+    if isinstance(obj, ObjectId): return str(obj)
+    return obj
+
+from bson import ObjectId

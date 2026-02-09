@@ -286,42 +286,44 @@ class AIAdapter(IAIPort):
 
     def _build_prompt(self, text: str) -> str:
         return f"""
-        Tu tarea es extraer parámetros técnicos de un texto descriptivo y devolverlos en formato JSON. 
-        Este es un sistema de procesamiento de datos automático.
+        Tu tarea es actuar como un Analista de Trading Experto. Debes extraer parámetros técnicos detallados de un mensaje de Telegram y devolverlos en un formato JSON estricto.
         
         REGLAS DE EXTRACCIÓN Y GENERACIÓN:
-        1. SÍMBOLO: Si es una alerta de bot (GMGN/Trend), busca la dirección de contrato (CA) o el par (p.ej. BTC/USDT).
-        2. MERCADO: 
-           - 'SPOT' (CEX/Centralizado sin apalancamiento).
-           - 'FUTURES' (CEX con apalancamiento, p.ej. "Long x20", "Short", "Cross 10x").
-           - 'DEX' (Descentralizado/Solana/Base, p.ej. CA de Solana).
-        3. DECISIÓN: 
-           - 'BUY' si el texto indica una entrada, compra, Long o alerta positiva.
-           - 'SELL' si el texto indica una salida, venta o Short.
-           - 'HOLD' si el texto no contiene una operación clara, es publicidad, spam o soporte.
-        4. PARÁMETROS (MANDATORIOS SI DECISIÓN != 'HOLD'):
-           - Si el texto NO contiene entry_price, tp o sl, DEBES generarlos tú basándote en el precio actual (usa tu búsqueda si es posible) o ratios prudentes (ej. SL: 2-5%, TP1: 5-10%).
-           - NUNCA devuelvas 0.0 para entry_price si la decisión es BUY/SELL.
-           - El campo 'leverage' debe ser coherente con el mercado (1 para SPOT/DEX).
+        1. SÍMBOLO: Extrae el par (p.ej. BTC/USDT) o la dirección de contrato (CA).
+        2. MERCADO: 'SPOT', 'FUTURES' o 'DEX'.
+        3. DECISIÓN: "approved" si la operación es viable y segura, "rejected" si no lo es.
+        4. DIRECCIÓN: "LONG" (Compra/Subida), "SHORT" (Venta/Bajada) o "HOLD" (No entrar).
+        5. CONFIANZA: Un valor entre 0.0 y 1.0.
+        6. INVERSIÓN: Recomienda un valor de inversión (USD o moneda base) basado en el riesgo percibido.
+        7. PARÁMETROS DE TRADING (MANDATORIOS SI DECISIÓN es "approved"):
+           - entry_price: Precio de entrada sugerido.
+           - sl: Precio de Stop Loss (obligatorio).
+           - tp (tasks): DEBES generar al menos 3 niveles de Take Profit.
+             Para cada TP, calcula el "qty" (cantidad de la posición a cerrar) basado en la inversión y el porcentaje de salida (ej. 33% de la posición en cada TP).
+           - leverage: 1 para SPOT/DEX, o valor acorde para FUTURES.
         
         TEXTO A PROCESAR:
         "{text}"
         
-        RESPUESTA JSON (Sin preámbulos, deveulve un ARRAY [] de objetos si hay múltiples tokens):
+        RESPUESTA JSON (Sin preámbulos, devuelve un ARRAY [] de objetos):
         [
             {{
-                "decision": "BUY" | "SELL" | "HOLD",
-                "symbol": "Símbolo o Dirección",
+                "decision": "approved" | "rejected",
+                "direction": "LONG" | "SHORT" | "HOLD",
+                "symbol": "Símbolo/CA",
                 "market_type": "SPOT" | "FUTURES" | "DEX",
+                "confidence": 0.0 a 1.0,
+                "investment": 0.0,
                 "is_safe": true | false,
                 "risk_score": 0.0 a 10.0,
-                "confidence": 0.0 a 1.0,
-                "reasoning": "Resumen técnico de la extracción",
+                "reasoning": "Explicación técnica en español",
                 "parameters": {{
                     "entry_price": 0.0,
                     "entry_type": "market" | "limit",
                     "tp": [
-                        {{"price": 0.0, "percent": 50}}
+                        {{"price": 0.0, "percent": 33.3, "qty": 0.0, "status": "pending"}},
+                        {{"price": 0.0, "percent": 33.3, "qty": 0.0, "status": "pending"}},
+                        {{"price": 0.0, "percent": 33.4, "qty": 0.0, "status": "pending"}}
                     ],
                     "sl": 0.0,
                     "leverage": 1,
@@ -489,7 +491,14 @@ class AIAdapter(IAIPort):
     def _parse_single_item(self, data: dict) -> SignalAnalysis:
         params_data = data.get("parameters", {})
         
-        tp_list = [TakeProfit(price=t["price"], percent=t["percent"]) for t in params_data.get("tp", []) if isinstance(t, dict) and "price" in t]
+        tp_list = [
+            TakeProfit(
+                price=t["price"], 
+                percent=t["percent"], 
+                qty=t.get("qty"), 
+                status=t.get("status", "pending")
+            ) for t in params_data.get("tp", []) if isinstance(t, dict) and "price" in t
+        ]
         
         params = TradingParameters(
             entry_price=params_data.get("entry_price"),
@@ -498,15 +507,20 @@ class AIAdapter(IAIPort):
             sl=params_data.get("sl"),
             leverage=params_data.get("leverage", 1),
             amount=params_data.get("amount"),
+            investment=data.get("investment") or params_data.get("investment") or params_data.get("amount"),
             network=params_data.get("network")
         )
 
-        # Mapeo robusto de Decision
-        decision_val = data.get("decision", "HOLD").upper()
-        if decision_val not in [d.value for d in Decision]:
-            decision = Decision.HOLD
+        # Mapeo de Decision (Aprobación)
+        decision_raw = data.get("decision", "rejected").lower()
+        decision = Decision.APPROVED if decision_raw == "approved" else Decision.REJECTED
+
+        # Mapeo de Direction (LONG/SHORT/HOLD)
+        direction_raw = data.get("direction", "HOLD").upper()
+        if direction_raw not in [d.value for d in Direction]:
+            direction = Direction.HOLD
         else:
-            decision = Decision(decision_val)
+            direction = Direction(direction_raw)
 
         # Mapeo robusto de MarketType
         market_val = data.get("market_type", "SPOT").upper()
@@ -518,6 +532,7 @@ class AIAdapter(IAIPort):
 
         return SignalAnalysis(
             decision=decision,
+            direction=direction,
             symbol=data.get("symbol", "UNKNOWN"),
             market_type=market_type,
             confidence=data.get("confidence", 0.0),

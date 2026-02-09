@@ -127,7 +127,7 @@ async def list_user_bots(current_user: dict = Depends(get_current_user)):
         bot_id_obj = ObjectId(b_dict["id"]) if isinstance(b_dict.get("id"), str) else b_dict.get("_id")
         
         # 1. Buscar posición activa en la nueva colección 'positions'
-        active_position = await db.db["positions"].find_one({
+        active_position = await db["positions"].find_one({
             "botId": bot_id_obj,
             "status": "OPEN"
         })

@@ -69,8 +69,11 @@ class MongoDBSignalRepository(ISignalRepository):
         return signals
 
     async def find_by_bot_id(self, bot_id: str) -> List[Signal]:
+        return await self.get_recent_by_bot(bot_id, limit=100)
+
+    async def get_recent_by_bot(self, bot_id: str, limit: int = 50) -> List[Signal]:
         query = {"botId": ObjectId(bot_id)} if len(bot_id) == 24 else {"botId": bot_id}
-        cursor = self.collection.find(query).sort("createdAt", -1)
+        cursor = self.collection.find(query).sort("createdAt", -1).limit(limit)
         signals = []
         async for doc in cursor:
             signals.append(self._map_to_entity(doc))

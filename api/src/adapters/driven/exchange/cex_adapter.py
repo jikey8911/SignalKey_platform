@@ -174,5 +174,35 @@ class CEXAdapter(IExchangePort):
             return TradeResult(success=False, message=str(e))
 
     async def fetch_open_orders(self, user_id: str, symbol: Optional[str] = None) -> List[Order]:
-        # Implementation skipped for brevity, similar pattern
-        return []
+        try:
+            config = await get_app_config(user_id)
+            ex_cfg = next((e for e in config.get("exchanges", []) if e.get("isActive", True)), None)
+            if not ex_cfg: return []
+
+            orders_dict = await ccxt_service.fetch_open_orders(
+                symbol=self._normalize_symbol(symbol) if symbol else None,
+                user_id=user_id,
+                exchange_id=ex_cfg["exchangeId"]
+            )
+            
+            from api.src.domain.entities.trading import Order
+            return [Order(**o) if isinstance(o, dict) else o for o in orders_dict]
+        except Exception as e:
+            logger.error(f"CEXAdapter: Error fetching open orders: {e}")
+            return []
+
+    async def get_historical_data(self, symbol: str, timeframe: str, limit: int = 15000, use_random_date: bool = False, user_id: str = "default_user", exchange_id: str = "binance") -> Any:
+        return await ccxt_service.get_historical_data(
+            symbol=self._normalize_symbol(symbol),
+            timeframe=timeframe,
+            limit=limit,
+            user_id=user_id,
+            exchange_id=exchange_id,
+            use_random_date=use_random_date
+        )
+
+    async def get_markets(self, exchange_id: str) -> List[str]:
+        return await ccxt_service.get_markets(exchange_id)
+
+    async def get_symbols(self, exchange_id: str, market_type: str) -> List[str]:
+        return await ccxt_service.get_symbols(exchange_id, market_type)

@@ -60,6 +60,22 @@ class CEXService:
     async def get_public_exchange_instance(self, exchange_id: str):
         return await self.ccxt_provider._get_exchange(exchange_id)
 
+    async def monitor_price_with_alerts(self, exchange_id: str, symbol: str, targets: List[float], callback: callable):
+        """
+        Orquestador Hexagonal: Conecta la aplicación con el flujo inteligente en el adaptador.
+        """
+        symbol = self._normalize_symbol(symbol)
+        logger.info(f"📡 Iniciando monitoreo inteligente para {symbol} en {exchange_id} (Targets: {targets})")
+        
+        async for price in self.ccxt_provider.watch_high_precision_stream(exchange_id, symbol, targets):
+            try:
+                if asyncio.iscoroutinefunction(callback):
+                    await callback(symbol, price)
+                else:
+                    callback(symbol, price)
+            except Exception as e:
+                logger.error(f"Error en callback de monitoreo para {symbol}: {e}")
+
     def _normalize_symbol(self, symbol: str) -> str:
         if not symbol or not str(symbol).strip(): 
             return "UNKNOWN/USDT"

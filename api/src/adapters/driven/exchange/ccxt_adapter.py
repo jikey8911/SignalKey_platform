@@ -100,6 +100,56 @@ class CcxtAdapter:
                 logger.error(f"Error WS OHLCV ({exchange_id}:{symbol}:{timeframe}): {e}")
                 await asyncio.sleep(10)
 
+    async def watch_trades(self, exchange_id: str, symbol: str) -> AsyncGenerator[List[Dict[str, Any]], None]:
+        exchange = await self._get_exchange(exchange_id)
+        while True:
+            try:
+                trades = await exchange.watch_trades(symbol)
+                if trades:
+                    yield trades
+            except Exception as e:
+                logger.error(f"Error WS Trades ({exchange_id}:{symbol}): {e}")
+                await asyncio.sleep(10)
+
+    async def watch_high_precision_stream(self, exchange_id: str, symbol: str, targets: List[float]) -> AsyncGenerator[float, None]:
+        """
+        Monitoreo inteligente que alterna entre Ticker (ligero) y Trades (pesado)
+        basado en la proximidad de los targets (Entrada, TP, SL).
+        """
+        exchange = await self._get_exchange(exchange_id)
+        mode = "ticker" # "ticker" o "trades"
+        
+        while True:
+            try:
+                if mode == "ticker":
+                    ticker = await exchange.watch_ticker(symbol)
+                    price = float(ticker['last'])
+                    yield price
+                    
+                    # Calcular distancia mínima a cualquier target
+                    min_dist = min([abs(price - t) / t * 100 for t in targets if t > 0])
+                    if min_dist <= 0.5:
+                        logger.info(f"🚀 [H-PRECISION] {symbol} cerca ({min_dist:.2f}%). Cambiando a TRADES.")
+                        mode = "trades"
+                else:
+                    trades = await exchange.watch_trades(symbol)
+                    if trades:
+                        # Procesar cada trade individual para máxima precisión
+                        for t in trades:
+                            price = float(t['price'])
+                            yield price
+                        
+                        # Usar el último precio para verificar si nos alejamos
+                        last_p = float(trades[-1]['price'])
+                        min_dist = min([abs(last_p - t) / t * 100 for t in targets if t > 0])
+                        if min_dist > 0.7:
+                            logger.info(f"📉 [H-PRECISION] {symbol} lejos ({min_dist:.2f}%). Volviendo a TICKER.")
+                            mode = "ticker"
+            except Exception as e:
+                logger.error(f"Error en High Precision Stream ({symbol}): {e}")
+                await asyncio.sleep(5)
+                mode = "ticker" # Reintentar en modo ligero
+
     # --- REST METHODS ---
 
     async def execute_trade(self, symbol: str, side: str, amount: float, price: Optional[float] = None, user_id: str = None, exchange_id: str = 'binance') -> Dict[str, Any]:
@@ -192,6 +242,24 @@ class CcxtAdapter:
         except Exception as e:
             logger.error(f"Error fetching open orders on {exchange_id}: {e}")
             return []
+
+    async def get_markets(self, exchange_id: str) -> List[str]:
+        """Retorna tipos de mercados soportados por el exchange."""
+        # Simplificación: CCXT suele soportar estos, o podemos cargar markets
+        # Para SignalKey, nos interesan spot y swap/futures
+        return ["spot", "futures", "swap"]
+
+    async def get_symbols(self, exchange_id: str, market_type: str) -> List[str]:
+        """Retorna los símbolos activos para un tipo de mercado."""
+        exchange = await self._get_exchange(exchange_id)
+        if not exchange.markets:
+            await exchange.load_markets()
+        
+        symbols = []
+        for symbol, market in exchange.markets.items():
+            if market.get('active', True) and market.get('type') == market_type:
+                symbols.append(symbol)
+        return sorted(symbols)
 
     async def close_all(self):
         for exchange in self.exchanges.values():

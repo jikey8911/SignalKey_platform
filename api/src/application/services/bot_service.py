@@ -77,30 +77,23 @@ class SignalBotService:
             if bot_exchange == exchange_id:
                 await self._process_bot_tick(trade, current_price=last_price)
                 
-                # --- EMITR UPDATE EN VIVO ---
+                # --- EMITR UPDATE POR TOPIC ---
                 from api.src.adapters.driven.notifications.socket_service import socket_service
-                user_open_id = trade.get("userOpenId") # Debemos asegurar que este campo existe o conseguirlo
-                if not user_open_id:
-                    # Fallback: buscar usuario
-                    user = await db.users.find_one({"_id": trade.get("userId")})
-                    user_open_id = user["openId"] if user else None
                 
-                if user_open_id:
-                    # Calcular PnL de nuevo o reusar el del update
-                    pnl = trade.get("pnl", 0) # Update_one lo actualizó en DB pero no en el objeto local 'trade'
-                    # Re-calcular para el mensaje
-                    entry_price = trade.get("entryPrice", 0)
-                    side = trade.get("side", "BUY")
-                    if entry_price > 0:
-                        pnl = ((last_price - entry_price) / entry_price) * 100 if side == "BUY" else ((entry_price - last_price) / entry_price) * 100
-                    
-                    await socket_service.emit_to_user(user_open_id, "bot_update", {
-                        "id": str(trade.get("botId")),
-                        "symbol": symbol,
-                        "currentPrice": last_price,
-                        "pnl": round(pnl, 2),
-                        "timestamp": datetime.utcnow().isoformat()
-                    })
+                bot_id = str(trade.get("botId"))
+                entry_price = trade.get("entryPrice", 0)
+                side = trade.get("side", "BUY")
+                pnl = 0
+                if entry_price > 0:
+                    pnl = ((last_price - entry_price) / entry_price) * 100 if side == "BUY" else ((entry_price - last_price) / entry_price) * 100
+                
+                await socket_service.emit_to_topic(f"bot:{bot_id}", "bot_update", {
+                    "id": bot_id,
+                    "symbol": symbol,
+                    "currentPrice": last_price,
+                    "pnl": round(pnl, 2),
+                    "timestamp": datetime.utcnow().isoformat()
+                })
 
     async def _handle_candle_update(self, data: Dict[str, Any]):
         symbol = data["symbol"]
@@ -136,9 +129,7 @@ class SignalBotService:
         # Actualizar buffer
         await self.buffer_service.update_with_candle(ex_id, symbol, timeframe, incoming_candle)
         
-        # --- EMISION DE VELA AL FRONTEND ---
-        # Siempre emitimos para que el gráfico se mueva en vivo, 
-        # pero la lógica de IA solo si la vela es nueva (cerró la anterior)
+        # --- EMISION DE VELA POR TOPIC ---
         from api.src.adapters.driven.notifications.socket_service import socket_service
         
         candle_msg = {
@@ -155,12 +146,8 @@ class SignalBotService:
             }
         }
         
-        processed_users = set()
-        for bot in bots_for_exchange:
-            uid = bot.get("user_id")
-            if uid and uid not in processed_users:
-                await socket_service.emit_to_user(uid, "candle_update", candle_msg)
-                processed_users.add(uid)
+        market_topic = f"candles:{ex_id.lower()}:{symbol}:{timeframe}"
+        await socket_service.emit_to_topic(market_topic, "candle_update", candle_msg)
 
         # Lógica de IA (solo en cambio de timestamp: la vela anterior acaba de cerrar)
         if is_new_candle:
