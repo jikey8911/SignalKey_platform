@@ -68,7 +68,7 @@ class CCXTService:
 
     # --- MÉTODOS DE DATOS HISTÓRICOS (REST) ---
 
-    async def get_historical_data(self, symbol: str, timeframe: str, limit: int = 100, user_id: str = None, exchange_id: str = 'binance') -> pd.DataFrame:
+    async def get_historical_data(self, symbol: str, timeframe: str, limit: int = 100, user_id: str = None, exchange_id: str = 'okx') -> pd.DataFrame:
         """Obtiene velas históricas vía REST para inicializar buffers o análisis."""
         exchange = await self._get_exchange(exchange_id, user_id)
         try:
@@ -81,7 +81,7 @@ class CCXTService:
             logger.error(f"Error fetching historical data: {e}")
             return pd.DataFrame()
 
-    async def get_public_current_price(self, symbol: str, exchange_id: str = 'binance') -> float:
+    async def get_public_current_price(self, symbol: str, exchange_id: str = 'okx') -> float:
         """Obtiene el precio actual rápido vía REST."""
         exchange = await self._get_exchange(exchange_id)
         try:
@@ -93,7 +93,7 @@ class CCXTService:
 
     # --- MÉTODOS DE EJECUCIÓN (REQUERIDOS POR CEXService) ---
 
-    async def execute_trade(self, symbol: str, side: str, amount: float, price: Optional[float] = None, user_id: str = None, exchange_id: str = 'binance') -> Dict[str, Any]:
+    async def execute_trade(self, symbol: str, side: str, amount: float, price: Optional[float] = None, user_id: str = None, exchange_id: str = 'okx') -> Dict[str, Any]:
         """Ejecuta una orden en el exchange."""
         exchange = await self._get_exchange(exchange_id, user_id)
         try:
@@ -113,7 +113,7 @@ class CCXTService:
             logger.error(f"Error executing trade on {exchange_id}: {e}")
             return {"success": False, "message": str(e)}
 
-    async def fetch_open_orders(self, symbol: Optional[str] = None, user_id: str = None, exchange_id: str = 'binance') -> List[Dict[str, Any]]:
+    async def fetch_open_orders(self, symbol: Optional[str] = None, user_id: str = None, exchange_id: str = 'okx') -> List[Dict[str, Any]]:
         """Consulta órdenes abiertas."""
         exchange = await self._get_exchange(exchange_id, user_id)
         try:
@@ -122,7 +122,7 @@ class CCXTService:
             logger.error(f"Error fetching open orders on {exchange_id}: {e}")
             return []
 
-    async def fetch_balance(self, user_id: str, exchange_id: str = 'binance') -> List[Any]:
+    async def fetch_balance(self, user_id: str, exchange_id: str = 'okx') -> List[Any]:
         """Consulta el balance del usuario."""
         exchange = await self._get_exchange(exchange_id, user_id)
         try:
@@ -162,7 +162,7 @@ class CCXTService:
             logger.error(f"Error fetching symbols for {exchange_id} ({market_type}): {e}")
             return []
 
-    async def get_public_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False, exchange_id: str = "binance") -> pd.DataFrame:
+    async def get_public_historical_data(self, symbol: str, timeframe: str, limit: int = 1500, use_random_date: bool = False, exchange_id: str = "okx") -> pd.DataFrame:
         """Alias para compatibilidad con Backtest y MLService."""
         return await self.get_historical_data(symbol, timeframe, limit=limit, use_random_date=use_random_date, exchange_id=exchange_id)
 

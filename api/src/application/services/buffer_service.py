@@ -72,7 +72,7 @@ class DataBufferService:
         # If we only have Ticker, we update the "current" candle's close price in real-time.
         
         if event_type == "ticker_update":
-            # Ticker update: {'exchange': 'binance', 'symbol': 'BTC/USDT', 'ticker': {...}}
+            # Ticker update: {'exchange': 'okx', 'symbol': 'BTC/USDT', 'ticker': {...}}
              await self.update_with_ticker(data)
 
     async def update_with_candle(self, exchange_id: str, symbol: str, timeframe: str, candle_data: Dict):

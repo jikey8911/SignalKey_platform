@@ -36,7 +36,7 @@ class SignalBotService:
         # 1. Estrategias activas (Generación de Señales)
         active_instances = await db.bot_instances.find({"status": "active"}).to_list(length=1000)
         for bot in active_instances:
-            ex_id = (bot.get("exchangeId") or bot.get("exchange_id") or "binance").lower()
+            ex_id = (bot.get("exchangeId") or bot.get("exchange_id") or "okx").lower()
             symbol = bot["symbol"]
             tf = bot.get("timeframe", "15m")
             
@@ -48,7 +48,7 @@ class SignalBotService:
         # 2. Trades activos (Gestión de Salida TP/SL)
         active_trades = await db.trades.find({"status": {"$in": ["active", "open"]}}).to_list(length=1000)
         for trade in active_trades:
-            ex_id = (trade.get("exchangeId") or "binance").lower()
+            ex_id = (trade.get("exchangeId") or "okx").lower()
             await self.stream_service.subscribe_ticker(ex_id, trade["symbol"])
 
     async def handle_market_update(self, event_type: str, data: Dict[str, Any]):
@@ -71,7 +71,7 @@ class SignalBotService:
         """Lógica Anti-Repainting: Solo analiza velas CERRADAS."""
         symbol = data["symbol"]
         timeframe = data["timeframe"]
-        ex_id = data.get("exchange", "binance")
+        ex_id = data.get("exchange", "okx")
         incoming_candle = data["candle"]
         current_ts = incoming_candle["timestamp"]
 

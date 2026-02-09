@@ -33,7 +33,7 @@ class CEXService:
     async def fetch_balance(self, user_id: str, exchange_id: Optional[str] = None) -> Dict[str, Any]:
         """Obtiene el balance total del usuario delegando a CCXTService"""
         try:
-            balances = await self.ccxt_provider.fetch_balance(user_id, exchange_id or "binance")
+            balances = await self.ccxt_provider.fetch_balance(user_id, exchange_id or "okx")
             # Convertir lista de objetos Balance a dict para compatibilidad con el resto de la app si es necesario
             res = {"total": {}, "free": {}, "used": {}}
             for b in balances:
@@ -55,7 +55,7 @@ class CEXService:
                 if active_ex:
                     exchange_id = active_ex["exchangeId"]
         
-        exchange_id = exchange_id or "binance"
+        exchange_id = exchange_id or "okx"
         
         # Delegamos a CCXTService que ya maneja su propio cache (user_instances)
         instance = await self.ccxt_provider._get_exchange(exchange_id, user_id)
@@ -144,7 +144,7 @@ class CEXService:
                 logger.debug(f"CEXService: Error consultando ticker en {exchange_id} para {symbol}: {e}")
             return 0.0
 
-    # Eliminado _get_price_from_binance ya que está integrado en la lógica dinámica de búsqueda
+    # Eliminado _get_price_from_okx ya que está integrado en la lógica dinámica de búsqueda
 
     async def execute_trade(self, analysis: AnalysisResult, user_id: str = "default_user") -> ExecutionResult:
         exchange, config = await self.get_exchange_instance(user_id)
@@ -234,7 +234,7 @@ class CEXService:
                     amount=amount,
                     price=analysis.parameters.get('entry_price') if analysis.parameters else None,
                     user_id=user_id,
-                    exchange_id=config.get("exchange_id", "binance") if config else "binance"
+                    exchange_id=config.get("exchange_id", "okx") if config else "okx"
                 )
                 
                 if trade_result_dict.get("success"):
@@ -316,7 +316,7 @@ class CEXService:
             exchange = await self.get_public_exchange_instance(exchange_id)
             if not exchange:
                 # Fallback al provider default
-                exchange = await self.ccxt_provider.create_public_instance(exchange_id or "binance")
+                exchange = await self.ccxt_provider.create_public_instance(exchange_id or "okx")
 
             if not exchange:
                 logger.error(f"Cannot get candles: Exchange {exchange_id} not initialized")

@@ -29,7 +29,7 @@ async def _run_batch_backtest(user_id: str, params: dict):
     """
     Ejecuta el backtest en lote para todos los símbolos activos.
     """
-    exchange_id = params.get("exchangeId", "binance").lower()
+    exchange_id = params.get("exchangeId", "okx").lower()
     market_type = params.get("marketType", "spot").upper()
     timeframe = params.get("timeframe", "1h")
     days = int(params.get("days", 7))

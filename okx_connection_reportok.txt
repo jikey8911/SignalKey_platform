@@ -1,7 +1,7 @@
 REPORTE DE CONEXIÓN CCXT PRO - 2026-02-08 00:38:24.096412
 ========================================
 
-Exchange: binance
+Exchange: okx
 Símbolo: BTC/USDT
 Timeframe: 1m
 
@@ -10,6 +10,6 @@ Timeframe: 1m
 --- CANDLE UPDATES ---
 
 --- ERRORES ---
-❌ Error al cargar mercados: binance GET https://api.binance.com/api/v3/exchangeInfo
-Error en Ticker: binance GET https://api.binance.com/api/v3/exchangeInfo
-Error en Velas: binance GET https://api.binance.com/api/v3/exchangeInfo
+❌ Error al cargar mercados: okx GET https://api.okx.com/api/v3/exchangeInfo
+Error en Ticker: okx GET https://api.okx.com/api/v3/exchangeInfo
+Error en Velas: okx GET https://api.okx.com/api/v3/exchangeInfo

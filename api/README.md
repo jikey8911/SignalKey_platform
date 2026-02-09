@@ -71,7 +71,7 @@ crypto_bot_api/
     *   `GEMINI_API_KEY`: Tu clave API de Google Gemini. Puedes obtenerla en [Google AI Studio](https://aistudio.google.com/app/apikey).
     *   `TELEGRAM_BOT_TOKEN`: El token de tu bot de Telegram. Obténlo de [@BotFather](https://t.me/botfather).
     *   `GMGN_API_KEY`: Tu clave API de GMGN.ai (requiere aprobación basada en volumen de trading).
-    *   `EXCHANGE_ID`: El ID del exchange CEX que deseas usar (ej. `binance`, `bybit`).
+    *   `EXCHANGE_ID`: El ID del exchange CEX que deseas usar (ej. `okx`, `bybit`).
     *   `CEX_API_KEY`, `CEX_SECRET`: Tus credenciales API para el exchange CEX.
     *   `CEX_PASSWORD`: La contraseña o passphrase de la API (necesaria para exchanges como OKX o KuCoin).
     *   `CEX_UID`: Tu ID de usuario en el exchange (si es requerido).

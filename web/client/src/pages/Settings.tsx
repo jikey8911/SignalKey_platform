@@ -73,7 +73,7 @@ export default function Settings() {
     telegramChatId: '',
     telegramChannels: { allow: [] as string[], deny: [] as string[] },
     exchanges: [{
-      exchangeId: 'binance',
+      exchangeId: 'okx',
       apiKey: '',
       secret: '',
       password: '',
@@ -124,7 +124,7 @@ export default function Settings() {
               telegramChatId: config.telegramChatId || '',
               telegramChannels: config.telegramChannels || { allow: [], deny: [] },
               exchanges: config.exchanges?.length ? config.exchanges : [{
-                exchangeId: 'binance',
+                exchangeId: 'okx',
                 apiKey: '',
                 secret: '',
                 password: '',
@@ -196,7 +196,7 @@ export default function Settings() {
     setFormData({
       ...formData,
       exchanges: [...formData.exchanges, {
-        exchangeId: 'binance',
+        exchangeId: 'okx',
         apiKey: '',
         secret: '',
         password: '',

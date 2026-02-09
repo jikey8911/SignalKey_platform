@@ -36,7 +36,7 @@ class BootManager:
             for bot_entity in active_bots:
                 bot_data = bot_entity.to_dict()
                 symbol = bot_data.get('symbol')
-                exchange_id = (bot_data.get('exchange_id') or bot_data.get('exchangeId') or 'binance').lower()
+                exchange_id = (bot_data.get('exchange_id') or bot_data.get('exchangeId') or 'okx').lower()
                 timeframe = bot_data.get('timeframe', '15m')
                 user_id = str(bot_data.get('user_id'))
 

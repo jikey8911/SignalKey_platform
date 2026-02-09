@@ -20,7 +20,7 @@ class CreateBotSchema(BaseModel):
     mode: str = "simulated"
     amount: Optional[float] = None # Optional initial override, otherwise uses default
     status: str = "active"
-    exchange_id: Optional[str] = "binance"
+    exchange_id: Optional[str] = "okx"
 
 @router.post("/")
 async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get_current_user)):
@@ -65,7 +65,7 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
             market_type=data.market_type,
             mode=data.mode,
             status=data.status,
-            exchange_id=data.exchange_id or "binance"
+            exchange_id=data.exchange_id or "okx"
         )
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Validation error: {e}")

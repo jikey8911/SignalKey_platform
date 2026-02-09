@@ -33,7 +33,7 @@ class ExecutionResult(BaseModel):
 # Nuevos esquemas para MongoDB y Configuración Dinámica
 
 class ExchangeConfig(BaseModel):
-    exchangeId: str = "binance"
+    exchangeId: str = "okx"
     apiKey: str
     secret: str
     password: Optional[str] = None
@@ -121,8 +121,8 @@ class BotInstanceSchema(BaseModel):
     mode: str = "simulated" # simulated, real
     side: Optional[str] = None # BUY, SELL
     position: Optional[Dict[str, float]] = Field(default_factory=lambda: {"qty": 0.0, "avg_price": 0.0})
-    exchangeId: str = "binance"
-    exchange_id: Optional[str] = Field(alias="exchangeId", default="binance") # Alias for compatibility
+    exchangeId: str = "okx"
+    exchange_id: Optional[str] = Field(alias="exchangeId", default="okx") # Alias for compatibility
     createdAt: datetime = Field(default_factory=datetime.utcnow)
     
     class Config:
