@@ -1,608 +1,436 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import {
-    Play, Pause, Trash2, Cpu, Activity, TrendingUp, ShieldCheck, Zap,
-    LayoutDashboard, Signal, History, Settings as SettingsIcon, BrainCircuit,
-    Database, Coins, Menu, X, ArrowUpRight, ArrowDownRight, Clock,
-    CheckCircle2, RotateCcw, Search, Bell
-} from 'lucide-react';
-import { useAuth } from '@/_core/hooks/useAuth';
-import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { useSocketContext } from '@/contexts/SocketContext';
-import { useTrading } from '@/contexts/TradingContext';
-import { toast } from 'react-hot-toast';
-import { CONFIG } from '@/config';
-import { TradingViewChart } from '@/components/ui/TradingViewChart';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Separator } from '@/components/ui/separator';
+import React, { useState, useEffect } from 'react';
+import { useSocket } from '../_core/hooks/useSocket';
+import { TradingViewChart } from '../components/ui/TradingViewChart';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Button } from '../components/ui/button';
+import { Badge } from '../components/ui/badge';
+import { ScrollArea } from '../components/ui/scroll-area';
+import { Activity, TrendingUp, Clock, RefreshCw, Zap, Wallet, Plus, Play, Square, Settings } from 'lucide-react';
+import { api } from '../lib/api';
 
-// --- MONITOR HÍBRIDO (Integrado con Socket Tarea 4.3 & 4.5) ---
+// --- Tipos de Datos ---
+interface Bot {
+    id: string;
+    name: string;
+    symbol: string;
+    timeframe: string;
+    status: string;
+    strategy_config?: { name: string };
+    config?: any;
+}
 
-const ExecutionMonitor = ({ bot }: any) => {
-    const { lastMessage } = useSocketContext();
-    const [liveSignals, setLiveSignals] = useState<any[]>([]);
-    const [historySignals, setHistorySignals] = useState<any[]>([]);
-    const [candles, setCandles] = useState<any[]>([]);
-    const [loading, setLoading] = useState(false);
+interface Signal {
+    id?: string;
+    type: 'BUY' | 'SELL';
+    price: number;
+    timestamp: number | string;
+    status?: string;
+}
 
-    // Fetch Signal History (Now comes from WebSocket in bot object)
+interface Position {
+    symbol: string;
+    side: 'LONG' | 'SHORT';
+    entryPrice: number;
+    amount: number;
+    unrealizedPnL?: number;
+}
+
+export default function BotsPage() {
+    const [bots, setBots] = useState<Bot[]>([]);
+    const [selectedBot, setSelectedBot] = useState<Bot | null>(null);
+
+    // Estados de datos en vivo
+    const [chartData, setChartData] = useState<any[]>([]);
+    const [signals, setSignals] = useState<Signal[]>([]);
+    const [positions, setPositions] = useState<Position[]>([]);
+    const [isLoadingChart, setIsLoadingChart] = useState(false);
+
+    // Hook de WebSocket
+    const { lastJsonMessage, sendJsonMessage, readyState } = useSocket();
+
+    // 1. Cargar lista de bots al montar el componente
     useEffect(() => {
-        if (!bot?.id) return;
+        fetchBots();
+    }, []);
 
-        // Set candles and signals from bot object (Socket pre-loaded them)
-        if (bot.candles && bot.candles.length > 0) {
-            setCandles(bot.candles);
-        }
-
-        if (bot.signals && bot.signals.length > 0) {
-            setHistorySignals(bot.signals);
-        }
-
-        setLiveSignals([]); // Reset live signals when changing bot
-    }, [bot?.id, bot?.symbol, bot?.timeframe, bot?.candles, bot?.signals]);
-
-    // Integración real: Añadir señal y velas del socket
-    useEffect(() => {
-        if (!lastMessage) return;
-
-        if (lastMessage.event === 'signal_update' || lastMessage.event === 'live_execution_signal') {
-            const signalData = lastMessage.data;
-            if (signalData?.bot_id === bot?.id) {
-                setLiveSignals(prev => [signalData, ...prev].slice(0, 5));
-                // Also add to history for chart
-                setHistorySignals(prev => [...prev, signalData]);
+    const fetchBots = async () => {
+        try {
+            const response = await api.get('/bots');
+            const data = response.data || [];
+            setBots(data);
+            // Seleccionar el primer bot si no hay selección actual
+            if (data.length > 0 && !selectedBot) {
+                setSelectedBot(data[0]);
             }
-        } else if (lastMessage.event === 'candle_update') {
-            const { symbol, timeframe, exchange, candle } = lastMessage.data;
-            if (symbol === bot?.symbol && timeframe === bot?.timeframe) {
-                setCandles(prev => {
-                    // Si el 'time' es el mismo que la última vela, se actualiza.
-                    // Si es nuevo, se agrega.
-                    if (prev.length === 0) return [candle];
-                    const last = prev[prev.length - 1];
-                    if (last.time === candle.time) {
-                        const updated = [...prev];
-                        updated[updated.length - 1] = candle;
-                        return updated;
-                    } else if (candle.time > last.time) {
-                        return [...prev, candle].slice(-200); // Mantener buffer manejable
+        } catch (error) {
+            console.error("Error cargando bots:", error);
+        }
+    };
+
+    // 2. Manejo de Suscripción (Cada vez que cambia el bot seleccionado)
+    useEffect(() => {
+        if (!selectedBot) return;
+
+        // Resetear estados visuales
+        setIsLoadingChart(true);
+        setChartData([]);
+        setSignals([]);
+        setPositions([]);
+
+        // A) Cargar historial de velas (para que el gráfico no empiece vacío)
+        const fetchHistory = async () => {
+            try {
+                const response = await api.get(`/market/candles`, {
+                    params: {
+                        symbol: selectedBot.symbol,
+                        timeframe: selectedBot.timeframe,
+                        limit: 1000
                     }
-                    return prev;
+                });
+                setChartData(response.data || []);
+            } catch (error) {
+                console.error("Error historial API:", error);
+            } finally {
+                setIsLoadingChart(false);
+            }
+        };
+        fetchHistory();
+
+        // B) Suscribirse al Bot específico vía WebSocket
+        if (readyState === 1) { // 1 = OPEN
+            console.log(`[Bots] Suscribiendo al ID: ${selectedBot.id}`);
+            sendJsonMessage({
+                action: 'SUBSCRIBE_BOT',
+                bot_id: selectedBot.id
+            });
+        }
+
+        // C) Limpieza: Desuscribirse al cambiar de bot o desmontar
+        return () => {
+            if (readyState === 1) {
+                console.log(`[Bots] Desuscribiendo ID: ${selectedBot.id}`);
+                sendJsonMessage({
+                    action: 'UNSUBSCRIBE_BOT',
+                    bot_id: selectedBot.id
                 });
             }
+        };
+    }, [selectedBot?.id, readyState]);
+
+    // 3. Procesador de Mensajes en Tiempo Real
+    useEffect(() => {
+        if (!lastJsonMessage) return;
+
+        const msg = lastJsonMessage as any;
+
+        // Solo procesar mensajes si son relevantes para el contexto actual
+        // (Opcional: verificar msg.bot_id si el backend lo envía en todos los eventos)
+
+        if (msg.type === 'bot_snapshot') {
+            // Snapshot inicial recibido al suscribirse
+            console.log("Snapshot recibido:", msg);
+            if (msg.signals) setSignals(msg.signals);
+            if (msg.positions) setPositions(msg.positions);
+            // Si el backend enviara 'candles' en el snapshot, podríamos actualizar chartData aquí también
         }
-    }, [lastMessage, bot?.id, bot?.symbol, bot?.timeframe]);
+        else if (msg.type === 'signal_new' || msg.type === 'signal_update') {
+            // Nueva señal generada
+            console.log("Nueva señal:", msg.data);
+            setSignals(prev => [...prev, msg.data]);
+        }
+        else if (msg.type === 'position_update') {
+            // Actualización de posiciones
+            setPositions(msg.data);
+        }
+        // Nota: Las actualizaciones de precio (velas) se pasan directamente al gráfico vía props
 
-    const combinedSignals = useMemo(() => {
-        return [...historySignals];
-    }, [historySignals]);
+    }, [lastJsonMessage]);
+
+    // Transformar señales en marcadores para el gráfico
+    const chartMarkers = signals.map(sig => ({
+        time: typeof sig.timestamp === 'string' ? new Date(sig.timestamp).getTime() / 1000 : sig.timestamp,
+        position: sig.type === 'BUY' ? 'belowBar' : 'aboveBar',
+        color: sig.type === 'BUY' ? '#2196F3' : '#E91E63',
+        shape: sig.type === 'BUY' ? 'arrowUp' : 'arrowDown',
+        text: sig.type,
+        size: 2, // Tamaño relativo del marcador
+    }));
+
+    // Manejadores de acciones
+    const handleStartBot = async () => {
+        if (!selectedBot) return;
+        try {
+            await api.post(`/bots/${selectedBot.id}/start`);
+            // Actualizamos la lista localmente o refrescamos
+            setBots(prev => prev.map(b => b.id === selectedBot.id ? { ...b, status: 'running' } : b));
+            setSelectedBot(prev => prev ? { ...prev, status: 'running' } : null);
+        } catch (e) {
+            console.error("Error iniciando bot", e);
+        }
+    };
+
+    const handleStopBot = async () => {
+        if (!selectedBot) return;
+        try {
+            await api.post(`/bots/${selectedBot.id}/stop`);
+            setBots(prev => prev.map(b => b.id === selectedBot.id ? { ...b, status: 'stopped' } : b));
+            setSelectedBot(prev => prev ? { ...prev, status: 'stopped' } : null);
+        } catch (e) {
+            console.error("Error deteniendo bot", e);
+        }
+    };
 
     return (
-        <Card className="overflow-hidden border-blue-500/20">
-            <div className="p-4 border-b border-white/5 bg-slate-900/80 flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                    <div className="h-2 w-2 bg-blue-500 rounded-full animate-pulse" />
-                    <h4 className="text-xs font-bold text-white uppercase tracking-widest flex items-center gap-2 font-mono">
-                        <ShieldCheck className="w-4 h-4 text-blue-500" />
-                        Live Monitor sp4.5: {bot?.symbol || 'GLOBAL'}
-                    </h4>
-                </div>
-                <div className="flex items-center gap-2">
-                    <Badge variant="outline" className="text-[10px]">{bot?.timeframe}</Badge>
-                    <Badge variant="success" className="bg-green-500/10 text-green-400 border-green-500/20">WS Active</Badge>
-                </div>
-            </div>
+        <div className="flex h-[calc(100vh-4rem)] w-full bg-background overflow-hidden">
 
-            <div className="p-6">
-                <div className="mb-6">
-                    {loading ? (
-                        <div className="h-64 flex items-center justify-center bg-slate-950/50 rounded-lg border border-white/5 text-slate-500">
-                            Cargando datos del mercado...
-                        </div>
-                    ) : (
-                        <TradingViewChart
-                            data={candles}
-                            symbol={bot?.symbol}
-                            timeframe={bot?.timeframe}
-                            trades={combinedSignals
-                                .filter(s => {
-                                    const d = (s.decision || s.type || s.side || '').toUpperCase();
-                                    return d.includes('BUY') || d.includes('SELL') || d.includes('LONG') || d.includes('SHORT');
-                                })
-                                .map(s => ({
-                                    time: new Date(s.createdAt || Date.now()).getTime(),
-                                    price: s.price || s.parameters?.entry_price || s.entryPrice,
-                                    side: (s.decision?.toUpperCase().includes('BUY') || s.type === 'LONG' || s.side?.toLowerCase() === 'buy') ? 'BUY' : 'SELL',
-                                    label: s.decision || s.type || s.side
-                                }))}
-                            height={320}
-                        />
-                    )}
-                </div>
-
-                <div className="space-y-2">
-                    <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Flujo de ejecución reciente</p>
-                    {liveSignals.length === 0 && historySignals.length === 0 ? (
-                        <p className="text-xs text-slate-600 italic">Esperando señales del servidor...</p>
-                    ) : (
-                        [...liveSignals, ...historySignals].slice(0, 5).map((sig, idx) => (
-                            <div key={idx} className="flex justify-between items-center text-xs p-2 bg-white/5 rounded-lg border border-white/5 animate-in slide-in-from-left-2">
-                                <span className={(sig.decision?.includes('BUY') || sig.type === 'LONG' || sig.side === 'buy') ? 'text-blue-400' : 'text-amber-400'}>
-                                    ● {sig.decision || sig.type || sig.side}
-                                </span>
-                                <span className="text-white font-mono">${sig.price?.toFixed(6)}</span>
-                                <span className="text-[10px] text-slate-500">
-                                    {new Date(sig.createdAt || Date.now()).toLocaleTimeString()}
-                                </span>
-                            </div>
-                        ))
-                    )}
-                </div>
-            </div>
-        </Card>
-    );
-};
-
-// --- CONFIG MODULE ---
-const BotInfoModule = ({ bot }: { bot: any }) => {
-    return (
-        <div className="space-y-6 animate-in slide-in-from-bottom-2 duration-500">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {/* Status Card */}
-                <Card className="p-6 bg-slate-900 border-white/10">
-                    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 border-b border-white/5 pb-2">Estado General</h3>
-                    <div className="space-y-4">
-                        <div className="flex justify-between items-center">
-                            <span className="text-slate-500 text-sm">Estado:</span>
-                            <Badge variant={bot.status === 'active' ? 'success' : 'secondary'} className="uppercase">
-                                {bot.status === 'active' ? 'ACTIVO' : 'PAUSADO'}
-                            </Badge>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-slate-500 text-sm">Modo:</span>
-                            <Badge variant={bot.mode === 'real' ? 'destructive' : 'outline'} className="uppercase border-blue-500/50">
-                                {bot.mode === 'real' ? 'REAL TRADING' : 'SIMULACIÓN'}
-                            </Badge>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-slate-500 text-sm">Par:</span>
-                            <span className="font-mono text-white text-lg font-bold">{bot.symbol}</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-slate-500 text-sm">Estrategia:</span>
-                            <span className="text-blue-400 font-medium">{bot.strategy_name}</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-slate-500 text-sm">Timeframe:</span>
-                            <span className="text-white font-mono bg-slate-800 px-2 rounded">{bot.timeframe}</span>
-                        </div>
+            {/* --- Sidebar: Lista de Bots --- */}
+            <div className="w-80 border-r bg-card/30 flex flex-col hidden md:flex">
+                <div className="p-4 border-b flex justify-between items-center bg-background/50">
+                    <h2 className="font-semibold flex items-center gap-2 text-sm">
+                        <Activity className="h-4 w-4 text-primary" /> Mis Bots
+                    </h2>
+                    <div className="flex gap-1">
+                        <Button variant="ghost" size="icon" className="h-8 w-8" onClick={fetchBots} title="Refrescar">
+                            <RefreshCw className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button variant="ghost" size="icon" className="h-8 w-8" title="Crear Bot">
+                            <Plus className="h-3.5 w-3.5" />
+                        </Button>
                     </div>
-                </Card>
-
-                {/* Configuration Card */}
-                <Card className="p-6 bg-slate-900 border-white/10">
-                    <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-4 border-b border-white/5 pb-2">Configuración de Riesgo</h3>
-                    <div className="space-y-4">
-                        <div className="flex justify-between items-center">
-                            <span className="text-slate-500 text-sm">Monto Inversión:</span>
-                            <span className="font-mono text-white">${bot.amount?.toFixed(2)}</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-slate-500 text-sm">Take Profits:</span>
-                            <div className="flex gap-1">
-                                {(bot.takeProfits || []).map((tp: any, idx: number) => (
-                                    <Badge key={idx} variant="outline" className={`text-[10px] ${tp.status === 'hit' ? 'bg-green-500/20 text-green-400' : 'text-slate-500'}`}>
-                                        {tp.price?.toFixed(6)}
+                </div>
+                <ScrollArea className="flex-1 p-3">
+                    <div className="space-y-2">
+                        {bots.map((bot) => (
+                            <div
+                                key={bot.id}
+                                onClick={() => setSelectedBot(bot)}
+                                className={`group flex flex-col gap-2 p-3 rounded-xl border cursor-pointer transition-all duration-200 ${selectedBot?.id === bot.id
+                                        ? 'bg-primary/5 border-primary/50 shadow-sm'
+                                        : 'bg-card hover:bg-accent/50 border-border hover:border-primary/20'
+                                    }`}
+                            >
+                                <div className="flex justify-between items-start">
+                                    <span className="font-semibold text-sm truncate pr-2">{bot.name}</span>
+                                    <Badge
+                                        variant={bot.status === 'running' ? 'default' : 'secondary'}
+                                        className={`text-[10px] uppercase tracking-wider px-1.5 h-5 border-0 ${bot.status === 'running' ? 'bg-green-500/15 text-green-600' : 'bg-muted text-muted-foreground'
+                                            }`}
+                                    >
+                                        {bot.status}
                                     </Badge>
-                                ))}
-                                {(!bot.takeProfits || bot.takeProfits.length === 0) && <span className="text-xs text-slate-600">Auto (IA)</span>}
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                                    <div className="flex items-center gap-1.5 bg-muted/30 p-1 rounded">
+                                        <TrendingUp className="h-3 w-3 opacity-70" />
+                                        <span className="font-mono">{bot.symbol}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5 bg-muted/30 p-1 rounded">
+                                        <Clock className="h-3 w-3 opacity-70" />
+                                        <span className="font-mono">{bot.timeframe}</span>
+                                    </div>
+                                </div>
                             </div>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-slate-500 text-sm">Stop Loss:</span>
-                            <span className="font-mono text-red-400">${bot.stopLoss?.toFixed(6) || '---'}</span>
-                        </div>
-                        <div className="flex justify-between items-center">
-                            <span className="text-slate-500 text-sm">Leverage:</span>
-                            <span className="font-mono text-amber-500">x{bot.leverage || 1}</span>
-                        </div>
+                        ))}
                     </div>
-                </Card>
+                </ScrollArea>
             </div>
 
-            {/* Performance Snapshot */}
-            <Card className="p-6 bg-gradient-to-r from-blue-900/10 to-slate-900/50 border-white/5">
-                <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2">Snapshot de Rendimiento</h3>
-                <div className="flex gap-8 items-end">
-                    <div>
-                        <p className="text-xs text-slate-500 mb-1">PnL Actual</p>
-                        <p className={`text-3xl font-black ${bot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                            {bot.pnl > 0 ? '+' : ''}{bot.pnl?.toFixed(2) || '0.00'}%
-                        </p>
+            {/* --- Contenido Principal --- */}
+            <div className="flex-1 flex flex-col min-w-0 bg-background/50">
+
+                {/* Header del Bot Seleccionado */}
+                <header className="h-16 border-b flex items-center px-6 justify-between bg-card/50 backdrop-blur-sm sticky top-0 z-20">
+                    <div className="flex items-center gap-6">
+                        {selectedBot ? (
+                            <div>
+                                <div className="flex items-center gap-3">
+                                    <h1 className="text-xl font-bold tracking-tight">{selectedBot.symbol}</h1>
+                                    <Badge variant="outline" className="font-mono text-xs">{selectedBot.timeframe}</Badge>
+                                    <Badge className="bg-primary/10 text-primary hover:bg-primary/20 border-primary/20">
+                                        {selectedBot.strategy_config?.name || 'Estrategia Manual'}
+                                    </Badge>
+                                </div>
+                                <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
+                                    <span className="flex items-center gap-1">ID: <span className="font-mono opacity-70">{selectedBot.id.substring(0, 8)}...</span></span>
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex items-center gap-2 text-muted-foreground">
+                                <Activity className="h-5 w-5" />
+                                <span className="font-medium">Selecciona un bot para ver detalles</span>
+                            </div>
+                        )}
                     </div>
-                    <div>
-                        <p className="text-xs text-slate-500 mb-1">Precio Entrada</p>
-                        <p className="text-xl font-mono text-white">${bot.entryPrice?.toFixed(6)}</p>
+
+                    <div className="flex items-center gap-3">
+                        {selectedBot && (
+                            <>
+                                {selectedBot.status === 'running' ? (
+                                    <Button size="sm" variant="destructive" className="gap-2 h-8" onClick={handleStopBot}>
+                                        <Square className="h-3 w-3 fill-current" /> Detener
+                                    </Button>
+                                ) : (
+                                    <Button size="sm" className="gap-2 h-8 bg-green-600 hover:bg-green-700" onClick={handleStartBot}>
+                                        <Play className="h-3 w-3 fill-current" /> Iniciar
+                                    </Button>
+                                )}
+                                <Button variant="outline" size="icon" className="h-8 w-8">
+                                    <Settings className="h-4 w-4" />
+                                </Button>
+                            </>
+                        )}
+                        <div className="h-6 w-px bg-border mx-2" />
+                        <div className="flex items-center gap-2 text-xs font-medium">
+                            <div className={`h-2.5 w-2.5 rounded-full shadow-sm transition-colors ${readyState === 1 ? 'bg-green-500 shadow-green-500/50' : 'bg-red-500'}`} />
+                            <span className={readyState === 1 ? 'text-green-600' : 'text-red-500'}>
+                                {readyState === 1 ? 'En Línea' : 'Desconectado'}
+                            </span>
+                        </div>
                     </div>
-                    <div>
-                        <p className="text-xs text-slate-500 mb-1">Precio Actual</p>
-                        <p className="text-xl font-mono text-white">${bot.currentPrice?.toFixed(6) || '---'}</p>
-                    </div>
-                </div>
-            </Card>
+                </header>
+
+                {/* Área de Trabajo */}
+                <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
+                    {selectedBot ? (
+                        <>
+                            {/* Gráfico Principal */}
+                            <Card className="flex flex-col shadow-sm border-muted transition-all hover:shadow-md min-h-[500px]">
+                                <CardHeader className="py-3 px-5 border-b bg-muted/5 flex flex-row justify-between items-center">
+                                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                        <Activity className="h-4 w-4 text-muted-foreground" /> Análisis en Tiempo Real
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="flex-1 p-0 relative min-h-[450px]">
+                                    {isLoadingChart && (
+                                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-background/80 z-10 backdrop-blur-[1px]">
+                                            <RefreshCw className="h-8 w-8 text-primary animate-spin mb-2" />
+                                            <span className="text-sm font-medium text-muted-foreground">Sincronizando mercado...</span>
+                                        </div>
+                                    )}
+                                    <TradingViewChart
+                                        data={chartData}
+                                        symbol={selectedBot.symbol}
+                                        interval={selectedBot.timeframe}
+                                        socketData={lastJsonMessage} // Pasa actualizaciones de velas en tiempo real
+                                        markers={chartMarkers}       // Pinta las señales de compra/venta
+                                    />
+                                </CardContent>
+                            </Card>
+
+                            {/* Panel Inferior: Métricas y Registros */}
+                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+                                {/* Posiciones Activas */}
+                                <Card className="lg:col-span-1 shadow-sm">
+                                    <CardHeader className="py-3 px-5 border-b bg-muted/5">
+                                        <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                            <Wallet className="h-4 w-4 text-blue-500" /> Posiciones Abiertas
+                                        </CardTitle>
+                                    </CardHeader>
+                                    <CardContent className="p-0">
+                                        <ScrollArea className="h-[250px]">
+                                            {positions.length > 0 ? positions.map((pos, idx) => (
+                                                <div key={idx} className="p-4 border-b last:border-0 flex flex-col gap-2 hover:bg-muted/5">
+                                                    <div className="flex justify-between items-center">
+                                                        <Badge variant="outline" className={`${pos.side === 'LONG'
+                                                                ? 'bg-green-500/10 text-green-600 border-green-200'
+                                                                : 'bg-red-500/10 text-red-600 border-red-200'
+                                                            }`}>
+                                                            {pos.side}
+                                                        </Badge>
+                                                        <span className="font-mono font-medium">{pos.amount} {selectedBot.symbol.split('/')[0]}</span>
+                                                    </div>
+                                                    <div className="flex justify-between text-sm">
+                                                        <span className="text-muted-foreground">Entrada:</span>
+                                                        <span className="font-mono">{pos.entryPrice}</span>
+                                                    </div>
+                                                    {pos.unrealizedPnL !== undefined && (
+                                                        <div className="flex justify-between text-sm">
+                                                            <span className="text-muted-foreground">PnL (No realizado):</span>
+                                                            <span className={`font-mono font-bold ${pos.unrealizedPnL >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                                                {pos.unrealizedPnL > 0 ? '+' : ''}{pos.unrealizedPnL}%
+                                                            </span>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            )) : (
+                                                <div className="h-full flex flex-col items-center justify-center text-muted-foreground opacity-60 p-6">
+                                                    <Wallet className="h-10 w-10 mb-2 stroke-1" />
+                                                    <span className="text-sm">Sin posiciones activas</span>
+                                                </div>
+                                            )}
+                                        </ScrollArea>
+                                    </CardContent>
+                                </Card>
+
+                                {/* Historial de Señales */}
+                                <Card className="lg:col-span-2 shadow-sm">
+                                    <CardHeader className="py-3 px-5 border-b bg-muted/5">
+                                        <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                            <Zap className="h-4 w-4 text-amber-500" /> Registro de Señales
+                                        </CardTitle>
+                                    </CardHeader>
+                                    <CardContent className="p-0">
+                                        <ScrollArea className="h-[250px]">
+                                            <div className="min-w-full inline-block align-middle">
+                                                {signals.length > 0 ? (
+                                                    <div className="divide-y">
+                                                        {signals.slice().reverse().map((sig, idx) => (
+                                                            <div key={idx} className="flex items-center justify-between p-3 hover:bg-muted/5 transition-colors">
+                                                                <div className="flex items-center gap-3">
+                                                                    <div className={`w-1 h-8 rounded-full ${sig.type === 'BUY' ? 'bg-green-500' : 'bg-red-500'}`} />
+                                                                    <div className="flex flex-col">
+                                                                        <span className="font-medium text-sm flex items-center gap-2">
+                                                                            {sig.type === 'BUY' ? 'Compra Detectada' : 'Venta Detectada'}
+                                                                        </span>
+                                                                        <span className="text-xs text-muted-foreground font-mono">
+                                                                            {new Date(Number(sig.timestamp)).toLocaleString()}
+                                                                        </span>
+                                                                    </div>
+                                                                </div>
+                                                                <div className="flex items-center gap-4 text-sm">
+                                                                    <div className="flex flex-col items-end">
+                                                                        <span className="text-muted-foreground text-xs">Precio Señal</span>
+                                                                        <span className="font-mono font-medium">{sig.price}</span>
+                                                                    </div>
+                                                                    <Badge variant={sig.type === 'BUY' ? 'default' : 'destructive'} className="w-20 justify-center">
+                                                                        {sig.type}
+                                                                    </Badge>
+                                                                </div>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                ) : (
+                                                    <div className="h-full flex flex-col items-center justify-center text-muted-foreground opacity-60 p-6 min-h-[200px]">
+                                                        <Zap className="h-10 w-10 mb-2 stroke-1" />
+                                                        <span className="text-sm">Esperando nuevas señales...</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </ScrollArea>
+                                    </CardContent>
+                                </Card>
+                            </div>
+                        </>
+                    ) : (
+                        <div className="flex flex-col items-center justify-center h-full text-muted-foreground opacity-50 space-y-4">
+                            <div className="relative">
+                                <Activity className="h-24 w-24 stroke-1 opacity-50" />
+                                <div className="absolute -bottom-2 -right-2 bg-primary/20 p-2 rounded-full">
+                                    <Settings className="h-6 w-6 text-primary" />
+                                </div>
+                            </div>
+                            <div className="text-center">
+                                <h3 className="text-lg font-medium text-foreground">Selecciona un Bot</h3>
+                                <p className="text-sm max-w-xs mx-auto mt-1">
+                                    Elige un bot del menú lateral para ver su análisis en tiempo real, señales y gestión de posiciones.
+                                </p>
+                            </div>
+                        </div>
+                    )}
+                </main>
+            </div>
         </div>
     );
 }
-
-const SignalHistoryModule = ({ signals: initialSignals }: { signals: any[] }) => {
-    const signals = useMemo(() => {
-        return [...initialSignals].sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    }, [initialSignals]);
-
-    return (
-        <Card className="overflow-hidden bg-slate-900 border-white/10 animate-in fade-in slide-in-from-bottom-4">
-            <div className="max-h-[500px] overflow-y-auto custom-scrollbar">
-                <table className="w-full text-left text-sm text-slate-400">
-                    <thead className="bg-slate-950 text-xs uppercase font-medium text-slate-500 sticky top-0 z-10">
-                        <tr>
-                            <th className="px-6 py-4 bg-slate-950">Fecha</th>
-                            <th className="px-6 py-4 bg-slate-950">Señal</th>
-                            <th className="px-6 py-4 bg-slate-950">Precio</th>
-                            <th className="px-6 py-4 bg-slate-950">Confianza</th>
-                            <th className="px-6 py-4 bg-slate-950 text-right">Estado</th>
-                        </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/5">
-                        {signals.length === 0 ? (
-                            <tr>
-                                <td colSpan={5} className="px-6 py-10 text-center text-slate-600 italic">
-                                    No hay señales registradas para este bot.
-                                </td>
-                            </tr>
-                        ) : (
-                            signals.map((signal) => (
-                                <tr key={signal.id} className="hover:bg-white/5 transition-colors">
-                                    <td className="px-6 py-4 font-mono text-xs text-slate-500">
-                                        {new Date(signal.createdAt).toLocaleString()}
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        <Badge variant="outline" className={`${signal.decision?.toLowerCase().includes('buy') ? 'text-green-400 border-green-500/30 bg-green-500/10' : signal.decision?.toLowerCase().includes('sell') ? 'text-red-400 border-red-500/30 bg-red-500/10' : 'text-slate-400 border-slate-500/30'}`}>
-                                            {signal.decision}
-                                        </Badge>
-                                    </td>
-                                    <td className="px-6 py-4 font-mono text-white">
-                                        {signal.price ? `$${signal.price.toFixed(6)}` : '---'}
-                                    </td>
-                                    <td className="px-6 py-4">
-                                        {signal.confidence ? (
-                                            <div className="flex items-center gap-2">
-                                                <div className="h-1.5 w-16 bg-slate-800 rounded-full overflow-hidden">
-                                                    <div className="h-full bg-blue-500" style={{ width: `${signal.confidence * 100}%` }} />
-                                                </div>
-                                                <span className="text-xs">{Math.round(signal.confidence * 100)}%</span>
-                                            </div>
-                                        ) : '-'}
-                                    </td>
-                                    <td className="px-6 py-4 text-right">
-                                        <span className="text-xs text-slate-500 lowercase">{signal.status || 'processed'}</span>
-                                    </td>
-                                </tr>
-                            ))
-                        )}
-                    </tbody>
-                </table>
-            </div>
-        </Card>
-    );
-};
-
-
-const GlobalSignalTicker = () => {
-    const { lastMessage } = useSocketContext();
-    const [globalSignals, setGlobalSignals] = useState<any[]>([]);
-
-    useEffect(() => {
-        if (lastMessage && (lastMessage.event === 'signal_update' || lastMessage.event === 'live_execution_signal')) {
-            // Add to global list regardless of selected bot
-            setGlobalSignals(prev => {
-                const newSig = lastMessage.data;
-                // Avoid duplicates if unique ID exists
-                if (prev.find(s => s.id === newSig.id && s.timestamp === newSig.timestamp)) return prev;
-                return [newSig, ...prev].slice(0, 8); // Keep last 8
-            });
-        }
-    }, [lastMessage]);
-
-    if (globalSignals.length === 0) return (
-        <Card className="mb-6 p-4 bg-slate-900/50 border-dashed border-white/10 flex items-center justify-center gap-2 text-slate-500 text-xs">
-            <Activity className="w-4 h-4" />
-            Esperando señales de la red neuronal...
-        </Card>
-    );
-
-    return (
-        <Card className="mb-6 bg-slate-950 border-blue-500/20 overflow-hidden relative">
-            <div className="absolute top-0 left-0 w-1 h-full bg-blue-500 animate-pulse" />
-            <div className="p-3 flex items-center gap-4 overflow-x-auto custom-scrollbar">
-                <div className="flex items-center gap-2 pr-4 border-r border-white/10 shrink-0">
-                    <BrainCircuit className="w-5 h-5 text-blue-500" />
-                    <div className="flex flex-col">
-                        <span className="text-[10px] uppercase font-bold text-white leading-none">Global</span>
-                        <span className="text-[10px] text-blue-400 font-mono tracking-wider">LIVE FEED</span>
-                    </div>
-                </div>
-
-                <div className="flex gap-3">
-                    {globalSignals.map((sig, idx) => (
-                        <div key={idx} className="flex flex-col bg-white/5 rounded px-3 py-1.5 min-w-[100px] border border-white/5 animate-in slide-in-from-right-4 fade-in duration-500">
-                            <div className="flex justify-between items-center mb-1">
-                                <span className="text-[10px] font-bold text-slate-300">{sig.symbol || 'UNK'}</span>
-                                <span className="text-[9px] text-slate-500">{new Date(sig.createdAt || Date.now()).toLocaleTimeString()}</span>
-                            </div>
-                            <div className="flex justify-between items-center">
-                                <Badge variant="outline" className={`h-4 text-[9px] px-1 ${(sig.decision?.includes('BUY') || sig.type === 'LONG') ? 'text-green-400 border-green-500/30' : 'text-red-400 border-red-500/30'}`}>
-                                    {sig.decision || sig.type}
-                                </Badge>
-                                <span className="text-[10px] font-mono text-white">${sig.price?.toFixed(6)}</span>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            </div>
-        </Card>
-    );
-};
-
-// --- PÁGINA DE BOTS ---
-
-const BotsPage = () => {
-    const { user } = useAuth();
-    const { setSelectedBot } = useTrading();
-    const [bots, setBots] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [selectedId, setSelectedId] = useState<string | null>(null);
-    const { lastMessage, sendMessage } = useSocketContext();
-
-    const fetchBots = (showLoading = true) => {
-        if (!user?.openId) return;
-        if (showLoading) setLoading(true);
-        sendMessage({ action: 'get_bots' });
-    };
-
-    useEffect(() => {
-        if (user?.openId) {
-            fetchBots(true);
-            const interval = setInterval(() => fetchBots(false), 5000);
-            return () => clearInterval(interval);
-        }
-    }, [user?.openId]);
-
-    const activeBot = useMemo(() => bots.find(b => b.id === selectedId), [bots, selectedId]);
-
-    // Sync with Context & Fetch Details on change
-    useEffect(() => {
-        setSelectedBot(activeBot || null);
-        if (selectedId) {
-            sendMessage({ action: 'get_bot_details', bot_id: selectedId });
-        }
-    }, [selectedId, setSelectedBot, sendMessage]);
-
-    // Also update on active_bot_update socket event if available
-    useEffect(() => {
-        if (!lastMessage) return;
-
-        if (lastMessage.event === 'all_bots_list') {
-            setBots(prev => {
-                const newData = lastMessage.data;
-                return newData.map((newBot: any) => {
-                    const existingBot = prev.find(b => b.id === newBot.id);
-                    // Preservar datos enriquecidos si ya existen para evitar "limpieza" al refrescar lista
-                    return {
-                        ...newBot,
-                        candles: existingBot?.candles || newBot.candles,
-                        signals: existingBot?.signals || newBot.signals,
-                        active_position: existingBot?.active_position || newBot.active_position,
-                        currentPrice: existingBot?.currentPrice || newBot.currentPrice
-                    };
-                });
-            });
-            setLoading(false);
-            if (lastMessage.data.length > 0 && !selectedId) {
-                setSelectedId(lastMessage.data[0].id);
-            }
-        } else if (lastMessage.event === 'bot_details') {
-            const detailedBot = lastMessage.data;
-            setBots(prev => prev.map(b => b.id === detailedBot.id ? { ...b, ...detailedBot } : b));
-        } else if (lastMessage.event === 'price_update') {
-            const { bot_id, price } = lastMessage.data;
-            setBots(prev => {
-                const targetBot = prev.find(b => b.id === bot_id);
-                // Evitar actualizaciones innecesarias si el precio no cambió (como pidió el usuario)
-                if (targetBot && targetBot.currentPrice === price) return prev;
-
-                return prev.map(b => {
-                    if (b.id === bot_id) {
-                        // Recalcular PnL si hay una posición activa
-                        let newPnl = b.pnl;
-                        if (b.active_position && b.active_position.avgEntryPrice > 0) {
-                            const avg = b.active_position.avgEntryPrice;
-                            const side = b.active_position.side;
-                            if (side === 'BUY') {
-                                newPnl = ((price - avg) / avg) * 100;
-                            } else if (side === 'SELL') {
-                                newPnl = ((avg - price) / avg) * 100;
-                            }
-                        }
-                        return { ...b, currentPrice: price, pnl: newPnl };
-                    }
-                    return b;
-                });
-            });
-        } else if (lastMessage.event === 'bot_update') {
-            setBots(prev => prev.map(b => b.id === lastMessage.data.id ? { ...b, ...lastMessage.data } : b));
-        } else if (lastMessage.event === 'bot_created') {
-            setBots(prev => [lastMessage.data, ...prev]);
-            toast.success(`Bot ${lastMessage.data.name} creado exitosamente`);
-        } else if (lastMessage.event === 'bot_deleted') {
-            setBots(prev => prev.filter(b => b.id !== lastMessage.data.id));
-            toast.success(`Bot eliminado`);
-        } else if (lastMessage.event === 'operation_update') {
-            const op = lastMessage.data;
-            toast(`Operación: ${op.type} en ${op.price}`, {
-                icon: 'ℹ️',
-                // @ts-ignore
-                description: `${op.symbol} - ${op.reason}`
-            });
-        }
-    }, [lastMessage]);
-
-    const handleDelete = async (e: React.MouseEvent, id: string) => {
-        e.stopPropagation();
-        if (!confirm("Eliminar bot?")) return;
-        try {
-            const res = await fetch(`${CONFIG.API_BASE_URL}/bots/${id}`, { method: 'DELETE' });
-            if (res.ok) {
-                toast.success("Bot eliminado");
-                fetchBots();
-                if (selectedId === id) setSelectedId(null);
-            }
-        } catch (e) {
-            toast.error("Error eliminando bot");
-        }
-    }
-
-    return (
-        <div className="p-8 space-y-8 animate-in fade-in duration-500">
-            <div className="flex justify-between items-center">
-                <h1 className="text-4xl font-black text-white tracking-tighter uppercase italic">Control de Bots <span className="text-blue-500">sp4</span></h1>
-                <div className="flex gap-4">
-                    <Button variant="outline" onClick={() => fetchBots(true)} disabled={loading}>
-                        <RotateCcw className={`w-4 h-4 mr-2 ${loading ? 'animate-spin' : ''}`} /> Refresh
-                    </Button>
-                    <Badge variant="success" className="py-2 px-4 shadow-lg shadow-green-500/10 h-10 flex items-center">
-                        <Zap className="w-3 h-3 mr-2 fill-current" /> AutoTrade Sync
-                    </Badge>
-                </div>
-            </div>
-
-            {loading && bots.length === 0 ? (
-                <div className="text-center py-20 text-slate-500">Cargando Bots...</div>
-            ) : (
-                <div className="grid grid-cols-1 xl:grid-cols-4 gap-8">
-                    {/* Lista de Bots */}
-                    <div className="xl:col-span-1 space-y-4 max-h-[80vh] overflow-y-auto pr-2 custom-scrollbar">
-                        {bots.length === 0 && <div className="text-slate-500 italic p-4">No hay bots activos. Crea uno en el Strategy Lab.</div>}
-
-                        {bots.map((bot) => (
-                            <Card
-                                key={bot.id}
-                                className={`p-5 cursor-pointer border-l-4 transition-all hover:bg-white/5 group relative ${selectedId === bot.id ? 'border-l-blue-500 bg-blue-500/5' : 'border-l-transparent opacity-70 hover:opacity-100'}`}
-                                onClick={() => setSelectedId(bot.id)}
-                            >
-                                <div className="flex justify-between items-start mb-3">
-                                    <div className="flex gap-2">
-                                        {/* Badge de Modo */}
-                                        {bot.mode === 'real' ? (
-                                            <Badge className="bg-green-500/20 text-green-400 border-green-500/50 text-[10px]">Real Live</Badge>
-                                        ) : (
-                                            <Badge variant="secondary" className="text-[10px] bg-slate-700 text-slate-300">Simulación</Badge>
-                                        )}
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <div className={`h-2 w-2 rounded-full ${bot.status === 'active' ? 'bg-green-500 animate-pulse' : 'bg-slate-600'}`} />
-                                        <button onClick={(e) => handleDelete(e, bot.id)} className="opacity-0 group-hover:opacity-100 transition-opacity hover:text-red-500">
-                                            <Trash2 className="w-4 h-4" />
-                                        </button>
-                                    </div>
-                                </div>
-                                <h4 className="text-lg font-bold text-white leading-tight mb-1">{bot.name}</h4>
-                                <div className="flex justify-between items-end">
-                                    <p className="text-[10px] font-mono text-slate-400">{bot.symbol} | {bot.strategy_name}</p>
-                                    {bot.pnl !== undefined && bot.pnl !== 0 && (
-                                        <div className="flex items-center gap-1">
-                                            <div className={`p-1 rounded-full ${bot.pnl >= 0 ? 'bg-green-500/10' : 'bg-red-500/10'}`}>
-                                                <TrendingUp className={`w-3 h-3 ${bot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`} />
-                                            </div>
-                                            <span className={`text-[10px] font-bold ${bot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                                                {bot.pnl > 0 ? '+' : ''}{bot.pnl.toFixed(6)}%
-                                            </span>
-                                        </div>
-                                    )}
-                                </div>
-                            </Card>
-                        ))}
-                    </div>
-
-                    {/* Panel Principal con TABS */}
-                    <div className="xl:col-span-3 space-y-6">
-                        <GlobalSignalTicker />
-                        {activeBot ? (
-                            <Tabs defaultValue="info" className="w-full">
-                                <TabsList className="bg-slate-900/50 border border-white/5">
-                                    <TabsTrigger value="info">Configuración</TabsTrigger>
-                                    <TabsTrigger value="monitor">Live Monitor</TabsTrigger>
-                                    <TabsTrigger value="history">Historial de Señales</TabsTrigger>
-                                </TabsList>
-
-                                <div className="mt-6">
-                                    <TabsContent value="info">
-                                        <BotInfoModule bot={activeBot} />
-                                    </TabsContent>
-
-                                    <TabsContent value="monitor">
-                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
-                                            <Card className="p-4 bg-gradient-to-br from-blue-500/5 to-transparent border-blue-500/10">
-                                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Profit Actual</p>
-                                                <h3 className={`text-2xl font-black ${activeBot.pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                                                    {activeBot.pnl > 0 ? '+' : ''}{activeBot.pnl?.toFixed(6) || '0.000000'}%
-                                                </h3>
-                                            </Card>
-                                            <Card className="p-4 bg-slate-900/50 border-white/5">
-                                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Precio Actual</p>
-                                                <h3 className="text-xl font-mono text-white">
-                                                    ${activeBot.currentPrice === undefined || activeBot.currentPrice === 0
-                                                        ? (activeBot.active_position?.avgEntryPrice?.toFixed(6) || '---')
-                                                        : activeBot.currentPrice.toFixed(6)}
-                                                </h3>
-                                            </Card>
-                                            <Card className="p-4 bg-slate-900/50 border-white/5">
-                                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Precio Entrada (Promediado)</p>
-                                                <h3 className="text-xl font-mono text-blue-400">
-                                                    ${(activeBot.active_position?.avgEntryPrice || activeBot.entryPrice)?.toFixed(6) || '---'}
-                                                </h3>
-                                            </Card>
-                                            <Card className="p-4 bg-slate-900/50 border-white/5">
-                                                <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">Cantidad ({activeBot.symbol?.split('/')[0]})</p>
-                                                <h3 className="text-xl font-mono text-amber-500">
-                                                    {activeBot.active_position?.currentQty?.toFixed(6) || '0.000000'}
-                                                </h3>
-                                            </Card>
-                                        </div>
-                                        <div className="mb-6 opacity-40 hover:opacity-100 transition-opacity">
-                                            <p className="text-[10px] font-mono text-slate-500">Bot ID: {activeBot.id}</p>
-                                        </div>
-                                        <ExecutionMonitor bot={activeBot} />
-                                    </TabsContent>
-
-                                    <TabsContent value="history">
-                                        <SignalHistoryModule signals={activeBot.signals || []} />
-                                    </TabsContent>
-                                </div>
-                            </Tabs>
-                        ) : (
-                            <div className="flex h-full items-center justify-center text-slate-600 bg-slate-900/20 rounded-xl border border-white/5">
-                                <div className="text-center">
-                                    <Activity className="w-12 h-12 mx-auto mb-4 text-slate-700 opacity-50" />
-                                    <p>Selecciona un bot del panel izquierdo</p>
-                                </div>
-                            </div>
-                        )}
-                    </div>
-                </div>
-            )}
-        </div>
-    );
-};
-
-export default BotsPage;

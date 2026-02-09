@@ -1,231 +1,117 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from api.src.adapters.driven.notifications.socket_service import socket_service
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
+from typing import Dict, Any
 import logging
 import json
-import asyncio
-from bson import ObjectId
-from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
-from api.src.adapters.driven.persistence.mongodb import db
+
+# Imports de tus servicios (Ajusta las rutas según tu estructura real)
+from api.src.adapters.driven.notifications.socket_service import SocketService
+from api.src.domain.ports.output.BotRepository import IBotRepository
+from api.src.domain.ports.output.signal_repository import ISignalRepository
+# from api.src.domain.ports.output.trade_repository import TradeRepository 
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(tags=["websocket"])
+router = APIRouter()
 
-repo = MongoBotRepository()
+# Instancias globales o inyectadas
+socket_manager = SocketService() # Tu manejador de conexiones
+# Necesitarás una forma de obtener estos repositorios dentro del socket, 
+# a menudo usando un contenedor de inyección de dependencias o instanciándolos aquí si son simples.
+# bot_repo = BotRepository(...) 
 
-def _serialize_mongo(obj):
-    """
-    Recursively convert ObjectId to string to make data JSON serializable.
-    """
-    if isinstance(obj, list):
-        return [_serialize_mongo(i) for i in obj]
-    if isinstance(obj, dict):
-        return {k: _serialize_mongo(v) for k, v in obj.items()}
-    if isinstance(obj, ObjectId):
-        return str(obj)
-    return obj
-
-async def _run_batch_backtest(user_id: str, params: dict):
-    """
-    Ejecuta el backtest en lote para todos los símbolos activos.
-    """
-    exchange_id = params.get("exchangeId", "okx").lower()
-    market_type = params.get("marketType", "spot").upper()
-    timeframe = params.get("timeframe", "1h")
-    days = int(params.get("days", 7))
-    initial_balance = float(params.get("initialBalance", 10000))
-    trade_amount = float(params.get("tradeAmount", 1000)) if params.get("tradeAmount") else None
-
-    # Importación local para evitar dependencias circulares
-    from api.main import backtest_service, cex_service
-
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await socket_manager.connect(websocket)
     try:
-        # 1. Obtener símbolos activos del exchange
-        # Usamos cex_service para cargar mercados si es necesario
-        # TODO: CEXService debería tener un método para listar símbolos activos sin necesidad de una instancia específica si son públicos
-        # Por ahora, usamos una instancia genérica o reusamos la existente
-
-        # Primero intentamos obtener la lista de símbolos usando el CCXT adapter
-        try:
-             # Usamos el nuevo método get_symbols del adaptador
-             # market_type viene en UPPER (SPOT, FUTURES) pero CcxtAdapter espera lower (spot, swap)
-             ccxt_market_type = market_type.lower()
-             if ccxt_market_type == 'futures':
-                 ccxt_market_type = 'swap' # CCXT suele usar 'swap' para perpetuos
-             
-             active_symbols = await backtest_service.exchange.get_symbols(exchange_id, ccxt_market_type)
-             
-             total_symbols = len(active_symbols)
-             logger.info(f"Found {total_symbols} active symbols for {exchange_id} {ccxt_market_type}")
-
-             if total_symbols == 0:
-                 await socket_service.emit_to_user(user_id, "backtest_error", {"message": f"No active symbols found for {exchange_id} {market_type}"})
-                 return
-
-             await socket_service.emit_to_user(user_id, "backtest_start", {"total": total_symbols, "symbols": active_symbols})
-
-             for i, symbol in enumerate(active_symbols):
-                 try:
-                     # Reportar progreso
-                     await socket_service.emit_to_user(user_id, "backtest_progress", {
-                         "current": i + 1,
-                         "total": total_symbols,
-                         "symbol": symbol,
-                         "percent": round(((i+1)/total_symbols)*100, 1)
-                     })
-
-                     # Ejecutar Backtest para este símbolo
-                     # Esto prueba TODAS las estrategias y devuelve la mejor
-                     result = await backtest_service.run_backtest(
-                         symbol=symbol,
-                         days=days,
-                         timeframe=timeframe,
-                         market_type=market_type,
-                         user_id=user_id,
-                         exchange_id=exchange_id,
-                         initial_balance=initial_balance,
-                         trade_amount=trade_amount
-                     )
-
-                     # Emitir resultado individual
-                     best_strat = result.get("strategy_name", "Unknown")
-                     pnl = result.get("profit_pct", 0)
-                     win_rate = result.get("win_rate", 0)
-                     trades = result.get("total_trades", 0)
-
-                     await socket_service.emit_to_user(user_id, "backtest_result", {
-                         "symbol": symbol,
-                         "strategy": best_strat,
-                         "pnl": pnl,
-                         "win_rate": win_rate,
-                         "trades": trades,
-                         "details": _serialize_mongo(result) # Full details just in case
-                     })
-
-                 except Exception as e:
-                     logger.error(f"Error backtesting {symbol}: {e}")
-                     # Emitir error para este símbolo pero continuar
-                     await socket_service.emit_to_user(user_id, "backtest_symbol_error", {
-                         "symbol": symbol,
-                         "error": str(e)
-                     })
-
-             await socket_service.emit_to_user(user_id, "backtest_complete", {"message": "Batch backtest finished"})
-
-        except Exception as e:
-             logger.error(f"Error loading markets or running batch: {e}")
-             await socket_service.emit_to_user(user_id, "backtest_error", {"message": str(e)})
-
-    except Exception as e:
-        logger.error(f"Critical error in batch backtest task: {e}")
-        await socket_service.emit_to_user(user_id, "backtest_error", {"message": f"Critical error: {str(e)}"})
-
-
-@router.websocket("/ws/{user_id}")
-async def websocket_endpoint(websocket: WebSocket, user_id: str):
-    logger.info(f"New WebSocket connection request from user: {user_id}")
-    try:
-        await socket_service.connect(websocket, user_id)
         while True:
-            # Mantener conexión viva y escuchar mensajes
-            data_text = await websocket.receive_text()
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            action = message.get("action")
+            
+            if action == "SUBSCRIBE_BOT":
+                bot_id = message.get("bot_id")
+                if bot_id:
+                    await handle_bot_subscription(websocket, bot_id)
+            
+            elif action == "UNSUBSCRIBE_BOT":
+                bot_id = message.get("bot_id")
+                if bot_id:
+                    await handle_bot_unsubscription(websocket, bot_id)
 
-            try:
-                # Intentar parsear como JSON
-                message = json.loads(data_text)
+            elif action == "PING":
+                await websocket.send_json({"type": "PONG"})
 
-                if isinstance(message, dict):
-                    action = message.get("action")
-
-                    if action == "get_bots":
-                        # Recuperar bots del usuario (Lightweight list)
-                        bots = await repo.get_all_by_user(user_id)
-                        result = []
-
-                        for bot in bots:
-                            b_dict = bot.to_dict()
-                            bot_id_obj = ObjectId(b_dict.get("id"))
-                            
-                            # Posición activa mínima info
-                            active_position = await db.db["positions"].find_one({
-                                "botId": bot_id_obj,
-                                "status": "OPEN"
-                            })
-                            if active_position:
-                                b_dict["pnl"] = active_position.get("roi", 0.0)
-                            else:
-                                b_dict["pnl"] = 0.0
-                            
-                            result.append(b_dict)
-
-                        # Enviar lista aplanada
-                        serialized_result = _serialize_mongo(result)
-                        await socket_service.emit_to_user(user_id, "all_bots_list", serialized_result)
-
-                    elif action == "get_bot_details":
-                        bot_id = str(message.get("bot_id"))
-                        bot_doc = await repo.collection.find_one({"_id": ObjectId(bot_id)})
-                        
-                        if bot_doc:
-                            b_dict = _serialize_mongo(bot_doc)
-                            bot_id_obj = ObjectId(bot_id)
-                            
-                            from api.src.application.services.buffer_service import DataBufferService
-                            buffer_service = DataBufferService()
-
-                            # 1. Posición Completa
-                            active_position = await db.db["positions"].find_one({
-                                "botId": bot_id_obj,
-                                "status": "OPEN"
-                            })
-                            if active_position:
-                                b_dict["active_position"] = _serialize_mongo(active_position)
-                                b_dict["pnl"] = active_position.get("roi", 0.0)
-                                b_dict["entryPrice"] = active_position.get("avgEntryPrice", 0.0)
-                                b_dict["currentQty"] = active_position.get("currentQty", 0.0)
-                            
-                            # 2. Velas
-                            symbol = b_dict.get("symbol")
-                            timeframe = b_dict.get("timeframe", "1h")
-                            exchange_id = b_dict.get("exchangeId", "binance")
-                            
-                            candles_df = buffer_service.get_latest_data(exchange_id, symbol, timeframe)
-                            candles = []
-                            if candles_df is not None and not candles_df.empty:
-                                for ts, row in candles_df.tail(100).iterrows():
-                                    candles.append({
-                                        "time": int(ts.timestamp()),
-                                        "open": row["open"],
-                                        "high": row["high"],
-                                        "low": row["low"],
-                                        "close": row["close"],
-                                        "volume": row["volume"]
-                                    })
-                            b_dict["candles"] = candles
-
-                            # 3. Señales
-                            from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
-                            signal_repo = MongoDBSignalRepository(db.db)
-                            signals = await signal_repo.find_by_bot_id(bot_id)
-                            b_dict["signals"] = [s.to_dict() for s in signals[:20]]
-
-                            await socket_service.emit_to_user(user_id, "bot_details", b_dict)
-
-                    elif action == "run_batch_backtest":
-                        # Lanzar backtest masivo en background
-                        params = message.get("data", {})
-                        logger.info(f"Starting batch backtest for {user_id} with params: {params}")
-                        # Usar asyncio.create_task para no bloquear el loop del WS
-                        asyncio.create_task(_run_batch_backtest(user_id, params))
-
-
-            except json.JSONDecodeError:
-                # Mantener compatibilidad con mensajes de texto simple como "ping"
-                if data_text == "ping":
-                    await websocket.send_text("pong")
-                
     except WebSocketDisconnect:
-        socket_service.disconnect(websocket, user_id)
+        socket_manager.disconnect(websocket)
     except Exception as e:
-        logger.error(f"WebSocket error for user {user_id}: {e}")
-        socket_service.disconnect(websocket, user_id)
+        logger.error(f"Error en websocket: {e}")
+        try:
+            await websocket.close()
+        except:
+            pass
+
+async def handle_bot_subscription(websocket: WebSocket, bot_id: str):
+    """
+    1. Obtiene datos completos del bot.
+    2. Envía SNAPSHOT al cliente.
+    3. Suscribe al cliente a los topics de actualizaciones.
+    """
+    logger.info(f"Cliente suscribiéndose al bot {bot_id}")
+    
+    # A) OBTENER DATOS (Simulado - conecta con tus repositorios reales)
+    # bot = await bot_repo.get_by_id(bot_id)
+    # signals = await signal_repo.get_recent_by_bot(bot_id, limit=50)
+    # positions = await trade_repo.get_open_positions(bot_id)
+    
+    # --- Datos Mock simulando la DB del Bot ---
+    # Recuperamos la configuración vital: Exchange, Symbol, Timeframe
+    bot_mock_config = {
+        "id": bot_id,
+        "name": "Bot Trading V1",
+        "symbol": "BTC/USDT",       # Símbolo
+        "timeframe": "1m",          # Temporalidad
+        "exchange_id": "binance",   # Exchange específico (IMPORTANTE)
+        "status": "running",
+        "strategy": "RSI_Reversion_V2"
+    }
+
+    snapshot_data = {
+        "type": "bot_snapshot",
+        "bot_id": bot_id,
+        "config": bot_mock_config,
+        "positions": [
+            # Ejemplo: Consultar DB de posiciones abiertas
+            {"symbol": "BTC/USDT", "side": "LONG", "entryPrice": 64500, "amount": 0.01, "unrealizedPnL": 1.5}
+        ],
+        "signals": [
+            # Ejemplo: Consultar DB de señales históricas
+            {"type": "BUY", "price": 64000, "timestamp": 1709900000000, "status": "EXECUTED"},
+            {"type": "SELL", "price": 65000, "timestamp": 1709910000000, "status": "EXECUTED"}
+        ]
+    }
+    
+    # B) ENVIAR SNAPSHOT
+    await websocket.send_json(snapshot_data)
+    
+    # C) GESTIONAR SUSCRIPCIÓN EN EL SOCKET MANAGER
+    # 1. Suscribir a eventos del bot (señales, alertas)
+    await socket_manager.subscribe_to_topic(websocket, topic=f"bot:{bot_id}")
+    
+    # 2. Suscribir a datos de mercado (Velas en tiempo real)
+    # Usamos exchange_id + symbol + timeframe para identificar el stream único
+    exchange_id = bot_mock_config.get("exchange_id")
+    symbol = bot_mock_config.get("symbol")
+    timeframe = bot_mock_config.get("timeframe")
+
+    if exchange_id and symbol and timeframe:
+        # Formato sugerido: candles:exchange:symbol:timeframe
+        market_topic = f"candles:{exchange_id}:{symbol}:{timeframe}"
+        logger.info(f"Suscribiendo socket a stream de mercado: {market_topic}")
+        await socket_manager.subscribe_to_topic(websocket, topic=market_topic)
+
+async def handle_bot_unsubscription(websocket: WebSocket, bot_id: str):
+    logger.info(f"Cliente desuscribiéndose del bot {bot_id}")
+    await socket_manager.unsubscribe_from_topic(websocket, topic=f"bot:{bot_id}")
+    # Nota: La desuscripción de velas puede ser compleja si el usuario tiene múltiples bots 
+    # viendo el mismo mercado. Idealmente, el SocketService maneja contadores de referencia.
