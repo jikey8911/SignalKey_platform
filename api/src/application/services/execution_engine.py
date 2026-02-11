@@ -2,7 +2,6 @@ import logging
 import asyncio
 from datetime import datetime
 from bson import ObjectId
-from api.src.application.services.simulation_service import SimulationService
 from api.src.domain.strategies.base import BaseStrategy
 from api.src.adapters.driven.persistence.mongodb import update_virtual_balance
 
@@ -14,7 +13,7 @@ class ExecutionEngine:
     def __init__(self, db_adapter, socket_service=None, exchange_adapter=None):
         self.db = db_adapter
         self.socket = socket_service 
-        self.simulator = SimulationService(db_adapter)
+        # self.simulator removed as it was obsolete
 
         # Inyección de dependencia
         if exchange_adapter:
@@ -168,19 +167,6 @@ class ExecutionEngine:
         
         # 1. Movimiento de Caja (Virtual)
         # Si abrimos posición, restamos USDT del saldo disponible
-
-        # NOTE: update_virtual_balance helper usually takes user_id as string/openId to find user.
-        # But we refactored to pass ObjectId to engine.
-        # We need to make sure update_virtual_balance supports ObjectId or convert it.
-        # Looking at mongodb.py, update_virtual_balance does: user = await db.users.find_one({"openId": user_id})
-        # This is bad. We need to update mongodb.py or resolve openId here.
-        # But wait, update_virtual_balance is imported.
-        # Let's resolve this by modifying mongodb.py in the next step or fix it here by passing string if needed
-        # BUT the goal is to standardise on ObjectId.
-
-        # Let's assume update_virtual_balance will be updated to handle ObjectId lookups properly
-        # OR we pass ObjectId string and update mongodb.py to check _id too.
-        # For now, let's pass str(user_id) and ensure mongodb.py handles it.
 
         if action in ["OPEN", "DCA"]:
             await update_virtual_balance(str(user_id), market_type, quote_currency, -amount, is_relative=True)
