@@ -18,7 +18,7 @@ Global Config in appconfigs: demoMode=True, isAutoEnabled=None
   Name: spot_arbitrage - ZEUS/USDT (simulated) | Symbol: ZEUS/USDT | Mode: simulated | Status: active | ID: 6988f92d77872804df20bb8c
   Name: rsi_reversion - ZEUS/USDT (simulated) | Symbol: ZEUS/USDT | Mode: simulated | Status: active | ID: 698990edfaf7dc80d3dcccf5
 
-[trades] Found 14 items:
+[trades] Found 32 items:
   Symbol: ZEUS/USDT | Mode: simulated | Status: None | Side: SELL | ID: 69898f1af2e0e92b7e5475b8
   Symbol: ZEUS/USDT | Mode: simulated | Status: None | Side: SELL | ID: 69898f58f2e0e92b7e5475b9
   Symbol: ZEUS/USDT | Mode: simulated | Status: None | Side: SELL | ID: 6989900efaf7dc80d3dcccf3
@@ -33,6 +33,24 @@ Global Config in appconfigs: demoMode=True, isAutoEnabled=None
   Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 69899518333d111911f7e656
   Symbol: AAVE/USDT | Mode: simulated | Status: None | Side: BUY | ID: 69899519333d111911f7e657
   Symbol: API3/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989951a333d111911f7e658
+  Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989ab8dff24f8a99da0f36e
+  Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989acf96d32332e538e4fd5
+  Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989b0b98cf1ea4b0427c239
+  Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989b6d86fac1174a0a53a22
+  Symbol: AAVE/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989b6d86fac1174a0a53a24
+  Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989b70cd584961d67a1ab44
+  Symbol: AAVE/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989b70cd584961d67a1ab46
+  Symbol: AAVE/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989b732d584961d67a1ab48
+  Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989bf8c83a125ec033c72e2
+  Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989c1a80f1c1fee9231995c
+  Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989c20cad3978c215015925
+  Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989c26457d6ba48e7225d02
+  Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989c32f5728bc2d2add3300
+  Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989c35c64360bb5da0eec27
+  Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989c3c83a74ae6104acdb30
+  Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989c4290b4784e58c575351
+  Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989c46123bb6a3320cd5521
+  Symbol: BTC/USDT | Mode: simulated | Status: None | Side: BUY | ID: 6989c49dd26c60c0453e24ee
 
 [telegram_trades] Found 0 items:
 

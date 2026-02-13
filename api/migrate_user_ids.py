@@ -4,13 +4,23 @@ import logging
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+import sys
+sys.path.append(os.getcwd())
+
+from api.config import Config
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("MigrationScript")
 
-# MongoDB URI from environment or default
-MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://mongodb:27017")
-DB_NAME = os.getenv("MONGODB_DB_NAME", "signalkey_db")
+# MongoDB URI from Config (loads .env correctly)
+MONGODB_URI = Config.MONGODB_URI
+DB_NAME = Config.MONGODB_DB_NAME
 
 async def migrate_collection(db, collection_name, user_id_field="userId"):
     """
@@ -104,6 +114,11 @@ async def main():
     # 2. trades (uses 'userId' in some places, check schema/repo)
     # trade_router: db.trades.find({"userId": user_id}) -> uses 'userId'
     await migrate_collection(db, "trades", "userId")
+    await migrate_collection(db, "trades", "user_id") # Check both fields
+
+    # 2b. db.trades (rogue collection found in debug_user_state)
+    await migrate_collection(db, "db.trades", "userId")
+    await migrate_collection(db, "db.trades", "user_id")
 
     # 3. positions (uses 'userId' based on ExecutionEngine)
     # ExecutionEngine: "userId": user_id
