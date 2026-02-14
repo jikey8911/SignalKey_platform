@@ -28,3 +28,14 @@ class ITelegramTradeRepository(ABC):
     async def has_active_trade(self, user_id: str, symbol: str) -> bool:
         """Verifica si ya existe una operación abierta o esperando para ese par."""
         pass
+
+class ITelegramPositionRepository(ABC):
+    @abstractmethod
+    async def upsert_position(self, trade_id: str, position_data: Dict[str, Any]):
+        """Crea o actualiza la posición en vivo (Live)."""
+        pass
+
+    @abstractmethod
+    async def close_position(self, trade_id: str):
+        """Marca la posición como cerrada o la elimina de la tabla de posiciones activas."""
+        pass

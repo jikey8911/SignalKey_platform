@@ -34,8 +34,11 @@ class ConfigUpdate(BaseModel):
     telegramPhoneNumber: Optional[str] = None
     telegramBotToken: Optional[str] = None
     telegramChatId: Optional[str] = None
+    telegramChannels: Optional[Dict[str, List[str]]] = None
     investmentLimits: Optional[Dict[str, float]] = None
     virtualBalances: Optional[Dict[str, float]] = None
+    # Exchanges (CEX) config (full replace on save)
+    exchanges: Optional[List[ExchangeConfig]] = None
 
 
 
@@ -69,13 +72,20 @@ async def get_config(
         
         # Get or create config
         config = await config_repo.get_or_create_config(user_id)
-        
+
+        # Prefer exchanges from user_exchanges (with fallback to app_configs)
+        try:
+            config["exchanges"] = await config_repo.get_exchanges_prefer_user_exchanges(user_id)
+        except Exception:
+            # keep whatever is in config
+            pass
+
         # Remove sensitive fields from response
         if config and '_id' in config:
             config['_id'] = str(config['_id'])
         if config and 'userId' in config:
             config['userId'] = str(config['userId'])
-        
+
         return {"config": config}
     
     except HTTPException:
@@ -94,27 +104,50 @@ async def update_config(
     try:
         user_id = current_user["openId"]
         
-        # Filter out None values
-        update_dict = {k: v for k, v in updates.dict().items() if v is not None}
-        
+        # Filter out None values AND empty strings (avoid wiping secrets accidentally)
+        update_dict = {}
+        for k, v in updates.dict().items():
+            if v is None:
+                continue
+            if isinstance(v, str) and v.strip() == "":
+                continue
+            update_dict[k] = v
+
         if not update_dict:
             raise HTTPException(status_code=400, detail="No updates provided")
         
-        # Update config
+        # Exchanges: UI sends full array, store it in user_exchanges (primary) + app_configs (copy)
+        exchanges_payload = update_dict.pop("exchanges", None)
+        if exchanges_payload is not None:
+            try:
+                # pydantic models -> dicts
+                exchanges_list = [e.dict() if hasattr(e, "dict") else dict(e) for e in exchanges_payload]
+                await config_repo.set_exchanges(user_id, exchanges_list)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to update exchanges: {str(e)}")
+
+        # Update remaining config
         success = await config_repo.update_config(user_id, update_dict)
-        
+
         if not success:
             # Try to create config if it doesn't exist
             await config_repo.create_config(user_id, update_dict)
         
         # Get updated config
         config = await config_repo.get_config(user_id)
-        
+
+        # Prefer exchanges from user_exchanges (with fallback to app_configs)
+        if config is not None:
+            try:
+                config["exchanges"] = await config_repo.get_exchanges_prefer_user_exchanges(user_id)
+            except Exception:
+                pass
+
         if config and '_id' in config:
             config['_id'] = str(config['_id'])
         if config and 'userId' in config:
             config['userId'] = str(config['userId'])
-        
+
         return {"success": True, "config": config}
     
     except HTTPException:
@@ -132,9 +165,7 @@ async def get_exchanges(
     try:
         user_id = current_user["openId"]
         
-        config = await config_repo.get_or_create_config(user_id)
-        exchanges = config.get('exchanges', [])
-        
+        exchanges = await config_repo.get_exchanges_prefer_user_exchanges(user_id)
         return {"exchanges": exchanges}
     
     except HTTPException:
@@ -153,10 +184,10 @@ async def add_exchange(
     try:
         user_id = current_user["openId"]
         
-        # Ensure config exists
+        # Ensure config exists (secondary copy lives there)
         await config_repo.get_or_create_config(user_id)
-        
-        # Add exchange
+
+        # Add exchange (writes primary user_exchanges + keeps copy in app_configs)
         success = await config_repo.add_exchange(user_id, exchange.dict())
         
         if not success:

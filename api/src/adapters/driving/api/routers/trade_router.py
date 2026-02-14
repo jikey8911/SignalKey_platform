@@ -52,19 +52,28 @@ async def get_user_balances(current_user: dict = Depends(get_current_user)):
     
     if demo_mode:
         # Balance Virtual
-        virtual = config.get("virtualBalances", {})
+        # Primero intentar leer de la colección dedicada virtual_balances
+        virtual_cex = await db.virtual_balances.find_one({"userId": user_id_obj, "marketType": "cex", "asset": "USDT"})
+        virtual_dex = await db.virtual_balances.find_one({"userId": user_id_obj, "marketType": "dex", "asset": "SOL"})
+        
+        # Fallback a configuración inicial si no existen registros
+        config_virtual = config.get("virtualBalances", {})
+        
+        cex_amount = virtual_cex["amount"] if virtual_cex else config_virtual.get("USDT", config_virtual.get("cex", 1000.0))
+        dex_amount = virtual_dex["amount"] if virtual_dex else config_virtual.get("SOL", config_virtual.get("dex", 1.0))
+
         res = []
         # CEX Balance (USDT)
         res.append({
             "asset": "USDT",
-            "amount": virtual.get("USDT", virtual.get("cex", 1000.0)),
+            "amount": cex_amount,
             "marketType": "CEX",
             "isDemo": True
         })
         # DEX Balance (SOL)
         res.append({
             "asset": "SOL",
-            "amount": virtual.get("SOL", virtual.get("dex", 1.0)),
+            "amount": dex_amount,
             "marketType": "DEX",
             "isDemo": True
         })

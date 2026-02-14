@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import List, Dict, Any
 import logging
-from api.src.domain.entities.signal import Signal, SignalStatus, SignalAnalysis, Decision, Direction
+from api.src.domain.entities.signal import Signal, SignalStatus, SignalAnalysis, Decision, Direction, RawSignal
 from api.src.domain.ports.output.signal_repository import ISignalRepository
 from api.src.domain.ports.output.ai_port import IAIPort
 from api.src.domain.ports.output.notification_port import INotificationPort

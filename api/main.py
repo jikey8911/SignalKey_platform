@@ -157,6 +157,7 @@ from api.src.application.services.telegram_trade_service import TelegramTradeSer
 telegram_trade_service = TelegramTradeService(
     cex_service=cex_service, 
     trade_repository=container.telegram_trade_repository,
+    position_repository=container.telegram_position_repository,
     stream_service=market_stream_service,
     alert_manager=price_alert_manager
 )

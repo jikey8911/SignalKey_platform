@@ -154,7 +154,6 @@ export default function Dashboard() {
   const handleToggleTelegram = async (checked: boolean) => {
     if (!user?.openId) return;
 
-    // Update local state immediately for responsiveness
     setConnectionStatus((prev: any) => ({ ...prev, botTelegramActivate: checked }));
 
     try {
@@ -163,13 +162,11 @@ export default function Dashboard() {
       });
       if (!res.ok) throw new Error('Failed to update config');
 
-      // Refresh full status just in case
       const statusRes = await fetch(`${CONFIG.API_BASE_URL}/status/${user.openId}`);
       const data = await statusRes.json();
       setConnectionStatus(data);
     } catch (e) {
       console.error("Error updating telegram status:", e);
-      // Revert on error
       setConnectionStatus((prev: any) => ({ ...prev, botTelegramActivate: !checked }));
     }
   };
@@ -183,7 +180,6 @@ export default function Dashboard() {
     if (event === 'status_update') {
       setConnectionStatus(data);
     } else if (event === 'balance_update') {
-      // Update balances cache
       queryClient.setQueryData(['balances', user?.openId], (oldData: any[] | undefined) => {
         if (!oldData) return [data];
         const exists = oldData.find(b => b.marketType === data.marketType && b.asset === data.asset);
@@ -193,8 +189,7 @@ export default function Dashboard() {
           return [...oldData, data];
         }
       });
-    } else if (event === 'bot_update') {
-      // Update trades cache
+    } else if (event === 'bot_update' || event === 'telegram_trade_update') {
       queryClient.setQueryData(['trades', user?.openId], (oldData: any[] | undefined) => {
         if (!oldData) return [data];
         const exists = oldData.find(t => t.id === data.id);
@@ -217,8 +212,8 @@ export default function Dashboard() {
       };
     }
 
-    const winningTrades = trades.filter((t: any) => t.pnl && t.pnl > 0).length;
-    const totalPnL = trades.reduce((sum: number, t: any) => sum + (t.pnl || 0), 0);
+    const winningTrades = trades.filter((t: any) => (t.pnl || t.position?.pnl) > 0).length;
+    const totalPnL = trades.reduce((sum: number, t: any) => sum + (t.pnl || t.position?.pnl || 0), 0);
     const avgPnL = totalPnL / trades.length;
 
     return {
@@ -230,7 +225,7 @@ export default function Dashboard() {
   }, [trades]);
 
   const StatCard = ({ icon: Icon, label, value, change }: any) => (
-    <Card className="p-6">
+    <Card className="p-6 bg-slate-900 border-slate-800">
       <div className="flex items-start justify-between">
         <div>
           <p className="text-sm text-slate-400 mb-2 font-medium uppercase tracking-wider">{label}</p>
@@ -261,7 +256,7 @@ export default function Dashboard() {
           <p className="text-slate-400 text-sm mt-1">Resumen general de operaciones y estado del sistema.</p>
         </div>
         {demoMode && (
-          <Badge variant="destructive" className="py-2 px-4 shadow-lg shadow-red-500/10 animate-pulse">
+          <Badge variant="destructive" className="py-2 px-4 shadow-lg shadow-red-500/10 animate-pulse bg-red-900/50 text-red-200 border-red-800">
             🧪 MODO DEMO ACTIVO
           </Badge>
         )}
@@ -290,7 +285,7 @@ export default function Dashboard() {
               <Switch
                 checked={connectionStatus.botTelegramActivate || false}
                 onCheckedChange={handleToggleTelegram}
-                className="scale-75"
+                className="scale-75 data-[state=checked]:bg-green-500"
               />
               <span className="text-xs font-bold text-slate-300">Telegram Signals</span>
             </div>
@@ -302,7 +297,7 @@ export default function Dashboard() {
       <MetaSelectorWidget user={user} />
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <Card className="p-6 border-l-4 border-l-blue-500">
+        <Card className="p-6 border-l-4 border-l-blue-500 bg-slate-900 border-slate-800">
           <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Balance CEX</h3>
           {balancesLoading ? (
             <div className="h-12 bg-slate-800/50 animate-pulse rounded" />
@@ -327,7 +322,7 @@ export default function Dashboard() {
           )}
         </Card>
 
-        <Card className="p-6 border-l-4 border-l-pink-500">
+        <Card className="p-6 border-l-4 border-l-pink-500 bg-slate-900 border-slate-800">
           <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-4">Balance DEX</h3>
           {balancesLoading ? (
             <div className="h-12 bg-slate-800/50 animate-pulse rounded" />
@@ -366,10 +361,10 @@ export default function Dashboard() {
         />
       </div>
 
-      <Card className="p-6">
+      <Card className="p-6 bg-slate-900 border-slate-800">
         <div className="flex items-center justify-between mb-6">
           <h3 className="text-sm font-bold text-white uppercase tracking-widest">Actividad Reciente</h3>
-          <Badge variant="outline">Live Feed</Badge>
+          <Badge variant="outline" className="text-slate-400 border-slate-700">Live Feed</Badge>
         </div>
 
         {tradesLoading ? (
@@ -382,31 +377,31 @@ export default function Dashboard() {
           <div className="space-y-2">
             {trades.slice(0, 5).map((trade: any) => (
               <div
-                key={trade.id}
+                key={trade.id || trade._id}
                 className="flex items-center justify-between p-3 bg-slate-800/30 rounded-lg border border-white/5 hover:bg-slate-800/50 transition-colors"
               >
                 <div className="flex items-center gap-3">
-                  <div className={`p-2 rounded-full ${trade.side === 'buy' ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}`}>
-                    {trade.side === 'buy' ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
+                  <div className={`p-2 rounded-full ${(trade.side === 'LONG' || trade.side === 'BUY') ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}`}>
+                    {(trade.side === 'LONG' || trade.side === 'BUY') ? <TrendingUp size={16} /> : <TrendingDown size={16} />}
                   </div>
                   <div>
                     <p className="font-bold text-white text-sm">{trade.symbol}</p>
                     <p className="text-[10px] text-slate-500 uppercase font-mono">
-                      {trade.marketType}
+                      {trade.marketType || "SPOT"}
                     </p>
                   </div>
                 </div>
                 <div className="text-right">
                   <p
-                    className={`font-black text-sm ${trade.pnl && trade.pnl > 0
+                    className={`font-black text-sm ${(trade.pnl || trade.position?.pnl) > 0
                       ? 'text-green-400'
-                      : 'text-red-400'
+                      : (trade.pnl || trade.position?.pnl) < 0 ? 'text-red-400' : 'text-slate-400'
                       }`}
                   >
-                    {trade.pnl?.toFixed(2) || '0.00'}{trade.pnl !== undefined ? '%' : ''}
+                    {((trade.pnl || trade.position?.pnl) ?? 0).toFixed(2)}%
                   </p>
                   <p className="text-[10px] text-slate-600">
-                    {new Date(trade.createdAt).toLocaleTimeString()}
+                    {trade.createdAt ? new Date(trade.createdAt).toLocaleString() : "-"}
                   </p>
                 </div>
               </div>
@@ -422,4 +417,3 @@ export default function Dashboard() {
     </div>
   );
 }
-

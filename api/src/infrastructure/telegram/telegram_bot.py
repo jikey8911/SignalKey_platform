@@ -130,10 +130,14 @@ class TelegramUserBot:
                     }
                     
                     # Guardar y emitir para visualización en tiempo real
-                    # await db.telegram_logs.insert_one(log_entry) # Deshabilitado por solicitud del usuario
+                    await db.telegram_logs.insert_one(log_entry)
 
                     # REQUISITO: Mostrar todos los mensajes por consola (API logs)
-                    print(f"\n[TELEGRAM {self.user_id}] From: {chat_title} ({chat_id}) | Content: {display_text}\n")
+                    try:
+                        print(f"\n[TELEGRAM {self.user_id}] From: {chat_title} ({chat_id}) | Content: {display_text.encode('utf-8', 'replace').decode('utf-8')}\n")
+                    except Exception:
+                        # Fallback seguro si la consola no soporta caracteres
+                        print(f"\n[TELEGRAM {self.user_id}] From: {chat_id} | Content: (Content hidden due to encoding error)\n")
 
                     from api.src.adapters.driven.notifications.socket_service import socket_service
                     await socket_service.emit_to_user(self.user_id, "telegram_log", log_entry)

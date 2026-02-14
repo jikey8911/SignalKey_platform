@@ -20,7 +20,14 @@ class ConfigRepository:
     """
     Repositorio para gestionar configuraciones dinámicas de la aplicación.
     Tarea 6.1: Estructura Real de Configuración.
+
+    Notes (2026-02):
+    - Exchanges config is being migrated out of `app_configs.exchanges[]` into a new
+      collection `user_exchanges` (1 document per user with an `exchanges[]` array).
+    - During migration we keep a copy in `app_configs` for safety, but reads should
+      prefer `user_exchanges` with fallback to `app_configs`.
     """
+
     def __init__(self, db_adapter=None):
         # Usamos el db_adapter si se proporciona, de lo contrario usamos la instancia global
         # IMPORTANTE: db_global ya es la base de datos (Database object), no hay que usar .db
@@ -127,58 +134,167 @@ class ConfigRepository:
         )
         return result.modified_count > 0 or result.matched_count > 0
 
-    async def add_exchange(self, user_id: str, exchange_dict: Dict[str, Any]) -> bool:
-        """Agrega una configuración de exchange al usuario."""
+    async def _ensure_user_exchanges_doc(self, user_oid: ObjectId) -> Dict[str, Any]:
+        """Ensure a `user_exchanges` document exists for this user.
+
+        Keeps a copy of exchanges inside `app_configs` for backward compatibility,
+        but the primary store is `user_exchanges`.
+        """
+        doc = await self.db["user_exchanges"].find_one({"userId": user_oid})
+        if doc:
+            return doc
+
+        # Lazy migration: copy from app_configs if present
+        config = await self.db["app_configs"].find_one({"userId": user_oid})
+        exchanges = (config or {}).get("exchanges", [])
+
+        new_doc = {
+            "userId": user_oid,
+            "exchanges": exchanges,
+            "createdAt": datetime.utcnow(),
+            "updatedAt": datetime.utcnow(),
+        }
+        await self.db["user_exchanges"].insert_one(new_doc)
+        return new_doc
+
+    async def get_exchanges_prefer_user_exchanges(self, user_id: str) -> List[Dict[str, Any]]:
+        """Return exchanges for user preferring `user_exchanges`, falling back to `app_configs`."""
+        user_oid = await self._get_user_oid(user_id)
+        if not user_oid:
+            return []
+
+        doc = await self.db["user_exchanges"].find_one({"userId": user_oid})
+        if doc and "exchanges" in doc:
+            return stringify_object_ids(doc.get("exchanges", []))
+
+        # Fallback to app_configs
+        config = await self.db["app_configs"].find_one({"userId": user_oid})
+        return stringify_object_ids((config or {}).get("exchanges", []))
+
+    async def _normalize_exchange_doc(self, exchange_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """Ensure exchange subdocument has a stable ObjectId `_id` (for UI edits/removes)."""
+        ex = dict(exchange_dict)
+        if "_id" not in ex:
+            ex["_id"] = ObjectId()
+        elif isinstance(ex["_id"], str) and len(ex["_id"]) == 24:
+            try:
+                ex["_id"] = ObjectId(ex["_id"])
+            except Exception:
+                pass
+        return ex
+
+    async def set_exchanges(self, user_id: str, exchanges: List[Dict[str, Any]]) -> bool:
+        """Replace exchanges array for user.
+
+        Writes to `user_exchanges` (primary) and keeps a copy in `app_configs` (secondary).
+        This supports the UI behavior of saving the whole config in one call.
+        """
         user_oid = await self._get_user_oid(user_id)
         if not user_oid:
             return False
-            
-        if "_id" not in exchange_dict:
-            exchange_dict["_id"] = ObjectId()
-        elif isinstance(exchange_dict["_id"], str) and len(exchange_dict["_id"]) == 24:
-            try:
-                exchange_dict["_id"] = ObjectId(exchange_dict["_id"])
-            except Exception:
-                pass
 
-        result = await self.db["app_configs"].update_one(
+        await self._ensure_user_exchanges_doc(user_oid)
+
+        normalized = [await self._normalize_exchange_doc(e) for e in exchanges]
+
+        res_primary = await self.db["user_exchanges"].update_one(
+            {"userId": user_oid},
+            {"$set": {"exchanges": normalized, "updatedAt": datetime.utcnow()}},
+        )
+        res_secondary = await self.db["app_configs"].update_one(
+            {"userId": user_oid},
+            {"$set": {"exchanges": normalized, "updatedAt": datetime.utcnow()}},
+        )
+        return (res_primary.matched_count > 0) and (res_secondary.matched_count > 0)
+
+    async def add_exchange(self, user_id: str, exchange_dict: Dict[str, Any]) -> bool:
+        """Agrega una configuración de exchange al usuario.
+
+        Writes to `user_exchanges` (primary) and also keeps a copy in `app_configs` (secondary).
+        """
+        user_oid = await self._get_user_oid(user_id)
+        if not user_oid:
+            return False
+
+        exchange_dict = await self._normalize_exchange_doc(exchange_dict)
+
+        # Ensure user_exchanges exists (lazy migration)
+        await self._ensure_user_exchanges_doc(user_oid)
+
+        # Push into user_exchanges
+        res_primary = await self.db["user_exchanges"].update_one(
             {"userId": user_oid},
             {
                 "$push": {"exchanges": exchange_dict},
-                "$set": {"updatedAt": datetime.utcnow()}
-            }
+                "$set": {"updatedAt": datetime.utcnow()},
+            },
         )
-        return result.modified_count > 0
+
+        # Keep copy in app_configs
+        res_secondary = await self.db["app_configs"].update_one(
+            {"userId": user_oid},
+            {
+                "$push": {"exchanges": exchange_dict},
+                "$set": {"updatedAt": datetime.utcnow()},
+            },
+        )
+
+        return (res_primary.modified_count > 0 or res_primary.matched_count > 0) and (
+            res_secondary.modified_count > 0 or res_secondary.matched_count > 0
+        )
 
     async def remove_exchange(self, user_id: str, exchange_id: str) -> bool:
-        """Elimina un exchange de la configuración del usuario."""
+        """Elimina un exchange de la configuración del usuario.
+
+        Removes from `user_exchanges` (primary) and also from `app_configs` (secondary).
+        Supports removing by exchangeId or by subdocument _id.
+        """
         user_oid = await self._get_user_oid(user_id)
         if not user_oid:
             return False
 
-        result = await self.db["app_configs"].update_one(
+        # Ensure user_exchanges exists (lazy migration)
+        await self._ensure_user_exchanges_doc(user_oid)
+
+        # First try by exchangeId
+        res_primary = await self.db["user_exchanges"].update_one(
             {"userId": user_oid},
             {
                 "$pull": {"exchanges": {"exchangeId": exchange_id}},
-                "$set": {"updatedAt": datetime.utcnow()}
-            }
+                "$set": {"updatedAt": datetime.utcnow()},
+            },
+        )
+        res_secondary = await self.db["app_configs"].update_one(
+            {"userId": user_oid},
+            {
+                "$pull": {"exchanges": {"exchangeId": exchange_id}},
+                "$set": {"updatedAt": datetime.utcnow()},
+            },
         )
 
-        if result.modified_count == 0:
+        # If nothing removed, try by subdocument ObjectId
+        if res_primary.modified_count == 0 and res_secondary.modified_count == 0:
             try:
                 if len(exchange_id) == 24:
                     oid = ObjectId(exchange_id)
-                    result = await self.db["app_configs"].update_one(
+                    res_primary = await self.db["user_exchanges"].update_one(
                         {"userId": user_oid},
                         {
                             "$pull": {"exchanges": {"_id": oid}},
-                            "$set": {"updatedAt": datetime.utcnow()}
-                        }
+                            "$set": {"updatedAt": datetime.utcnow()},
+                        },
+                    )
+                    res_secondary = await self.db["app_configs"].update_one(
+                        {"userId": user_oid},
+                        {
+                            "$pull": {"exchanges": {"_id": oid}},
+                            "$set": {"updatedAt": datetime.utcnow()},
+                        },
                     )
             except Exception:
                 pass
 
-        return result.modified_count > 0
+        return (res_primary.modified_count > 0) or (res_secondary.modified_count > 0)
 
     async def get_telegram_creds(self, user_id: str):
         """Busca credenciales de Telegram en la colección app_configs."""

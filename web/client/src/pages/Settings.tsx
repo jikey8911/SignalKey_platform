@@ -2,13 +2,14 @@ import React, { useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 
-import { Eye, EyeOff, Save, Plus, Trash2, User, Bot, Megaphone, Users } from 'lucide-react';
+import { Save, Plus, Trash2, User, Bot, Megaphone, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { CCXT_EXCHANGES } from '@/constants/exchanges';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { TelegramConfig } from '@/components/TelegramConfig';
 import { CONFIG } from '@/config';
 import { fetchConfig, updateConfig } from '@/lib/api';
+import { InputField } from '@/components/InputField';
 
 export default function Settings() {
   const { user: authUser } = useAuth({ redirectOnUnauthenticated: true });
@@ -218,30 +219,7 @@ export default function Settings() {
     setFormData({ ...formData, exchanges: newExchanges });
   };
 
-  const InputField = ({ label, value, onChange, type = 'text', placeholder }: any) => (
-    <div className="flex-1">
-      <label className="block text-xs font-semibold text-foreground mb-1">
-        {label}
-      </label>
-      <div className="relative">
-        <input
-          type={showSecrets && type === 'password' ? 'text' : type}
-          placeholder={placeholder}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-        />
-        {type === 'password' && (
-          <button
-            onClick={() => setShowSecrets(!showSecrets)}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-          >
-            {showSecrets ? <EyeOff size={14} /> : <Eye size={14} />}
-          </button>
-        )}
-      </div>
-    </div>
-  );
+  // InputField moved to @/components/InputField to avoid remounting (focus loss)
 
   return (
     <div className="p-6 space-y-6 max-w-5xl pb-10">
@@ -289,6 +267,8 @@ export default function Settings() {
                   onChange={(v: string) => setFormData({ ...formData, geminiApiKey: v })}
                   type="password"
                   placeholder="AIzaSy..."
+                  showSecrets={showSecrets}
+                  setShowSecrets={setShowSecrets}
                 />
                 <InputField
                   label="OpenAI API Key"

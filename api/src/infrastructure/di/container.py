@@ -1,5 +1,5 @@
 from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
-from api.src.adapters.driven.persistence.telegram_repository_adapter import MongoTelegramSignalRepository, MongoTelegramTradeRepository
+from api.src.adapters.driven.persistence.telegram_repository_adapter import MongoTelegramSignalRepository, MongoTelegramTradeRepository, MongoTelegramPositionRepository
 from api.src.infrastructure.adapters.ai.ai_adapter import AIAdapter
 from api.src.adapters.driven.exchange.cex_adapter import CEXAdapter
 from api.src.application.use_cases.process_signal import ProcessSignalUseCase
@@ -21,6 +21,7 @@ class Container:
         self.signal_repository = MongoDBSignalRepository(db)
         self.telegram_signal_repository = MongoTelegramSignalRepository()
         self.telegram_trade_repository = MongoTelegramTradeRepository()
+        self.telegram_position_repository = MongoTelegramPositionRepository()
         
         self.ai_service_internal = AIService()
         self.ai_adapter = AIAdapter(self.ai_service_internal)

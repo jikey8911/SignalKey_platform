@@ -20,8 +20,14 @@ def get_database() -> AsyncIOMotorDatabase:
         return _db
     
     if _client is None:
-        logger.info(f"MongoDB: Connecting to {Config.MONGODB_URI[:50]}...")
-        _client = AsyncIOMotorClient(Config.MONGODB_URI)
+        uri = Config.MONGODB_URI
+        if "localhost" in uri:
+            logger.error("CRITICAL: Attempting to connect to LOCALHOST MongoDB! Expected Atlas.")
+            # raise Exception("Safety Block: Refusing to connect to localhost DB in production mode") 
+        
+        safe_uri = uri.split('@')[-1] if '@' in uri else 'localhost'
+        logger.info(f"MongoDB: Connecting to {safe_uri}...")
+        _client = AsyncIOMotorClient(uri)
     
     _db = _client[Config.MONGODB_DB_NAME]
     return _db
