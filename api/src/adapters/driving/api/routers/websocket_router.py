@@ -25,6 +25,18 @@ signal_repo = MongoDBSignalRepository(db)
 @router.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
     await socket_service.connect(websocket, user_id)
+
+    # On connect: send a snapshot of recent telegram logs (if any)
+    try:
+        cursor = db.telegram_logs.find({"userId": user_id}).sort("timestamp", -1).limit(100)
+        logs = await cursor.to_list(length=100)
+        for log in logs:
+            if "_id" in log:
+                log["_id"] = str(log["_id"])
+        await websocket.send_text(json.dumps({"event": "telegram_logs_snapshot", "data": logs}, default=str))
+    except Exception as e:
+        logger.debug(f"No telegram log snapshot for {user_id}: {e}")
+
     try:
         while True:
             data = await websocket.receive_text()

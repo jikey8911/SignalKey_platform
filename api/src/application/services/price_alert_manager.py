@@ -6,13 +6,27 @@ logger = logging.getLogger(__name__)
 class PriceAlertManager:
     def __init__(self, stream_service):
         self.stream_service = stream_service
-        self.active_alerts = {} # { "symbol": [Future, target_price] }
+        self.active_alerts = {}  # { "key": Future }
 
-    async def wait_for_proximity(self, exchange_id: str, symbol: str, target_price: float, threshold=0.005):
+    async def wait_for_proximity(
+        self,
+        exchange_id: str,
+        symbol: str,
+        target_price: float,
+        threshold: float = 0.005,
+        threshold_percent: float = None,
+    ):
+        """Espera pasiva hasta que el precio esté lo suficientemente cerca del target.
+
+        - `threshold`: fracción (0.005 = 0.5%)
+        - `threshold_percent`: porcentaje (0.5 = 0.5%)
+
+        Se acepta `threshold_percent` para compatibilidad con el flujo Sueño/Vigilia.
         """
-        Mantiene la tarea en suspenso hasta que el precio esté a < 0.5% (threshold)
-        """
-        logger.info(f"📡 Vigilante pasivo iniciado: {symbol} objetivo {target_price}")
+        if threshold_percent is not None:
+            threshold = float(threshold_percent) / 100.0
+
+        logger.info(f"📡 Vigilante pasivo iniciado: {symbol} objetivo {target_price} (±{threshold*100:.3f}%)")
         
         try:
             while True:

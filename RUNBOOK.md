@@ -37,8 +37,46 @@ npm run dev
 
 ---
 
+## 3 Tests (API)
+
+From `signaalKei_platform/api`:
+
+### Stable (default)
+Runs only the maintained deterministic tests (currently config/exchanges):
+
+```powershell
+cd api
+.\venv\Scripts\python.exe -m pytest -q
+```
+
+### Legacy (explicit)
+Runs legacy tests that are out of sync with the current codebase:
+
+```powershell
+cd api
+.\venv\Scripts\python.exe -m pytest -q -m legacy
+```
+
+### Integration (explicit)
+Runs integration/E2E tests that may require external services (Mongo, sockets, ccxt/telethon, etc.):
+
+```powershell
+cd api
+.\venv\Scripts\python.exe -m pytest -q -m integration
+```
+
+### Run a specific file
+
+```powershell
+cd api
+.\venv\Scripts\python.exe -m pytest -q tests\test_config_exchanges_endpoints.py
+```
+
+---
+
 ## Notes
 - Start order: **API first** (activate venv + run uvicorn), then Web.
+- Pytest default collection is intentionally limited to avoid importing historical tests with side effects.
 - If the venv activation is blocked by policy:
 
 ```powershell

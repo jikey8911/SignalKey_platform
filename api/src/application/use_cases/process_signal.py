@@ -72,15 +72,18 @@ class ProcessSignalUseCase:
                 await self.signal_repository.update(current_id, update_data)
 
                 if status == SignalStatus.ACCEPTED:
-                    # Guardar en colección específica de Telegram para histórico (Puerto/Adapter)
+                    # Guardar en colección específica de Telegram para histórico/estadísticas (aprobada o rechazada)
+                    chat_id = source.replace("telegram_", "", 1) if isinstance(source, str) and source.startswith("telegram_") else None
                     telegram_signal_doc = {
                         "signalId": current_id,
                         "userId": user_id,
                         "source": source,
+                        "chatId": chat_id,
+                        "status": str(status),
                         "analysis": update_data,
-                        "timestamp": datetime.utcnow()
+                        "timestamp": datetime.utcnow(),
                     }
-                    await self.telegram_signal_repository.save_approved_signal(telegram_signal_doc)
+                    await self.telegram_signal_repository.save_signal(telegram_signal_doc)
 
                     if analysis.decision == Decision.REJECTED or analysis.direction == Direction.HOLD:
                         continue
@@ -88,7 +91,7 @@ class ProcessSignalUseCase:
                     # 4. PASO CRÍTICO: Crear el Trade y activar el flujo de SignalKey
                     if analysis.is_safe:
                         # Usar el servicio de trades inyectado
-                        result = await self.trade_service.create_telegram_trade(analysis, user_id, config)
+                        result = await self.trade_service.create_telegram_trade(analysis, user_id, config, signal_id=current_id)
                         
                         final_status = SignalStatus.EXECUTING if result.success else SignalStatus.FAILED
                         await self.signal_repository.update(current_id, {

@@ -5,7 +5,7 @@ from api.src.adapters.driven.persistence.mongodb import db
 from api.src.domain.ports.output.telegram_repository_port import ITelegramSignalRepository, ITelegramTradeRepository, ITelegramPositionRepository
 
 class MongoTelegramSignalRepository(ITelegramSignalRepository):
-    async def save_approved_signal(self, signal_data: Dict[str, Any]) -> str:
+    async def save_signal(self, signal_data: Dict[str, Any]) -> str:
         result = await db["telegram_signals"].insert_one(signal_data)
         return str(result.inserted_id)
 

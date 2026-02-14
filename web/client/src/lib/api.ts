@@ -89,6 +89,40 @@ export async function fetchTrades(openId: string) {
   }
 }
 
+// Telegram trades
+export async function fetchTelegramTrades() {
+  try {
+    return await fetchJson<any[]>(`${API_BASE}/telegram/trades?limit=100`);
+  } catch (e) {
+    console.error("Error fetching telegram trades:", e);
+    return [];
+  }
+}
+
+// Strategy bot instances
+export async function fetchBots() {
+  try {
+    return await fetchJson<any[]>(`${API_BASE}/bots/`);
+  } catch (e) {
+    console.error("Error fetching bots:", e);
+    return [];
+  }
+}
+
+// Unified view for Trades page (telegram trades + strategy bots)
+export async function fetchTradeInstancesUnified() {
+  const [telegramTrades, bots] = await Promise.all([
+    fetchTelegramTrades(),
+    fetchBots(),
+  ]);
+
+  // tag for UI
+  const taggedTelegram = (telegramTrades || []).map((t: any) => ({ ...t, __kind: 'telegram_trade' }));
+  const taggedBots = (bots || []).map((b: any) => ({ ...b, __kind: 'strategy_bot' }));
+
+  return [...taggedTelegram, ...taggedBots];
+}
+
 export async function fetchBalances(openId: string) {
   // openId deprecated, using cookie
   try {

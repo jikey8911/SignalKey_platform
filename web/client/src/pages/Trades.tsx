@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { fetchTrades } from '@/lib/api';
+import { fetchTradeInstancesUnified } from '@/lib/api';
 import { TrendingUp, TrendingDown, Filter, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { useSocket } from '@/_core/hooks/useSocket';
@@ -33,8 +33,8 @@ export default function Trades() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
   const queryClient = useQueryClient();
   const { data: bots, isLoading, refetch } = useQuery({
-    queryKey: ['trades', user?.openId],
-    queryFn: () => fetchTrades(user?.openId),
+    queryKey: ['trades_unified', user?.openId],
+    queryFn: () => fetchTradeInstancesUnified(),
     enabled: !!user?.openId
   });
   const [filterMarket, setFilterMarket] = useState<'all' | 'CEX' | 'DEX'>('all');
@@ -49,7 +49,7 @@ export default function Trades() {
     if (lastMessage && (lastMessage.event === 'bot_update' || lastMessage.event === 'trade_update' || lastMessage.event === 'telegram_trade_update')) {
       const updatedData = lastMessage.data;
 
-      queryClient.setQueryData(['trades', user?.openId], (oldData: any[] | undefined) => {
+      queryClient.setQueryData(['trades_unified', user?.openId], (oldData: any[] | undefined) => {
         if (!oldData) return [updatedData]; // Si es nuevo y no hay datos
 
         // Verificar si ya existe (por id o _id)

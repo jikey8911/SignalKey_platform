@@ -105,59 +105,60 @@ class TelegramUserBot:
                 text = event.message.message
                 display_text = text if text else "<Mensaje sin texto / Media>"
 
-                # 1. Obtener configuración y loguear/emitir siempre (si es posible)
+                # 1) Obtener config del usuario
                 try:
                     user = await db.users.find_one({"openId": self.user_id})
                     if not user:
                         return
-                    
+
                     user_id_obj = user["_id"]
-                    config = await db.app_configs.find_one({"userId": user_id_obj})
-                    
+                    config = await db.app_configs.find_one({"userId": user_id_obj}) or {}
+
+                    # 2) Allow-list: SOLO chats/canales/grupos permitidos se guardan en telegram_logs
+                    allow_list = (config.get("telegramChannels") or {}).get("allow", [])
+                    is_allowed = bool(allow_list) and (chat_id in allow_list)
+
                     chat_title = "Privado"
-                    if hasattr(event.chat, 'title'):
+                    if hasattr(event.chat, "title"):
                         chat_title = event.chat.title
-                    elif hasattr(event.chat, 'first_name'):
+                    elif hasattr(event.chat, "first_name"):
                         chat_title = f"{event.chat.first_name} {getattr(event.chat, 'last_name', '') or ''}".strip()
 
-                    log_entry = {
-                        "chatId": chat_id,
-                        "chatName": chat_title,
-                        "message": display_text,
-                        "timestamp": datetime.utcnow(), # Guardar como DATETIME nativo
-                        "status": "received",
-                        "userId": self.user_id
-                    }
-                    
-                    # Guardar y emitir para visualización en tiempo real
-                    await db.telegram_logs.insert_one(log_entry)
-
-                    # REQUISITO: Mostrar todos los mensajes por consola (API logs)
-                    try:
-                        print(f"\n[TELEGRAM {self.user_id}] From: {chat_title} ({chat_id}) | Content: {display_text.encode('utf-8', 'replace').decode('utf-8')}\n")
-                    except Exception:
-                        # Fallback seguro si la consola no soporta caracteres
-                        print(f"\n[TELEGRAM {self.user_id}] From: {chat_id} | Content: (Content hidden due to encoding error)\n")
-
                     from api.src.adapters.driven.notifications.socket_service import socket_service
-                    await socket_service.emit_to_user(self.user_id, "telegram_log", log_entry)
-                    # También emitir al broadcast global para monitoreo general
-                    await socket_service.broadcast("telegram_log", {**log_entry, "source": f"user_{self.user_id}"})
 
-                    # 2. VALIDACIÓN PARA IA: Solo si tiene texto y el procesamiento está habilitado
+                    # Persist + UI stream ONLY if allowed
+                    if is_allowed:
+                        log_entry = {
+                            "chatId": chat_id,
+                            "chatName": chat_title,
+                            "message": display_text,
+                            "timestamp": datetime.utcnow(),
+                            "status": "received",
+                            "userId": self.user_id,
+                        }
+
+                        await db.telegram_logs.insert_one(log_entry)
+
+                        # No UI connected => no prints / no socket chatter
+                        if socket_service.is_user_connected(self.user_id):
+                            try:
+                                safe_text = display_text.encode("utf-8", "replace").decode("utf-8")
+                                print(f"\n[TELEGRAM {self.user_id}] From: {chat_title} ({chat_id}) | Content: {safe_text}\n")
+                            except Exception:
+                                print(f"\n[TELEGRAM {self.user_id}] From: {chat_id} | Content: (Content hidden due to encoding error)\n")
+
+                            await socket_service.emit_to_user(self.user_id, "telegram_log", log_entry)
+
+                    # 3) VALIDACIÓN PARA IA
                     if not text:
                         return
 
-                    if config and not config.get("isAutoEnabled", True):
-                        # No logueamos el skip para no saturar si está desactivado el auto
+                    # Master switch: if auto disabled, do not process
+                    if not config.get("isAutoEnabled", True) and not config.get("botTelegramActivate", False):
                         return
 
-                    # 3. FILTRADO POR CHATS AUTORIZADOS
-                    allow_list = config.get("telegramChannels", {}).get("allow", []) if config else []
-                    
-                    # REQUISITO: Solo procesar con IA si el chat está en la lista
-                    # Si la lista está vacía, NO procesamos ninguno por defecto para evitar 429
-                    if chat_id not in allow_list:
+                    # Processing allow-list: if empty, do not process anyone by default
+                    if not is_allowed:
                         return
 
                     # 4. PROCESAMIENTO DE SEÑAL

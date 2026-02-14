@@ -4,8 +4,8 @@ from datetime import datetime
 
 class ITelegramSignalRepository(ABC):
     @abstractmethod
-    async def save_approved_signal(self, signal_data: Dict[str, Any]) -> str:
-        """Guarda una señal aprobada para auditoría."""
+    async def save_signal(self, signal_data: Dict[str, Any]) -> str:
+        """Guarda una señal (aprobada o rechazada) para auditoría/estadísticas."""
         pass
 
 class ITelegramTradeRepository(ABC):

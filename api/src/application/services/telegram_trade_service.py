@@ -46,61 +46,105 @@ class TelegramTradeService:
         logger.info(f"TelegramTradeService iniciado: orquestando {len(active_trades)} flujos de trade.")
 
     async def manage_trade_workflow(self, trade_doc: Dict[str, Any]):
-        """
-        Orquesta el ciclo de vida con Smart Monitoring (Sueño/Vigilia).
+        """Orquesta el ciclo de vida con Smart Monitoring (Sueño/Vigilia).
+
+        Reglas:
+        - Despertar cuando precio está a <= 0.5% del target
+        - Volver a dormir cuando se aleja a > 0.7%
+
+        Targets:
+        - waiting_entry: entryPrice
+        - active: 2 alertas concurrentes (next TP pendiente + SL)
         """
         trade_id = str(trade_doc["_id"])
         symbol = trade_doc["symbol"]
         exchange_id = trade_doc.get("exchangeId", "binance")
-        
+
         logger.info(f"🌀 Iniciando workflow para {symbol} ({trade_id})")
 
         try:
             while True:
-                # Recargar estado actual del trade desde DB
-                # (Esto es importante si el trade cambió de estado en otra iteración)
-                # En una implementación real, podríamos consultar la DB aquí si sospechamos cambios externos.
                 status = trade_doc.get("status")
 
                 if status in ["closed", "cancelled", "failed"]:
                     logger.info(f"Trade {trade_id} finalizado ({status}). Terminando workflow.")
                     break
 
-                # Determinamos el precio objetivo para despertar
-                # Si estamos esperando entrada, el target es entryPrice
-                # Si estamos activos, el target son los TPs o SL más cercanos
-                target_price = trade_doc.get("entryPrice") 
-                if status == "active":
-                    # Si está activo, ya deberíamos estar en monitoreo crítico, 
-                    # pero si por alguna razón salimos (ej: reinicio), volvemos directo al loop crítico.
-                    pass 
-                
-                # --- FASE 1: MODO SUEÑO (Espera Pasiva con Alertas) ---
+                # --- FASE 1: MODO SUEÑO (Alertas pasivas) ---
+                sleep_targets: list[float] = []
+
                 if status == "waiting_entry":
-                    logger.info(f"💤 Trade {trade_id} durmiendo. Esperando proximidad (0.5%) a {target_price}")
-                    
-                    # Esperar a que el precio esté cerca (0.5%)
-                    # wait_for_proximity usa Websocket ligero o polling lento
+                    entry_price = trade_doc.get("entryPrice")
+                    if not entry_price:
+                        logger.warning(f"Trade {trade_id} sin entryPrice. Durmiendo 5s.")
+                        await asyncio.sleep(5)
+                        continue
+
+                    logger.info(f"💤 Trade {trade_id} durmiendo. Esperando proximidad (0.5%) a entrada {entry_price}")
                     await self.alert_manager.wait_for_proximity(
-                        exchange_id, symbol, target_price, threshold_percent=0.5
+                        exchange_id, symbol, float(entry_price), threshold_percent=0.5
                     )
                     logger.info(f"🔔 ¡DESPERTANDO! {symbol} cerca de entrada. Activando monitoreo fuerte.")
+                    sleep_targets = [float(entry_price)]
 
-                # --- FASE 2: MODO VIGILIA (Monitoreo Crítico) ---
-                # Suscribimos a Trades/Ticker de alta frecuencia
+                elif status == "active":
+                    # Crear 2 alertas: next TP y SL (si existen)
+                    sl = trade_doc.get("stopLoss")
+
+                    # Choose the nearest pending TP to the *current* price
+                    ticker = await self.stream_service.subscribe_ticker(exchange_id, symbol)
+                    current_price = float(ticker.get("last", 0) or 0)
+
+                    pending_tps = []
+                    for tp in (trade_doc.get("takeProfits") or []):
+                        if tp.get("status") == "pending" and tp.get("price") is not None:
+                            try:
+                                pending_tps.append(float(tp["price"]))
+                            except Exception:
+                                continue
+
+                    next_tp = None
+                    if pending_tps and current_price > 0:
+                        next_tp = min(pending_tps, key=lambda p: abs(p - current_price))
+                    elif pending_tps:
+                        # Fallback if price is unknown
+                        next_tp = pending_tps[0]
+
+                    tasks = []
+                    if sl:
+                        tasks.append(asyncio.create_task(
+                            self.alert_manager.wait_for_proximity(exchange_id, symbol, float(sl), threshold_percent=0.5)
+                        ))
+                        sleep_targets.append(float(sl))
+                    if next_tp is not None:
+                        tasks.append(asyncio.create_task(
+                            self.alert_manager.wait_for_proximity(exchange_id, symbol, float(next_tp), threshold_percent=0.5)
+                        ))
+                        sleep_targets.append(float(next_tp))
+
+                    if tasks:
+                        logger.info(
+                            f"💤 Trade {trade_id} (active) durmiendo. Alertas 0.5% para: "
+                            f"SL={sl} TP={next_tp}"
+                        )
+                        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                        for p in pending:
+                            p.cancel()
+                        logger.info(f"🔔 ¡DESPERTANDO! {symbol} cerca de TP/SL. Activando monitoreo fuerte.")
+                    else:
+                        # Sin SL ni TP pendientes: mantener monitoreo fuerte ligero
+                        logger.info(f"Trade {trade_id} active sin SL/TP pendientes. Monitoreo continuo.")
+
+                # --- FASE 2: MODO VIGILIA (Monitoreo crítico) ---
                 await self.stream_service.subscribe_trades(exchange_id, symbol)
-                
-                # Ejecutar bucle crítico. Retorna si:
-                # 1. El trade se cierra (True)
-                # 2. El precio se aleja demasiado (>0.7%) (False) -> Volver a dormir
-                finished = await self._ejecutar_monitoreo_critico(trade_doc)
-                
+
+                finished = await self._ejecutar_monitoreo_critico(trade_doc, sleep_targets=sleep_targets)
+
                 if finished:
                     break
-                else:
-                    logger.info(f"📉 Precio se alejó (>0.7%). Trade {trade_id} vuelve a dormir.")
-                    # Pequeña pausa para evitar rebotes instantáneos
-                    await asyncio.sleep(5)
+
+                logger.info(f"📉 Precio se alejó (>0.7%). Trade {trade_id} vuelve a dormir.")
+                await asyncio.sleep(5)
 
         except asyncio.CancelledError:
             logger.info(f"Flujo de trade {trade_id} cancelado.")
@@ -110,38 +154,43 @@ class TelegramTradeService:
             if trade_id in self.active_monitors:
                 del self.active_monitors[trade_id]
 
-    async def _ejecutar_monitoreo_critico(self, trade: Dict[str, Any]) -> bool:
+    async def _ejecutar_monitoreo_critico(self, trade: Dict[str, Any], sleep_targets: Optional[List[float]] = None) -> bool:
+        """Bucle de alta frecuencia.
+
+        - Retorna True si el trade finalizó.
+        - Retorna False si debe volver a dormir (precio se aleja >0.7% del target relevante).
+
+        `sleep_targets`: lista de precios objetivo relevantes para la fase actual
+        (ej: [entry] o [sl, next_tp]).
         """
-        Bucle de alta frecuencia.
-        Retorna True si el trade finalizó, False si debe volver a dormir.
-        """
-        trade_id = str(trade["_id"])
         symbol = trade["symbol"]
         exchange_id = trade.get("exchangeId", "binance")
         entry_price = trade.get("entryPrice")
-        
+
         while True:
-            # Obtenemos precio actual del stream (memoria)
             ticker_data = await self.stream_service.subscribe_ticker(exchange_id, symbol)
-            current_price = ticker_data.get('last', 0)
-            
+            current_price = float(ticker_data.get("last", 0) or 0)
+
             if current_price > 0:
-                # Lógica de negocio (Entrada, TP, SL)
-                trade_updated = await self._update_trade_logic(trade, current_price)
-                
-                # Si el trade finalizó
+                await self._update_trade_logic(trade, current_price)
+
                 if trade.get("status") in ["closed", "failed"]:
                     return True
-                
-                # Si sigue esperando entrada, verificar si se alejó para dormir
-                if trade.get("status") == "waiting_entry":
-                    dist_percent = abs(current_price - entry_price) / entry_price
-                    if dist_percent > 0.007: # 0.7% de distancia
-                        return False # Volver a dormir
 
-            await asyncio.sleep(0.5) # Frecuencia de actualización
+                # Decide si vuelve a dormir por alejamiento >0.7%
+                targets = [t for t in (sleep_targets or []) if t]
+                if not targets and entry_price:
+                    targets = [float(entry_price)]
 
-    async def create_telegram_trade(self, analysis: SignalAnalysis, user_id: str, config: Dict[str, Any]) -> ExecutionResult:
+                if targets:
+                    nearest = min(targets, key=lambda t: abs(current_price - t))
+                    dist_percent = abs(current_price - nearest) / nearest
+                    if dist_percent > 0.007:
+                        return False
+
+            await asyncio.sleep(0.5)
+
+    async def create_telegram_trade(self, analysis: SignalAnalysis, user_id: str, config: Dict[str, Any], signal_id: str = None) -> ExecutionResult:
         """
         Crea una nueva operación basada en una señal de Telegram.
         """
@@ -164,20 +213,25 @@ class TelegramTradeService:
 
             trade_doc = {
                 "userId": user_id,
+                "signalId": signal_id,
                 "symbol": symbol,
                 "exchangeId": exchange_id,
                 "marketType": analysis.market_type.value,
                 "side": analysis.direction.value,
                 "entryPrice": analysis.parameters.entry_price,
+                # SL current + immutable initial snapshot (useful for UI charting)
                 "stopLoss": analysis.parameters.sl,
+                "stopLossInitial": analysis.parameters.sl,
+                # History of SL movements for UI charting
+                "stopLossHistory": [],
                 "takeProfits": tp_tasks,
                 "investment": analysis.parameters.investment or analysis.parameters.amount or 100.0,
                 "pnl": 0.0,
                 "roi": 0.0,
-                "status": "waiting_entry", 
+                "status": "waiting_entry",
                 "mode": mode,
                 "createdAt": datetime.utcnow(),
-                "updatedAt": datetime.utcnow()
+                "updatedAt": datetime.utcnow(),
             }
 
             result_id = await self.trade_repository.create_trade(trade_doc)
@@ -235,10 +289,23 @@ class TelegramTradeService:
                     updates["status"] = "active"
                     updates["executedAt"] = datetime.utcnow()
                     updates["actualEntryPrice"] = current_price
-                    trade["status"] = "active" # Actualizar objeto local
+                    trade["status"] = "active"  # Actualizar objeto local
                     trade["actualEntryPrice"] = current_price
                     should_notify = True
-                    
+
+                    # Ensure SL history captures the initial SL at entry time
+                    hist = list(trade.get("stopLossHistory") or [])
+                    hist.append({
+                        "from": None,
+                        "to": float(trade.get("stopLoss")) if trade.get("stopLoss") is not None else None,
+                        "trigger": "entry",
+                        "tpPrice": None,
+                        "atPrice": current_price,
+                        "timestamp": datetime.utcnow(),
+                    })
+                    updates["stopLossHistory"] = hist
+                    trade["stopLossHistory"] = hist
+
                     # Crear Posición en Vivo
                     position_updates = {
                         "symbol": trade["symbol"],
@@ -249,7 +316,8 @@ class TelegramTradeService:
                         "pnl": 0.0,
                         "roi": 0.0,
                         "mode": mode,
-                        "status": "OPEN"
+                        "status": "OPEN",
+                        "stopLoss": float(trade.get("stopLoss")) if trade.get("stopLoss") is not None else None,
                     }
                     await self.position_repository.upsert_position(trade_id, position_updates)
 
@@ -314,8 +382,52 @@ class TelegramTradeService:
                             logger.info(f"💰 Trade {trade_id} TP alcanzado a {current_price}")
                             tp["status"] = "hit"
                             tp["hitAt"] = datetime.utcnow()
+                            tp["hitPrice"] = current_price
+                            tp["roiAtHit"] = roi
                             tp_changed = True
-                            
+
+                            # Trailing SL by TP ladder:
+                            # - After TP1 hit -> SL moves to entry (break-even)
+                            # - After TP2 hit -> SL moves to TP1 price
+                            # - After TP3 hit -> SL moves to TP2 price ...
+                            # Implementation: on each TP hit, set stopLoss to the *previous* protection price
+                            # (last TP hit price, else entry), then update lastTpHitPrice to current TP price.
+                            prev_protect = trade.get("lastTpHitPrice") or trade.get("actualEntryPrice", entry_price)
+                            if prev_protect:
+                                new_sl = float(prev_protect)
+                                old_sl = trade.get("stopLoss")
+
+                                updates["stopLoss"] = new_sl
+                                trade["stopLoss"] = new_sl
+                                should_notify = True
+
+                                # Persist SL movement history for UI charting
+                                hist = list(trade.get("stopLossHistory") or [])
+                                hist.append({
+                                    "from": float(old_sl) if old_sl is not None else None,
+                                    "to": new_sl,
+                                    "trigger": "tp_hit",
+                                    "tpPrice": float(tp.get("price")) if tp.get("price") is not None else None,
+                                    "atPrice": current_price,
+                                    "timestamp": datetime.utcnow(),
+                                })
+                                updates["stopLossHistory"] = hist
+                                trade["stopLossHistory"] = hist
+
+                                # Reflect SL change in live position view
+                                await self.position_repository.upsert_position(trade_id, {
+                                    "stopLoss": new_sl,
+                                    "lastUpdate": datetime.utcnow(),
+                                })
+
+                            # record this TP as last hit
+                            try:
+                                last_tp_price = float(tp.get("price"))
+                                updates["lastTpHitPrice"] = last_tp_price
+                                trade["lastTpHitPrice"] = last_tp_price
+                            except Exception:
+                                pass
+
                             # Realizar venta parcial
                             percent_to_sell = tp["percent"] # Ej: 33.3
                             # Calcular ganancia parcial (aproximada para simulación)

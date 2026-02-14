@@ -12,6 +12,9 @@ class SocketService:
         # topic -> set of WebSocket connections
         self.topic_subscriptions: Dict[str, set[WebSocket]] = {}
 
+    def is_user_connected(self, user_id: str) -> bool:
+        return bool(self.active_connections.get(user_id))
+
     async def connect(self, websocket: WebSocket, user_id: str):
         await websocket.accept()
         if user_id not in self.active_connections:
