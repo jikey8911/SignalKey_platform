@@ -23,12 +23,13 @@ export default function Settings() {
   const [formData, setFormData] = useState<{
     demoMode: boolean;
     isAutoEnabled: boolean;
-    aiProvider: 'gemini' | 'openai' | 'perplexity' | 'grok';
+    aiProvider: 'gemini' | 'openai' | 'perplexity' | 'grok' | 'groq';
     aiApiKey: string;
     geminiApiKey: string;
     openaiApiKey: string;
     perplexityApiKey: string;
     grokApiKey: string;
+    groqApiKey: string;
     zeroExApiKey: string;
     telegramBotToken: string;
     telegramChatId: string;
@@ -69,6 +70,7 @@ export default function Settings() {
     openaiApiKey: '',
     perplexityApiKey: '',
     grokApiKey: '',
+    groqApiKey: '',
     zeroExApiKey: '',
     telegramBotToken: '',
     telegramChatId: '',
@@ -120,6 +122,7 @@ export default function Settings() {
               openaiApiKey: config.openaiApiKey || '',
               perplexityApiKey: config.perplexityApiKey || '',
               grokApiKey: config.grokApiKey || '',
+              groqApiKey: config.groqApiKey || '',
               zeroExApiKey: config.zeroExApiKey || '',
               telegramBotToken: config.telegramBotToken || '',
               telegramChatId: config.telegramChatId || '',
@@ -169,7 +172,7 @@ export default function Settings() {
   const handleSave = async () => {
     try {
       // Validar que al menos haya una API key configurada (opcional, el failover lo maneja)
-      if (!formData.aiApiKey && !formData.geminiApiKey && !formData.openaiApiKey && !formData.perplexityApiKey && !formData.grokApiKey) {
+      if (!formData.aiApiKey && !formData.geminiApiKey && !formData.openaiApiKey && !formData.perplexityApiKey && !formData.grokApiKey && !formData.groqApiKey) {
         toast.warning("No has configurado ninguna API Key de IA. El análisis fallará.");
       }
 
@@ -239,7 +242,7 @@ export default function Settings() {
         <div className="space-y-6">
           <Card className="p-6">
             <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">🤖 Inteligencia Artificial</h3>
-            <p className="text-xs text-muted-foreground mb-4">
+            <p className="text-xs text-slate-300 mb-4">
               Configura múltiples proveedores. El sistema usará el seleccionado como primario y el resto como respaldo (failover).
             </p>
 
@@ -257,6 +260,7 @@ export default function Settings() {
                   <option value="openai">OpenAI (GPT-4o mini)</option>
                   <option value="perplexity">Perplexity AI (Web Search)</option>
                   <option value="grok">Grok (xAI)</option>
+                  <option value="groq">Groq</option>
                 </select>
               </div>
 
@@ -291,10 +295,17 @@ export default function Settings() {
                   type="password"
                   placeholder="xai-..."
                 />
+                <InputField
+                  label="Groq API Key"
+                  value={formData.groqApiKey}
+                  onChange={(v: string) => setFormData({ ...formData, groqApiKey: v })}
+                  type="password"
+                  placeholder="gsk_..."
+                />
               </div>
 
               <div className="p-2 bg-primary/5 rounded border border-primary/10">
-                <p className="text-[10px] text-primary/80 italic leading-tight">
+                <p className="text-[10px] text-slate-300 italic leading-tight">
                   💡 <strong>Smart Failover:</strong> Si {formData.aiProvider} falla o alcanza su límite, el bot intentará automáticamente con las otras llaves configuradas.
                 </p>
               </div>
@@ -371,7 +382,7 @@ export default function Settings() {
                            }
                            <div className="truncate flex flex-col">
                              <span className="font-medium truncate text-xs">{channel.name || "Sin Nombre"}</span>
-                             <span className="text-[10px] text-muted-foreground truncate">{channel.type?.toUpperCase() || 'UNKNOWN'} • {channel.id}</span>
+                             <span className="text-[10px] text-slate-400 truncate">{channel.type?.toUpperCase() || 'UNKNOWN'} • {channel.id}</span>
                            </div>
                         </div>
                       </label>

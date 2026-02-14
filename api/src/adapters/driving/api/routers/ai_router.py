@@ -33,6 +33,16 @@ async def get_agents(current_user: dict = Depends(get_current_user)):
         # Lista fija de proveedores soportados
         supported_providers = ["gemini", "openai", "perplexity", "grok", "groq"]
 
+        # Fallback: si las keys viven en app_configs, reflejarlas aunque no exista ai_agents aún
+        key_map = {
+            "gemini": "geminiApiKey",
+            "openai": "openaiApiKey",
+            "perplexity": "perplexityApiKey",
+            "grok": "grokApiKey",
+            "groq": "groqApiKey",
+        }
+        primary = (config.get("aiProvider") or "gemini").lower() if config else "gemini"
+
         # Obtener agentes existentes de la DB
         existing_agents = await db.ai_agents.find({"userId": user_oid}).to_list(None)
         existing_map = {agent["provider"]: agent for agent in existing_agents}
@@ -49,18 +59,33 @@ async def get_agents(current_user: dict = Depends(get_current_user)):
                 if "configId" in agent_doc:
                     agent_doc["configId"] = str(agent_doc["configId"])
 
+                # Mask stored keys when returning
+                if agent_doc.get("apiKey"):
+                    key = str(agent_doc.get("apiKey"))
+                    tail = key[-4:] if len(key) >= 4 else ""
+                    agent_doc["apiKey"] = f"***{tail}" if tail else "***"
+
                 response_agents.append(AIAgent(**agent_doc))
             else:
-                # Crear estructura default (no guardamos aun en DB para no ensuciar, o si?)
-                # Mejor retornamos la estructura, el usuario la guardará al editar
+                # Default agent. If app_configs already has a key, expose it here
+                # so the UI reflects current config.
+                cfg_key_field = key_map.get(provider)
+                cfg_key_val = (config.get(cfg_key_field) if cfg_key_field else "") or ""
+
+                masked = ""
+                if cfg_key_val:
+                    # mask like exchanges: keep last 4
+                    tail = cfg_key_val[-4:] if len(cfg_key_val) >= 4 else ""
+                    masked = f"***{tail}"
+
                 default_agent = AIAgent(
                     userId=str(user_oid),
                     configId=str(config["_id"]),
                     provider=provider,
-                    apiKey="",
-                    isActive=False,
-                    isPrimary=(provider == "gemini"), # Default primary
-                    createdAt=datetime.utcnow()
+                    apiKey=masked,
+                    isActive=bool(cfg_key_val),
+                    isPrimary=(provider == primary),
+                    createdAt=datetime.utcnow(),
                 )
                 response_agents.append(default_agent)
 

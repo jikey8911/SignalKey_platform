@@ -89,12 +89,23 @@ export async function fetchTrades(openId: string) {
   }
 }
 
-// Telegram trades
-export async function fetchTelegramTrades() {
+// Telegram bots (1 doc per signal/bot)
+export async function fetchTelegramBots(limit = 100) {
   try {
-    return await fetchJson<any[]>(`${API_BASE}/telegram/trades?limit=100`);
+    return await fetchJson<any[]>(`${API_BASE}/telegram/bots?limit=${limit}`);
   } catch (e) {
-    console.error("Error fetching telegram trades:", e);
+    console.error('Error fetching telegram bots:', e);
+    return [];
+  }
+}
+
+// Telegram trades (TP/SL docs) for a given bot
+export async function fetchTelegramTradesByBot(botId: string, limit = 200) {
+  try {
+    const qs = new URLSearchParams({ botId, limit: String(limit) }).toString();
+    return await fetchJson<any[]>(`${API_BASE}/telegram/trades?${qs}`);
+  } catch (e) {
+    console.error('Error fetching telegram trades:', e);
     return [];
   }
 }
@@ -112,13 +123,32 @@ export async function fetchBots() {
 // Unified view for Trades page (telegram trades + strategy bots)
 export async function fetchTradeInstancesUnified() {
   const [telegramTrades, bots] = await Promise.all([
-    fetchTelegramTrades(),
+    fetchTelegramBots(),
     fetchBots(),
   ]);
 
-  // tag for UI
-  const taggedTelegram = (telegramTrades || []).map((t: any) => ({ ...t, __kind: 'telegram_trade' }));
-  const taggedBots = (bots || []).map((b: any) => ({ ...b, __kind: 'strategy_bot' }));
+  // Normalize fields so Trades.tsx can render consistently.
+  const taggedTelegram = (telegramTrades || []).map((t: any) => ({
+    ...t,
+    __kind: 'telegram_bot',
+    marketType: (t.marketType || t.market_type || '').toString().toUpperCase() || 'CEX',
+    mode: t.mode,
+    isDemo: t.mode === 'simulated' || t.isDemo === true,
+  }));
+
+  const taggedBots = (bots || []).map((b: any) => ({
+    ...b,
+    __kind: 'strategy_bot',
+    // align naming
+    id: b.id || b._id,
+    marketType: (b.market_type || b.marketType || 'CEX').toString().toUpperCase(),
+    investment: b.investment ?? b.amount,
+    mode: b.mode,
+    isDemo: b.mode === 'simulated' || b.isDemo === true,
+    // bots use active_position in API
+    position: b.position ?? b.active_position,
+    createdAt: b.createdAt || b.created_at || b.updatedAt || b.updated_at || new Date().toISOString(),
+  }));
 
   return [...taggedTelegram, ...taggedBots];
 }

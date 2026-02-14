@@ -15,6 +15,7 @@ router = APIRouter(prefix="/signals", tags=["Signals Management"])
 def get_signal_repository():
     return MongoDBSignalRepository(db)
 
+@router.get("")
 @router.get("/")
 async def list_user_signals(
     current_user: dict = Depends(get_current_user),

@@ -1,14 +1,41 @@
 """
 Endpoints de autenticación y gestión de Telegram
 """
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends, Query
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Any, List, Dict
 import logging
+from datetime import datetime
+from bson import ObjectId
+
 from api.src.infrastructure.telegram.telegram_bot_manager import bot_manager
 from api.src.adapters.driven.persistence.mongodb import db
 from api.src.infrastructure.security.auth_deps import get_current_user
-from fastapi import Depends
+
+
+def _oid(value: str) -> ObjectId:
+    try:
+        return ObjectId(value)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid ObjectId")
+
+
+def _serialize_mongo(doc: Any) -> Any:
+    if isinstance(doc, list):
+        return [_serialize_mongo(x) for x in doc]
+    if isinstance(doc, dict):
+        out = {}
+        for k, v in doc.items():
+            if k == "_id":
+                out["id"] = str(v)
+            elif isinstance(v, ObjectId):
+                out[k] = str(v)
+            elif isinstance(v, datetime):
+                out[k] = v.isoformat() + "Z"
+            else:
+                out[k] = _serialize_mongo(v)
+        return out
+    return doc
 
 logger = logging.getLogger(__name__)
 
@@ -361,37 +388,57 @@ async def get_telegram_logs(limit: int = 100, current_user: dict = Depends(get_c
         logger.error(f"Error fetching telegram logs: {e}")
         return []
 
-@router.get("/trades")
-async def get_telegram_trades(limit: int = 50, current_user: dict = Depends(get_current_user)):
-    """
-    Obtiene el historial de trades generados desde Telegram.
-    Incluye trades cerrados y activos.
-    """
-    user_id = current_user["openId"] # Usamos openId como userId en telegram_trades por ahora
+@router.get("/signals")
+async def get_telegram_signals(limit: int = 100, current_user: dict = Depends(get_current_user)):
+    """Obtiene el historial de señales de Telegram (aprobadas y rechazadas) para el usuario actual."""
+    user_id = current_user["openId"]
     try:
-        # Buscar en telegram_trades
-        cursor = db.telegram_trades.find({"userId": user_id}).sort("createdAt", -1).limit(limit)
-        trades = await cursor.to_list(length=limit)
-        
-        # Serializar
-        result = []
-        for trade in trades:
-            trade["id"] = str(trade["_id"])
-            del trade["_id"]
-            
-            # Buscar si tiene posición activa en telegram_positions
-            pos = await db.telegram_positions.find_one({"tradeId": trade["id"]})
-            if pos:
-                pos["id"] = str(pos["_id"])
-                del pos["_id"]
-                trade["position"] = pos
-            
-            result.append(trade)
-            
-        return result
+        cursor = db.telegram_signals.find({"userId": user_id}).sort("timestamp", -1).limit(limit)
+        signals = await cursor.to_list(length=limit)
+
+        # Serializar ObjectId
+        for s in signals:
+            if "_id" in s:
+                s["_id"] = str(s["_id"])
+        return signals
     except Exception as e:
-        logger.error(f"Error fetching telegram trades for {user_id}: {e}")
+        logger.error(f"Error fetching telegram signals for {user_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Importar datetime aquí para evitar circular imports
-from datetime import datetime
+
+@router.get("/bots")
+async def get_telegram_bots(
+    limit: int = Query(50, ge=1, le=200),
+    current_user: dict = Depends(get_current_user),
+):
+    """Lista los bots de Telegram (1 doc por señal/bot) para el usuario actual."""
+    user_oid = current_user.get("_id")
+    if not isinstance(user_oid, ObjectId):
+        raise HTTPException(status_code=500, detail="Invalid user _id")
+
+    cursor = db.telegram_bots.find({"userId": user_oid}).sort("createdAt", -1).limit(limit)
+    bots = await cursor.to_list(length=limit)
+    return _serialize_mongo(bots)
+
+
+@router.get("/trades")
+async def get_telegram_trades(
+    botId: str = Query(..., description="Telegram bot id (ObjectId)"),
+    limit: int = Query(200, ge=1, le=1000),
+    current_user: dict = Depends(get_current_user),
+):
+    """Lista los 'trades' (TP/SL docs) de un bot de Telegram. Se usa para el expand y para gráficas."""
+    user_oid = current_user.get("_id")
+    if not isinstance(user_oid, ObjectId):
+        raise HTTPException(status_code=500, detail="Invalid user _id")
+
+    bot_oid = _oid(botId)
+
+    cursor = (
+        db.telegram_trades
+        .find({"userId": user_oid, "botId": bot_oid})
+        .sort("createdAt", 1)
+        .limit(limit)
+    )
+    trades = await cursor.to_list(length=limit)
+    return _serialize_mongo(trades)

@@ -17,7 +17,7 @@ except ImportError:
     AsyncGroq = None
 
 from api.src.domain.ports.output.ai_port import IAIPort
-from api.src.domain.entities.signal import RawSignal, SignalAnalysis, Decision, MarketType, TradingParameters, TakeProfit
+from api.src.domain.entities.signal import RawSignal, SignalAnalysis, Decision, Direction, MarketType, TradingParameters, TakeProfit
 from api.config import Config
 import importlib
 
@@ -298,8 +298,13 @@ class AIAdapter(IAIPort):
         7. PARÁMETROS DE TRADING (MANDATORIOS SI DECISIÓN es "approved"):
            - entry_price: Precio de entrada sugerido.
            - sl: Precio de Stop Loss (obligatorio).
-           - tp (tasks): DEBES generar al menos 3 niveles de Take Profit.
-             Para cada TP, calcula el "qty" (cantidad de la posición a cerrar) basado en la inversión y el porcentaje de salida (ej. 33% de la posición en cada TP).
+           - tp: Lista de Take Profit.
+             DEBE incluir mínimo 1 TP con:
+               - price numérico (> 0)
+               - percent numérico (> 0) (y la suma total debe ser 100)
+             Si el mensaje trae un solo TP exacto, respétalo (no inventes 3).
+             Si el mensaje no trae TPs claros, puedes proponer niveles (1-3) razonables.
+             Para cada TP, incluye "percent" (que en total debe sumar 100) y opcionalmente "qty".
            - leverage: 1 para SPOT/DEX, o valor acorde para FUTURES.
         
         TEXTO A PROCESAR:
@@ -321,9 +326,7 @@ class AIAdapter(IAIPort):
                     "entry_price": 0.0,
                     "entry_type": "market" | "limit",
                     "tp": [
-                        {{"price": 0.0, "percent": 33.3, "qty": 0.0, "status": "pending"}},
-                        {{"price": 0.0, "percent": 33.3, "qty": 0.0, "status": "pending"}},
-                        {{"price": 0.0, "percent": 33.4, "qty": 0.0, "status": "pending"}}
+                        {{"price": 0.0, "percent": 100.0, "qty": 0.0, "status": "pending"}}
                     ],
                     "sl": 0.0,
                     "leverage": 1,
@@ -493,11 +496,13 @@ class AIAdapter(IAIPort):
         
         tp_list = [
             TakeProfit(
-                price=t["price"], 
-                percent=t["percent"], 
-                qty=t.get("qty"), 
-                status=t.get("status", "pending")
-            ) for t in params_data.get("tp", []) if isinstance(t, dict) and "price" in t
+                price=t["price"],
+                percent=t["percent"],
+                qty=t.get("qty"),
+                status=t.get("status", "pending"),
+            )
+            for t in params_data.get("tp", [])
+            if isinstance(t, dict) and "price" in t
         ]
         
         params = TradingParameters(
@@ -512,7 +517,7 @@ class AIAdapter(IAIPort):
         )
 
         # Mapeo de Decision (Aprobación)
-        decision_raw = data.get("decision", "rejected").lower()
+        decision_raw = str(data.get("decision", "rejected")).lower()
         decision = Decision.APPROVED if decision_raw == "approved" else Decision.REJECTED
 
         # Mapeo de Direction (LONG/SHORT/HOLD)
@@ -530,6 +535,44 @@ class AIAdapter(IAIPort):
         else:
             market_type = MarketType(market_val)
 
+        # Validación: si está APPROVED debe traer al menos 1 TP y un SL
+        if decision == Decision.APPROVED:
+            if not tp_list:
+                decision = Decision.REJECTED
+                direction = Direction.HOLD
+                data_reason = data.get("reasoning") or ""
+                reason = ("Señal rechazada: falta tp[] (mínimo 1 TP requerido). " + str(data_reason)).strip()
+                params.tp = []
+                params.sl = params.sl
+                return SignalAnalysis(
+                    decision=decision,
+                    direction=direction,
+                    symbol=data.get("symbol", "UNKNOWN"),
+                    market_type=market_type,
+                    confidence=float(data.get("confidence", 0.0) or 0.0),
+                    reasoning=reason,
+                    is_safe=False,
+                    risk_score=float(data.get("risk_score", 10.0) or 10.0),
+                    parameters=params,
+                )
+
+            if params.sl is None:
+                decision = Decision.REJECTED
+                direction = Direction.HOLD
+                data_reason = data.get("reasoning") or ""
+                reason = ("Señal rechazada: falta sl (stopLoss obligatorio). " + str(data_reason)).strip()
+                return SignalAnalysis(
+                    decision=decision,
+                    direction=direction,
+                    symbol=data.get("symbol", "UNKNOWN"),
+                    market_type=market_type,
+                    confidence=float(data.get("confidence", 0.0) or 0.0),
+                    reasoning=reason,
+                    is_safe=False,
+                    risk_score=float(data.get("risk_score", 10.0) or 10.0),
+                    parameters=params,
+                )
+
         return SignalAnalysis(
             decision=decision,
             direction=direction,
@@ -539,14 +582,17 @@ class AIAdapter(IAIPort):
             reasoning=data.get("reasoning", "Parsed with safety defaults"),
             is_safe=data.get("is_safe", False),
             risk_score=data.get("risk_score", 10.0),
-            parameters=params
+            parameters=params,
         )
 
     def _default_hold(self, reason: str) -> SignalAnalysis:
         return SignalAnalysis(
-            decision=Decision.HOLD,
+            decision=Decision.REJECTED,
+            direction=Direction.HOLD,
             symbol="UNKNOWN",
             market_type=MarketType.SPOT,
             confidence=0.0,
-            reasoning=reason
+            reasoning=reason,
+            is_safe=False,
+            risk_score=10.0,
         )

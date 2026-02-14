@@ -64,6 +64,7 @@ class AppConfigSchema(BaseModel):
     openaiApiKey: Optional[str] = None
     perplexityApiKey: Optional[str] = None
     grokApiKey: Optional[str] = None
+    groqApiKey: Optional[str] = None
     gmgnApiKey: Optional[str] = None
     zeroExApiKey: Optional[str] = None
     telegramBotToken: Optional[str] = None

@@ -16,6 +16,18 @@ def stringify_object_ids(obj):
         return str(obj)
     return obj
 
+def _mask_tail(value: str, keep: int = 4) -> str:
+    if not value:
+        return ""
+    s = str(value)
+    tail = s[-keep:] if len(s) >= keep else ""
+    return f"***{tail}" if tail else "***"
+
+
+def _is_masked(value: Any) -> bool:
+    return isinstance(value, str) and value.strip().startswith("***")
+
+
 class ConfigRepository:
     """
     Repositorio para gestionar configuraciones dinámicas de la aplicación.
@@ -157,19 +169,43 @@ class ConfigRepository:
         await self.db["user_exchanges"].insert_one(new_doc)
         return new_doc
 
-    async def get_exchanges_prefer_user_exchanges(self, user_id: str) -> List[Dict[str, Any]]:
-        """Return exchanges for user preferring `user_exchanges`, falling back to `app_configs`."""
+    def _mask_exchange_for_response(self, ex: Dict[str, Any]) -> Dict[str, Any]:
+        """Mask sensitive exchange fields for API responses."""
+        d = stringify_object_ids(dict(ex or {}))
+        # Keep booleans to allow UI to know a secret exists without revealing it
+        d["hasApiKey"] = bool(d.get("apiKey"))
+        d["hasSecret"] = bool(d.get("secret"))
+        d["hasPassword"] = bool(d.get("password"))
+        d["hasUid"] = bool(d.get("uid"))
+        # Mask
+        if d.get("apiKey"):
+            d["apiKey"] = _mask_tail(d.get("apiKey"))
+        if d.get("secret"):
+            d["secret"] = _mask_tail(d.get("secret"))
+        if d.get("password"):
+            d["password"] = _mask_tail(d.get("password"))
+        if d.get("uid"):
+            d["uid"] = _mask_tail(d.get("uid"))
+        return d
+
+    async def get_exchanges_prefer_user_exchanges(self, user_id: str, *, masked: bool = False) -> List[Dict[str, Any]]:
+        """Return exchanges for user preferring `user_exchanges`, falling back to `app_configs`.
+
+        If masked=True, sensitive fields are masked for UI display.
+        """
         user_oid = await self._get_user_oid(user_id)
         if not user_oid:
             return []
 
         doc = await self.db["user_exchanges"].find_one({"userId": user_oid})
         if doc and "exchanges" in doc:
-            return stringify_object_ids(doc.get("exchanges", []))
+            ex_list = stringify_object_ids(doc.get("exchanges", []))
+            return [self._mask_exchange_for_response(e) for e in ex_list] if masked else ex_list
 
         # Fallback to app_configs
         config = await self.db["app_configs"].find_one({"userId": user_oid})
-        return stringify_object_ids((config or {}).get("exchanges", []))
+        ex_list = stringify_object_ids((config or {}).get("exchanges", []))
+        return [self._mask_exchange_for_response(e) for e in ex_list] if masked else ex_list
 
     async def _normalize_exchange_doc(self, exchange_dict: Dict[str, Any]) -> Dict[str, Any]:
         """Ensure exchange subdocument has a stable ObjectId `_id` (for UI edits/removes)."""
@@ -188,6 +224,9 @@ class ConfigRepository:
 
         Writes to `user_exchanges` (primary) and keeps a copy in `app_configs` (secondary).
         This supports the UI behavior of saving the whole config in one call.
+
+        Important: UI may send masked secrets ("***abcd") back.
+        We preserve existing secrets when incoming values are masked/empty/missing.
         """
         user_oid = await self._get_user_oid(user_id)
         if not user_oid:
@@ -195,7 +234,39 @@ class ConfigRepository:
 
         await self._ensure_user_exchanges_doc(user_oid)
 
-        normalized = [await self._normalize_exchange_doc(e) for e in exchanges]
+        # Fetch current to preserve secrets
+        current = await self.get_exchanges_prefer_user_exchanges(user_id, masked=False)
+        by_id = {}
+        by_exid = {}
+        for ex in current:
+            if ex.get("_id") is not None:
+                by_id[str(ex.get("_id"))] = ex
+            if ex.get("exchangeId"):
+                by_exid[str(ex.get("exchangeId"))] = ex
+
+        normalized = []
+        for e in exchanges:
+            ex_new = await self._normalize_exchange_doc(e)
+            existing = None
+            if ex_new.get("_id") is not None and str(ex_new.get("_id")) in by_id:
+                existing = by_id[str(ex_new.get("_id"))]
+            elif ex_new.get("exchangeId") and str(ex_new.get("exchangeId")) in by_exid:
+                existing = by_exid[str(ex_new.get("exchangeId"))]
+
+            if existing:
+                for field in ["apiKey", "secret", "password", "uid"]:
+                    incoming = ex_new.get(field)
+                    if incoming is None:
+                        ex_new[field] = existing.get(field)
+                        continue
+                    if isinstance(incoming, str) and incoming.strip() == "":
+                        ex_new[field] = existing.get(field)
+                        continue
+                    if _is_masked(incoming):
+                        ex_new[field] = existing.get(field)
+                        continue
+
+            normalized.append(ex_new)
 
         res_primary = await self.db["user_exchanges"].update_one(
             {"userId": user_oid},

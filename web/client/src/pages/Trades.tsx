@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { fetchTradeInstancesUnified } from '@/lib/api';
+import { fetchTelegramBots } from '@/lib/api';
 import { TrendingUp, TrendingDown, Filter, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { useSocket } from '@/_core/hooks/useSocket';
@@ -33,8 +33,8 @@ export default function Trades() {
   const { user } = useAuth({ redirectOnUnauthenticated: true });
   const queryClient = useQueryClient();
   const { data: bots, isLoading, refetch } = useQuery({
-    queryKey: ['trades_unified', user?.openId],
-    queryFn: () => fetchTradeInstancesUnified(),
+    queryKey: ['telegram_trades', user?.openId],
+    queryFn: () => fetchTelegramBots(),
     enabled: !!user?.openId
   });
   const [filterMarket, setFilterMarket] = useState<'all' | 'CEX' | 'DEX'>('all');
@@ -46,10 +46,10 @@ export default function Trades() {
 
   // Escuchar actualizaciones de bots por socket
   useEffect(() => {
-    if (lastMessage && (lastMessage.event === 'bot_update' || lastMessage.event === 'trade_update' || lastMessage.event === 'telegram_trade_update')) {
+    if (lastMessage && (lastMessage.event === 'telegram_trade_new' || lastMessage.event === 'telegram_trade_update')) {
       const updatedData = lastMessage.data;
 
-      queryClient.setQueryData(['trades_unified', user?.openId], (oldData: any[] | undefined) => {
+      queryClient.setQueryData(['telegram_trades', user?.openId], (oldData: any[] | undefined) => {
         if (!oldData) return [updatedData]; // Si es nuevo y no hay datos
 
         // Verificar si ya existe (por id o _id)
@@ -197,6 +197,7 @@ export default function Trades() {
                   <th className="px-6 py-3 text-left text-xs font-bold text-slate-400 uppercase tracking-wider">ROI</th>
                   <th className="px-6 py-3 text-left text-xs font-bold text-slate-400 uppercase tracking-wider">Modo</th>
                   <th className="px-6 py-3 text-left text-xs font-bold text-slate-400 uppercase tracking-wider">Estado</th>
+                  <th className="px-6 py-3 text-left text-xs font-bold text-slate-400 uppercase tracking-wider">Actividad</th>
                   <th className="px-6 py-3 text-left text-xs font-bold text-slate-400 uppercase tracking-wider">Fecha</th>
                 </tr>
               </thead>
@@ -205,10 +206,14 @@ export default function Trades() {
                   <tr key={bot.id || bot._id} className="border-b border-slate-800 hover:bg-slate-800/30 transition-colors">
                     <td className="px-6 py-4 text-sm font-bold text-white">{bot.symbol}</td>
                     <td className="px-6 py-4 text-sm">
-                      <div className="flex items-center gap-2">
-                        {bot.side === 'LONG' ? <TrendingUp className="text-green-500" size={16} /> : <TrendingDown className="text-red-500" size={16} />}
-                        <span className={bot.side === 'LONG' ? 'text-green-500' : 'text-red-500'}>{bot.side}</span>
-                      </div>
+                      {bot.side ? (
+                        <div className="flex items-center gap-2">
+                          {bot.side === 'LONG' ? <TrendingUp className="text-green-500" size={16} /> : <TrendingDown className="text-red-500" size={16} />}
+                          <span className={bot.side === 'LONG' ? 'text-green-500' : 'text-red-500'}>{bot.side}</span>
+                        </div>
+                      ) : (
+                        <span className="text-slate-500">—</span>
+                      )}
                     </td>
                     <td className="px-6 py-4 text-sm text-slate-300">{bot.marketType}</td>
                     <td className="px-6 py-4 text-sm text-slate-300 font-mono">${(bot.entryPrice ?? 0).toFixed(4)}</td>
@@ -218,7 +223,7 @@ export default function Trades() {
                     <td className="px-6 py-4 text-sm text-blue-400 text-xs">
                         {bot.takeProfits?.length} Niveles
                     </td>
-                    <td className="px-6 py-4 text-sm text-slate-300">${(bot.investment ?? 0).toFixed(0)}</td>
+                    <td className="px-6 py-4 text-sm text-slate-300">${(bot.investment ?? bot.amount ?? 0).toFixed(0)}</td>
                     <td className="px-6 py-4 text-sm font-bold">
                         <span className={(bot.roi ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}>
                             {(bot.roi ?? 0).toFixed(2)}%
@@ -235,10 +240,28 @@ export default function Trades() {
                         <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
                             bot.status === 'active' ? 'bg-green-500/10 text-green-500' : 
                             bot.status === 'waiting_entry' ? 'bg-blue-500/10 text-blue-500' :
-                            'bg-slate-700 text-slate-400'
+                            bot.status === 'paused' ? 'bg-slate-700 text-slate-300' :
+                            'bg-slate-800 text-slate-400'
                         }`}>
-                            {bot.status?.replace('_', ' ')}
+                            {bot.status === 'waiting_entry' ? 'ESPERANDO ENTRADA' : (bot.status?.replace('_', ' ') || '—')}
                         </span>
+                    </td>
+                    <td className="px-6 py-4 text-sm">
+                      {(() => {
+                        const status = (bot.status || '').toString();
+
+                        const active = (status === 'active' || status === 'waiting_entry');
+
+                        return (
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${
+                            active
+                              ? 'bg-green-500/10 text-green-500 border-green-500/20'
+                              : 'bg-slate-700/40 text-slate-400 border-slate-600/30'
+                          }`}>
+                            {active ? 'ACTIVO' : 'INACTIVO'}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="px-6 py-4 text-xs text-slate-500">
                         {new Date(bot.createdAt).toLocaleString()}

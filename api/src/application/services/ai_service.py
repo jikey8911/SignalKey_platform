@@ -35,13 +35,16 @@ class AIService:
                 is_safe=analysis.is_safe,
                 risk_score=analysis.risk_score,
                 parameters={
+                    # propagate direction so downstream adapters can build SignalAnalysis correctly
+                    "direction": getattr(analysis, "direction", None).value if getattr(analysis, "direction", None) else None,
                     "entry_price": analysis.parameters.entry_price,
                     "entry_type": analysis.parameters.entry_type,
-                    "tp": [{"price": t.price, "percent": t.percent} for t in analysis.parameters.tp],
+                    "tp": [{"price": t.price, "percent": t.percent, "qty": getattr(t, "qty", None), "status": getattr(t, "status", "pending")} for t in analysis.parameters.tp],
                     "sl": analysis.parameters.sl,
                     "leverage": analysis.parameters.leverage,
                     "amount": analysis.parameters.amount,
-                    "network": analysis.parameters.network
+                    "investment": analysis.parameters.investment,
+                    "network": analysis.parameters.network,
                 }
             ))
         return results

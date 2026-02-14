@@ -1,11 +1,14 @@
 from datetime import datetime
 from typing import List, Dict, Any
 import logging
+from bson import ObjectId
+
 from api.src.domain.entities.signal import Signal, SignalStatus, SignalAnalysis, Decision, Direction, RawSignal
 from api.src.domain.ports.output.signal_repository import ISignalRepository
 from api.src.domain.ports.output.ai_port import IAIPort
 from api.src.domain.ports.output.notification_port import INotificationPort
 from api.src.domain.ports.output.telegram_repository_port import ITelegramSignalRepository, ITelegramTradeRepository
+from api.src.adapters.driven.persistence.mongodb import db as mongo_db
 
 logger = logging.getLogger(__name__)
 
@@ -74,22 +77,93 @@ class ProcessSignalUseCase:
                 if status == SignalStatus.ACCEPTED:
                     # Guardar en colección específica de Telegram para histórico/estadísticas (aprobada o rechazada)
                     chat_id = source.replace("telegram_", "", 1) if isinstance(source, str) and source.startswith("telegram_") else None
+                    now = datetime.utcnow()
                     telegram_signal_doc = {
                         "signalId": current_id,
-                        "userId": user_id,
+                        # store ObjectId for consistency; also keep openId for debugging
+                        "userId": (config or {}).get("userId") or user_id,
+                        "openId": user_id,
                         "source": source,
                         "chatId": chat_id,
                         "status": str(status),
                         "analysis": update_data,
-                        "timestamp": datetime.utcnow(),
+                        # For UI/debugging: explicit creation time
+                        "createdAt": now,
+                        # Kept for backward compatibility with existing docs
+                        "timestamp": now,
                     }
                     await self.telegram_signal_repository.save_signal(telegram_signal_doc)
 
                     if analysis.decision == Decision.REJECTED or analysis.direction == Direction.HOLD:
                         continue
 
-                    # 4. PASO CRÍTICO: Crear el Trade y activar el flujo de SignalKey
+                    # 4. PASO CRÍTICO: Crear el Bot (1:1 con la señal) + Trade workflow
                     if analysis.is_safe:
+                        # Create/Upsert telegram_bots (ObjectId) 1:1 with signalId
+                        try:
+                            bot_oid = ObjectId(current_id) if isinstance(current_id, str) and len(current_id) == 24 else ObjectId()
+
+                            cfg_user_id = (config or {}).get("userId")
+                            user_oid = None
+                            if isinstance(cfg_user_id, ObjectId):
+                                user_oid = cfg_user_id
+                            elif isinstance(cfg_user_id, str) and len(cfg_user_id) == 24:
+                                try:
+                                    user_oid = ObjectId(cfg_user_id)
+                                except Exception:
+                                    user_oid = None
+
+                            # Fallback: lookup user by openId so telegram_bots always stores ObjectId
+                            if user_oid is None:
+                                try:
+                                    u = await mongo_db["users"].find_one({"openId": user_id})
+                                    if u and isinstance(u.get("_id"), ObjectId):
+                                        user_oid = u["_id"]
+                                except Exception:
+                                    user_oid = None
+
+                            bot_doc = {
+                                "_id": bot_oid,
+                                "signalId": bot_oid,
+                                "source": source,
+                                "chatId": chat_id,
+                                "symbol": analysis.symbol,
+                                "side": analysis.direction.value,
+                                "marketType": analysis.market_type.value,
+                                "mode": "simulated" if (config or {}).get("demoMode", True) else "real",
+                                "exchangeId": ((config or {}).get("exchanges") or [{}])[0].get("exchangeId", "binance"),
+                                "status": "waiting_entry",
+                                "config": {
+                                    "entryPrice": analysis.parameters.entry_price,
+                                    "stopLoss": analysis.parameters.sl,
+                                    "takeProfits": [
+                                        {
+                                            "price": tp.price,
+                                            "percent": tp.percent,
+                                            "qty": getattr(tp, "qty", None),
+                                            "status": getattr(tp, "status", "pending"),
+                                        }
+                                        for tp in (analysis.parameters.tp or [])
+                                    ],
+                                    "leverage": analysis.parameters.leverage,
+                                    "investment": analysis.parameters.investment or analysis.parameters.amount,
+                                },
+                                "createdAt": datetime.utcnow(),
+                            }
+
+                            # Upsert
+                            # NOTE: do not include the same field in $setOnInsert and $set (Mongo conflict)
+                            await mongo_db["telegram_bots"].update_one(
+                                {"_id": bot_oid},
+                                {
+                                    "$setOnInsert": bot_doc,
+                                    "$set": {"updatedAt": datetime.utcnow(), "userId": user_oid},
+                                },
+                                upsert=True,
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed creating telegram_bots doc for signal {current_id}: {e}")
+
                         # Usar el servicio de trades inyectado
                         result = await self.trade_service.create_telegram_trade(analysis, user_id, config, signal_id=current_id)
                         

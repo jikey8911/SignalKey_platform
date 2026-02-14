@@ -27,6 +27,7 @@ class ConfigUpdate(BaseModel):
     openaiApiKey: Optional[str] = None
     perplexityApiKey: Optional[str] = None
     grokApiKey: Optional[str] = None
+    groqApiKey: Optional[str] = None
     gmgnApiKey: Optional[str] = None
     zeroExApiKey: Optional[str] = None
     telegramApiId: Optional[str] = None
@@ -75,7 +76,7 @@ async def get_config(
 
         # Prefer exchanges from user_exchanges (with fallback to app_configs)
         try:
-            config["exchanges"] = await config_repo.get_exchanges_prefer_user_exchanges(user_id)
+            config["exchanges"] = await config_repo.get_exchanges_prefer_user_exchanges(user_id, masked=True)
         except Exception:
             # keep whatever is in config
             pass
@@ -139,7 +140,7 @@ async def update_config(
         # Prefer exchanges from user_exchanges (with fallback to app_configs)
         if config is not None:
             try:
-                config["exchanges"] = await config_repo.get_exchanges_prefer_user_exchanges(user_id)
+                config["exchanges"] = await config_repo.get_exchanges_prefer_user_exchanges(user_id, masked=True)
             except Exception:
                 pass
 
@@ -165,7 +166,7 @@ async def get_exchanges(
     try:
         user_id = current_user["openId"]
         
-        exchanges = await config_repo.get_exchanges_prefer_user_exchanges(user_id)
+        exchanges = await config_repo.get_exchanges_prefer_user_exchanges(user_id, masked=True)
         return {"exchanges": exchanges}
     
     except HTTPException:
