@@ -47,18 +47,29 @@ class AIAdapter(IAIPort):
                 amount=p.get("amount"),
                 investment=p.get("investment"),
                 network=p.get("network"),
+                exchangeId=p.get("exchangeId") or p.get("exchange_id"),
+                validForMinutes=p.get("validForMinutes") or p.get("valid_for_minutes"),
             )
 
             # decision/direction values
             decision_val = a.decision
             direction_val = p.get("direction") or getattr(a, "direction", None) or getattr(a, "side", None) or "HOLD"
 
+            # Normalize market type: if legacy returns "CEX", infer SPOT vs FUTURES by leverage
+            mt = getattr(a, "market_type", None)
+            if str(mt).upper() == "CEX":
+                try:
+                    lev = int(getattr(params, "leverage", 1) or 1)
+                except Exception:
+                    lev = 1
+                mt = "FUTURES" if lev > 1 else "SPOT"
+
             domain_analyses.append(
                 SignalAnalysis(
                     decision=Decision(decision_val) if decision_val in [d.value for d in Decision] else Decision.APPROVED,
                     direction=Direction(direction_val) if direction_val in [d.value for d in Direction] else Direction.HOLD,
                     symbol=a.symbol,
-                    market_type=MarketType(a.market_type) if a.market_type in [m.value for m in MarketType] else MarketType.SPOT,
+                    market_type=MarketType(mt) if str(mt) in [m.value for m in MarketType] else MarketType.SPOT,
                     confidence=a.confidence,
                     reasoning=a.reasoning,
                     is_safe=a.is_safe,

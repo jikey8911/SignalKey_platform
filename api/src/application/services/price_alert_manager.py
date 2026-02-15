@@ -13,6 +13,7 @@ class PriceAlertManager:
         exchange_id: str,
         symbol: str,
         target_price: float,
+        market_type: str = None,
         threshold: float = 0.005,
         threshold_percent: float = None,
     ):
@@ -32,7 +33,7 @@ class PriceAlertManager:
             while True:
                 # Usamos el stream más ligero: Ticker
                 # Nota: El servicio debe devolver el último dato conocido
-                ticker = await self.stream_service.subscribe_ticker(exchange_id, symbol)
+                ticker = await self.stream_service.subscribe_ticker(exchange_id, symbol, market_type=market_type)
                 
                 current_price = ticker.get('last', 0)
                 if current_price > 0:

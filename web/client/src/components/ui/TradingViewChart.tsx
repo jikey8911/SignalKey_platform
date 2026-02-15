@@ -16,6 +16,7 @@ interface TradeMarker {
     side: 'BUY' | 'SELL';
     price: number;
     label?: string;
+    id?: string;
 }
 
 interface ChartProps {
@@ -109,8 +110,9 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
                     color: t.side === 'BUY' ? '#22c55e' : '#ef4444',
                     shape: t.side === 'BUY' ? 'arrowUp' : 'arrowDown',
                     text: t.label || t.side,
-                    size: 2
-                } as SeriesMarker<Time>;
+                    size: 2,
+                    id: t.id,
+                } as any;
             })
             .filter((m): m is SeriesMarker<Time> => m !== null)
             .sort((a, b) => (a.time as number) - (b.time as number));
@@ -183,11 +185,34 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
         };
     }, [colors, height]);
 
+    const lastAppliedRef = useRef<{ len: number; lastTime: number } | null>(null);
+
     // EFECTO 1.5: Actualizar Datos (Sin recrear gráfico)
     useEffect(() => {
-        if (seriesRef.current && formattedData.length > 0) {
+        if (!seriesRef.current || formattedData.length === 0) return;
+
+        const last = formattedData[formattedData.length - 1];
+        const lastTime = Number(last.time as any);
+        const prev = lastAppliedRef.current;
+
+        // First load or big jump: setData
+        if (!prev || formattedData.length < prev.len || formattedData.length - prev.len > 5) {
+            seriesRef.current.setData(formattedData);
+            lastAppliedRef.current = { len: formattedData.length, lastTime };
+            try { chartRef.current?.timeScale().fitContent(); } catch {}
+            return;
+        }
+
+        // Incremental updates: update last candle (and possibly append)
+        // lightweight-charts update() can handle both same-time updates and next-bar append
+        try {
+            seriesRef.current.update(last);
+        } catch {
+            // fallback
             seriesRef.current.setData(formattedData);
         }
+
+        lastAppliedRef.current = { len: formattedData.length, lastTime };
     }, [formattedData]);
 
     // EFECTO 2: Actualizar Marcadores Dinámicamente
@@ -205,20 +230,17 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
     useEffect(() => {
         if (!chartRef.current || formattedData.length === 0) return;
 
-        try {
-            // "Centrar" las velas: fitContent es lo más robusto para lo que pide el usuario
-            chartRef.current.timeScale().fitContent();
+        // Defer a tick so DOM sizing + setData settle before fitting
+        const t = window.setTimeout(() => {
+            try {
+                chartRef.current?.timeScale().fitContent();
+            } catch (e) {
+                console.warn("Auto-centering failed", e);
+            }
+        }, 0);
 
-            // Si el usuario quiere ver los últimos N datos específicamente:
-            /*
-            const lastTime = formattedData[formattedData.length - 1].time as number;
-            const fromTime = lastTime - (secondsPerCandle * 100);
-            chartRef.current.timeScale().setVisibleRange({ from: fromTime as Time, to: lastTime as Time });
-            */
-        } catch (e) {
-            console.warn("Auto-centering failed", e);
-        }
-    }, [symbol, timeframe]); // Solo disparar cuando cambia el bot (representado por symbol/timeframe)
+        return () => window.clearTimeout(t);
+    }, [symbol, timeframe, formattedData.length]);
 
     return <div ref={chartContainerRef} className="w-full shadow-xl rounded-lg overflow-hidden border border-slate-800" />;
 };

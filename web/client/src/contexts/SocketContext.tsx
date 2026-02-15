@@ -21,6 +21,7 @@ export function SocketProvider({ children }: { children: ReactNode }) {
     const [isConnected, setIsConnected] = useState(false);
     const [lastMessage, setLastMessage] = useState<SocketMessage | null>(null);
     const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
     const connect = useCallback(() => {
         if (!user?.openId) return;
@@ -49,6 +50,18 @@ export function SocketProvider({ children }: { children: ReactNode }) {
                 clearTimeout(reconnectTimeoutRef.current);
                 reconnectTimeoutRef.current = null;
             }
+
+            // Keepalive ping (helps prevent idle disconnects)
+            if (pingIntervalRef.current) clearInterval(pingIntervalRef.current);
+            pingIntervalRef.current = setInterval(() => {
+                try {
+                    if (socket.readyState === WebSocket.OPEN) {
+                        socket.send(JSON.stringify({ action: 'PING' }));
+                    }
+                } catch (e) {
+                    // ignore
+                }
+            }, 20000);
         };
 
         socket.onmessage = (event) => {
@@ -63,6 +76,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
         socket.onclose = (event) => {
             console.log(`[WebSocket] Desconectado: ${event.code} ${event.reason}`);
             setIsConnected(false);
+            if (pingIntervalRef.current) {
+                clearInterval(pingIntervalRef.current);
+                pingIntervalRef.current = null;
+            }
 
             // Solo reconectar si el cierre no fue intencional y el usuario sigue autenticado
             if (socketRef.current === socket && user?.openId) {
@@ -92,6 +109,10 @@ export function SocketProvider({ children }: { children: ReactNode }) {
             if (reconnectTimeoutRef.current) {
                 clearTimeout(reconnectTimeoutRef.current);
                 reconnectTimeoutRef.current = null;
+            }
+            if (pingIntervalRef.current) {
+                clearInterval(pingIntervalRef.current);
+                pingIntervalRef.current = null;
             }
 
             if (socketRef.current) {

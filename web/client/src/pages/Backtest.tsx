@@ -94,7 +94,7 @@ export default function Backtest() {
 
   // Exchange, Market, Symbol selection
   const [selectedExchange, setSelectedExchange] = useState<string>('');
-  const [selectedMarket, setSelectedMarket] = useState<string>('spot');
+  const [selectedMarket, setSelectedMarket] = useState<string>('SPOT');
   const [selectedSymbol, setSelectedSymbol] = useState<string>('');
 
   // Backtest config
@@ -119,16 +119,17 @@ export default function Backtest() {
 
   useEffect(() => {
     setLoadingExchanges(true);
-    console.log("[Backtest] Fetching exchanges from:", `${CONFIG.API_BASE_URL}/market/exchanges`);
-    fetch(`${CONFIG.API_BASE_URL}/market/exchanges`)
+    console.log("[Backtest] Fetching user exchanges from:", `${CONFIG.API_BASE_URL}/backtest/exchanges`);
+    fetch(`${CONFIG.API_BASE_URL}/backtest/exchanges`, { credentials: 'include' })
       .then(res => {
         if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
         return res.json();
       })
       .then(data => {
-        console.log("[Backtest] Exchanges loaded:", data);
+        console.log("[Backtest] User exchanges loaded:", data);
         if (Array.isArray(data)) {
-          setExchanges(data.map(e => ({ exchangeId: e, isActive: true })));
+          // API already returns [{exchangeId,isActive}]
+          setExchanges(data.filter((x: any) => x?.exchangeId));
         }
       })
       .catch(err => {
@@ -150,24 +151,8 @@ export default function Backtest() {
     };
   }, [user?.openId]);
 
-  // Fetch Markets
-  const [markets, setMarkets] = useState<string[]>([]);
-  const [loadingMarkets, setLoadingMarkets] = useState(false);
-
-  const loadMarkets = useCallback((exchangeId: string) => {
-    if (!exchangeId) {
-      setMarkets([]);
-      return;
-    }
-    setLoadingMarkets(true);
-    fetch(`${CONFIG.API_BASE_URL}/market/exchanges/${exchangeId}/markets`)
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) setMarkets(data);
-      })
-      .catch(err => console.error("Error fetching markets:", err))
-      .finally(() => setLoadingMarkets(false));
-  }, []);
+  // Markets are fixed for Backtest UI
+  const marketOptions = ['SPOT', 'FUTURES', 'DEX'];
 
   // Fetch Symbols
   const [symbols, setSymbols] = useState<Symbol[]>([]);
@@ -175,45 +160,69 @@ export default function Backtest() {
 
   const loadSymbols = useCallback((exchangeId: string, marketType: string) => {
     if (!exchangeId || !marketType) return;
+
+    const mtUi = String(marketType).toUpperCase();
+    if (mtUi === 'DEX') {
+      setSymbols([]);
+      return;
+    }
+
+    // Map UI SPOT/FUTURES to CCXT market types
+    let mt = 'spot';
+    if (mtUi === 'FUTURES') {
+      const ex = String(exchangeId).toLowerCase();
+      // CCXT: okx futures => swap; binance futures => future
+      mt = ex === 'binance' ? 'future' : 'swap';
+    }
+
     setLoadingSymbols(true);
-    fetch(`${CONFIG.API_BASE_URL}/market/exchanges/${exchangeId}/markets/${marketType}/symbols`)
+    fetch(`${CONFIG.API_BASE_URL}/backtest/symbols/${encodeURIComponent(exchangeId)}?market_type=${encodeURIComponent(mt)}`, { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
-        if (Array.isArray(data)) {
-          const mapped: Symbol[] = data.map(s => ({
-            symbol: s,
-            baseAsset: s.split('/')[0] || '',
-            quoteAsset: s.split('/')[1] || '',
-            price: 0,
-            priceChange: 0,
-            priceChangePercent: 0,
-            volume: 0
-          }));
+        const arr = Array.isArray(data) ? data : (Array.isArray(data?.symbols) ? data.symbols : []);
+        if (Array.isArray(arr)) {
+          const mapped: Symbol[] = arr.map((s: any) => {
+            const sym = (typeof s === 'string') ? s : (s.symbol || '');
+            return {
+              symbol: sym,
+              baseAsset: sym.split('/')[0] || '',
+              quoteAsset: sym.split('/')[1] || '',
+              price: (typeof s === 'object' && s?.price) ? Number(s.price) : 0,
+              priceChange: (typeof s === 'object' && s?.priceChange) ? Number(s.priceChange) : 0,
+              priceChangePercent: (typeof s === 'object' && s?.priceChangePercent) ? Number(s.priceChangePercent) : 0,
+              volume: (typeof s === 'object' && s?.volume) ? Number(s.volume) : 0,
+            };
+          });
           setSymbols(mapped);
-          // Auto-select first symbol if none selected
-          if (mapped.length > 0 && !selectedSymbol) {
-            // Use ref or handle this in a way that doesn't cause loops
-          }
         }
       })
-      .catch(err => console.error("Error fetching symbols:", err))
+      .catch(err => console.error('Error fetching symbols:', err))
       .finally(() => setLoadingSymbols(false));
   }, [selectedSymbol]);
 
   // Handle Exchange Change
   const handleExchangeChange = (exchangeId: string) => {
     setSelectedExchange(exchangeId);
-    loadMarkets(exchangeId);
+
+    // Default to SPOT on exchange change
+    setSelectedMarket('SPOT');
+
     // Clear dependent states
     setSymbols([]);
     setSelectedSymbol('');
+
+    // Auto-load symbols for SPOT
+    if (exchangeId) {
+      loadSymbols(exchangeId, 'SPOT');
+    }
   };
 
   // Handle Market Change
   const handleMarketChange = (marketType: string) => {
-    setSelectedMarket(marketType);
+    const mt = String(marketType).toUpperCase();
+    setSelectedMarket(mt);
     if (selectedExchange) {
-      loadSymbols(selectedExchange, marketType);
+      loadSymbols(selectedExchange, mt);
     }
     setSelectedSymbol('');
   };
@@ -366,30 +375,7 @@ export default function Backtest() {
     setIsScanning(false);
   };
 
-  useEffect(() => {
-    if (!selectedExchange || !selectedMarket) return;
-    setLoadingSymbols(true);
-    fetch(`${CONFIG.API_BASE_URL}/market/exchanges/${selectedExchange}/markets/${selectedMarket}/symbols`)
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          // Map string[] to Symbol interface
-          // Note: The API returns strings, so we mock price/change data or leave 0
-          const mapped: Symbol[] = data.map(s => ({
-            symbol: s,
-            baseAsset: s.split('/')[0] || '',
-            quoteAsset: s.split('/')[1] || '',
-            price: 0,
-            priceChange: 0,
-            priceChangePercent: 0,
-            volume: 0
-          }));
-          setSymbols(mapped);
-        }
-      })
-      .catch(err => console.error("Error fetching symbols:", err))
-      .finally(() => setLoadingSymbols(false));
-  }, [selectedExchange, selectedMarket]);
+  // (Removed) legacy symbols loader via /market/...; we now load via loadSymbols() using /backtest/symbols.
 
   // Fetch user config and auto-select active exchange
   useEffect(() => {
@@ -421,14 +407,7 @@ export default function Backtest() {
     }
   }, [exchanges, selectedExchange]);
 
-  // Reset/Default Market
-  useEffect(() => {
-    if (markets.length > 0 && (!selectedMarket || !markets.includes(selectedMarket))) {
-      // Prefer 'spot' if available
-      if (markets.includes('spot')) setSelectedMarket('spot');
-      else setSelectedMarket(markets[0]);
-    }
-  }, [markets, selectedMarket]);
+  // Market is fixed options now; default is set on exchange change.
 
 
   // Fetch Virtual Balance
@@ -668,25 +647,18 @@ export default function Backtest() {
                 <label className="block text-sm font-semibold text-foreground mb-2">
                   Mercado
                 </label>
-                {loadingMarkets ? (
-                  <div className="flex items-center gap-2 px-4 py-2 border border-slate-700 rounded-lg bg-slate-900">
-                    <Loader2 className="animate-spin" size={16} />
-                    <span className="text-muted-foreground">Cargando...</span>
-                  </div>
-                ) : (
-                  <select
-                    value={selectedMarket}
-                    onChange={(e) => handleMarketChange(e.target.value)}
-                    disabled={!selectedExchange || markets.length === 0}
-                    className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
-                  >
-                    {markets.map((market: string) => (
-                      <option key={market} value={market}>
-                        {market.toUpperCase()}
-                      </option>
-                    ))}
-                  </select>
-                )}
+                <select
+                  value={selectedMarket}
+                  onChange={(e) => handleMarketChange(e.target.value)}
+                  disabled={!selectedExchange}
+                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                >
+                  {marketOptions.map((m) => (
+                    <option key={m} value={m} disabled={m === 'DEX'}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div>
@@ -1158,25 +1130,18 @@ export default function Backtest() {
                 <label className="block text-sm font-semibold text-foreground mb-2">
                   Mercado
                 </label>
-                {loadingMarkets ? (
-                  <div className="flex items-center gap-2 px-4 py-2 bg-slate-900 rounded-lg border border-slate-700 h-[42px]">
-                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
-                    <span className="text-muted-foreground text-sm">Cargando...</span>
-                  </div>
-                ) : (
-                  <select
-                    value={selectedMarket}
-                    onChange={(e) => handleMarketChange(e.target.value)}
-                    disabled={!selectedExchange}
-                    className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
-                  >
-                    {markets.map((market: string) => (
-                      <option key={market} value={market}>
-                        {market.toUpperCase()}
-                      </option>
-                    ))}
-                  </select>
-                )}
+                <select
+                  value={selectedMarket}
+                  onChange={(e) => handleMarketChange(e.target.value)}
+                  disabled={!selectedExchange}
+                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                >
+                  {marketOptions.map((m) => (
+                    <option key={m} value={m} disabled={m === 'DEX'}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* Timeframe */}

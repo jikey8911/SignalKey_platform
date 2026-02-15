@@ -82,7 +82,7 @@ class TelegramTradeService:
 
                     logger.info(f"💤 Trade {trade_id} durmiendo. Esperando proximidad (0.5%) a entrada {entry_price}")
                     await self.alert_manager.wait_for_proximity(
-                        exchange_id, symbol, float(entry_price), threshold_percent=0.5
+                        exchange_id, symbol, float(entry_price), market_type=trade_doc.get("marketType"), threshold_percent=0.5
                     )
                     logger.info(f"🔔 ¡DESPERTANDO! {symbol} cerca de entrada. Activando monitoreo fuerte.")
                     sleep_targets = [float(entry_price)]
@@ -92,7 +92,7 @@ class TelegramTradeService:
                     sl = trade_doc.get("stopLoss")
 
                     # Choose the nearest pending TP to the *current* price
-                    ticker = await self.stream_service.subscribe_ticker(exchange_id, symbol)
+                    ticker = await self.stream_service.subscribe_ticker(exchange_id, symbol, market_type=trade_doc.get("marketType"))
                     current_price = float(ticker.get("last", 0) or 0)
 
                     pending_tps = []
@@ -113,12 +113,12 @@ class TelegramTradeService:
                     tasks = []
                     if sl:
                         tasks.append(asyncio.create_task(
-                            self.alert_manager.wait_for_proximity(exchange_id, symbol, float(sl), threshold_percent=0.5)
+                            self.alert_manager.wait_for_proximity(exchange_id, symbol, float(sl), market_type=trade_doc.get("marketType"), threshold_percent=0.5)
                         ))
                         sleep_targets.append(float(sl))
                     if next_tp is not None:
                         tasks.append(asyncio.create_task(
-                            self.alert_manager.wait_for_proximity(exchange_id, symbol, float(next_tp), threshold_percent=0.5)
+                            self.alert_manager.wait_for_proximity(exchange_id, symbol, float(next_tp), market_type=trade_doc.get("marketType"), threshold_percent=0.5)
                         ))
                         sleep_targets.append(float(next_tp))
 
@@ -168,7 +168,7 @@ class TelegramTradeService:
         entry_price = trade.get("entryPrice")
 
         while True:
-            ticker_data = await self.stream_service.subscribe_ticker(exchange_id, symbol)
+            ticker_data = await self.stream_service.subscribe_ticker(exchange_id, symbol, market_type=trade.get("marketType"))
             current_price = float(ticker_data.get("last", 0) or 0)
 
             if current_price > 0:
@@ -195,10 +195,14 @@ class TelegramTradeService:
         Crea una nueva operación basada en una señal de Telegram.
         """
         try:
-            symbol = analysis.symbol
-            exchange_id = "binance"
-            if config.get("exchanges") and len(config["exchanges"]) > 0:
-                exchange_id = config["exchanges"][0].get("exchangeId", "binance").lower()
+            symbol = str(analysis.symbol or "").strip().replace("#", "")
+
+            # Prefer explicit overrides (from telegram_bots) over global config.exchanges[0]
+            exchange_id = (config.get("telegramExchangeId") or config.get("telegram_exchange_id") or "").strip().lower()
+            if not exchange_id:
+                exchange_id = "binance"
+                if config.get("exchanges") and len(config["exchanges"]) > 0:
+                    exchange_id = config["exchanges"][0].get("exchangeId", "binance").lower()
 
             mode = "simulated" if config.get("demoMode", True) else "real"
             

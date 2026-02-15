@@ -18,11 +18,11 @@ class MarketStreamService:
     def add_listener(self, callback: Callable):
         self.listeners.add(callback)
 
-    async def subscribe_ticker(self, exchange_id: str, symbol: str) -> Dict[str, Any]:
-        task_key = f"ticker:{exchange_id}:{symbol}"
+    async def subscribe_ticker(self, exchange_id: str, symbol: str, market_type: str = None) -> Dict[str, Any]:
+        task_key = f"ticker:{exchange_id}:{market_type or 'spot'}:{symbol}"
         if task_key not in self.active_tasks:
             self.active_tasks[task_key] = asyncio.create_task(
-                self._ticker_loop(exchange_id, symbol)
+                self._ticker_loop(exchange_id, symbol, market_type)
             )
             logger.info(f"📡 Suscripción Ticker activada: {task_key}")
         
@@ -54,12 +54,13 @@ class MarketStreamService:
             task.cancel()
             logger.info(f"🛑 Suscripción desactivada: {task_key}")
 
-    async def _ticker_loop(self, exchange_id: str, symbol: str):
-        task_key = f"ticker:{exchange_id}:{symbol}"
-        async for ticker in ccxt_service.watch_ticker(exchange_id, symbol):
+    async def _ticker_loop(self, exchange_id: str, symbol: str, market_type: str = None):
+        task_key = f"ticker:{exchange_id}:{market_type or 'spot'}:{symbol}"
+        async for ticker in ccxt_service.watch_ticker(exchange_id, symbol, market_type=market_type):
             self.latest_data[task_key] = ticker
             await self._notify("ticker_update", {
                 "exchange": exchange_id,
+                "marketType": market_type or "SPOT",
                 "symbol": symbol,
                 "ticker": ticker
             })

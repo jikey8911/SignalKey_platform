@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import logging
 from bson import ObjectId
@@ -99,6 +99,61 @@ class ProcessSignalUseCase:
 
                     # 4. PASO CRÍTICO: Crear el Bot (1:1 con la señal) + Trade workflow
                     if analysis.is_safe:
+                        # Limit active telegram bots (0 = unlimited)
+                        try:
+                            max_tg = int(((config or {}).get("botStrategy") or {}).get("maxActiveTelegramBots") or 0)
+                        except Exception:
+                            max_tg = 0
+
+                        if max_tg and max_tg > 0:
+                            try:
+                                # Prefer ObjectId user_oid if available
+                                q_user = (config or {}).get("userId")
+                                if user_oid is not None:
+                                    q_user = user_oid
+
+                                active_count = await mongo_db["telegram_bots"].count_documents({
+                                    "userId": q_user,
+                                    "status": {"$in": ["waiting_entry", "active"]},
+                                })
+                                if active_count >= max_tg:
+                                    await self.signal_repository.update(current_id, {
+                                        "status": SignalStatus.REJECTED,
+                                        "executionMessage": f"Max active telegram bots reached ({max_tg}).",
+                                    })
+                                    continue
+                            except Exception as e:
+                                logger.warning(f"Failed checking maxActiveTelegramBots: {e}")
+
+                        # Validate symbol exists on chosen exchange/market before creating bot
+                        try:
+                            from api.src.adapters.driven.exchange.market_validation import is_symbol_supported
+
+                            chosen_exchange = None
+                            try:
+                                chosen_exchange = (analysis.parameters.exchangeId or "").strip().lower()
+                            except Exception:
+                                chosen_exchange = None
+
+                            if not chosen_exchange:
+                                chosen_exchange = ((config or {}).get("exchanges") or [{}])[0].get("exchangeId", "binance")
+
+                            chosen_market = None
+                            try:
+                                chosen_market = analysis.market_type.value
+                            except Exception:
+                                chosen_market = None
+
+                            ok = await is_symbol_supported(chosen_exchange, analysis.symbol, market_type=chosen_market)
+                            if not ok:
+                                await self.signal_repository.update(current_id, {
+                                    "status": SignalStatus.REJECTED,
+                                    "executionMessage": f"Symbol {analysis.symbol} not supported on {chosen_exchange} ({chosen_market})"
+                                })
+                                continue
+                        except Exception as e:
+                            logger.warning(f"Symbol validation skipped due to error: {e}")
+
                         # Create/Upsert telegram_bots (ObjectId) 1:1 with signalId
                         try:
                             bot_oid = ObjectId(current_id) if isinstance(current_id, str) and len(current_id) == 24 else ObjectId()
@@ -131,7 +186,7 @@ class ProcessSignalUseCase:
                                 "side": analysis.direction.value,
                                 "marketType": analysis.market_type.value,
                                 "mode": "simulated" if (config or {}).get("demoMode", True) else "real",
-                                "exchangeId": ((config or {}).get("exchanges") or [{}])[0].get("exchangeId", "binance"),
+                                "exchangeId": (analysis.parameters.exchangeId or ((config or {}).get("exchanges") or [{}])[0].get("exchangeId", "binance")),
                                 "status": "waiting_entry",
                                 "config": {
                                     "entryPrice": analysis.parameters.entry_price,
@@ -151,6 +206,16 @@ class ProcessSignalUseCase:
                                 "createdAt": datetime.utcnow(),
                             }
 
+                            # Expiration countdown (only if IA provided a time window)
+                            try:
+                                vfm = getattr(analysis.parameters, "validForMinutes", None)
+                                if vfm is not None:
+                                    mins = int(vfm)
+                                    if mins > 0:
+                                        bot_doc["expiresAt"] = datetime.utcnow() + timedelta(minutes=mins)
+                            except Exception:
+                                pass
+
                             # Upsert
                             # NOTE: do not include the same field in $setOnInsert and $set (Mongo conflict)
                             await mongo_db["telegram_bots"].update_one(
@@ -164,8 +229,119 @@ class ProcessSignalUseCase:
                         except Exception as e:
                             logger.error(f"Failed creating telegram_bots doc for signal {current_id}: {e}")
 
-                        # Usar el servicio de trades inyectado
-                        result = await self.trade_service.create_telegram_trade(analysis, user_id, config, signal_id=current_id)
+                        # Crear items TP/SL en telegram_trades (1 doc por TP y 1 doc por SL) usando botId
+                        try:
+                            entry_val = analysis.parameters.entry_price
+                            sl_val = analysis.parameters.sl
+                            direction_val = analysis.direction.value if getattr(analysis, "direction", None) else None
+
+                            # Build TP items with numeric targetPrice only
+                            tp_items = []
+                            for tp in (analysis.parameters.tp or []):
+                                try:
+                                    if tp is None:
+                                        continue
+                                    price = getattr(tp, "price", None)
+                                    percent = getattr(tp, "percent", None)
+                                    if price is None or percent is None:
+                                        continue
+                                    price_f = float(price)
+                                    percent_f = float(percent)
+                                    if price_f <= 0 or percent_f <= 0:
+                                        continue
+
+                                    # Direction sanity: LONG => TP above entry; SHORT => TP below entry
+                                    if entry_val is not None and direction_val in ["LONG", "SHORT"]:
+                                        try:
+                                            entry_f = float(entry_val)
+                                            if direction_val == "LONG" and price_f <= entry_f:
+                                                continue
+                                            if direction_val == "SHORT" and price_f >= entry_f:
+                                                continue
+                                        except Exception:
+                                            pass
+
+                                    tp_items.append({
+                                        "targetPrice": price_f,
+                                        "percent": percent_f,
+                                    })
+                                except Exception:
+                                    continue
+
+                            # Order by closeness to entry (if available)
+                            if entry_val is not None:
+                                try:
+                                    entry_f = float(entry_val)
+                                    tp_items.sort(key=lambda x: abs(x["targetPrice"] - entry_f))
+                                except Exception:
+                                    pass
+
+                            # Reset any existing items for this bot (safe at creation time)
+                            await mongo_db["telegram_trades"].delete_many({"userId": user_oid, "botId": bot_oid})
+
+                            docs = []
+                            now = datetime.utcnow()
+
+                            # Entry item
+                            if entry_val is not None:
+                                try:
+                                    docs.append({
+                                        "userId": user_oid,
+                                        "botId": bot_oid,
+                                        "kind": "entry",
+                                        "level": 0,
+                                        "targetPrice": float(entry_val),
+                                        "status": "pending",
+                                        "createdAt": now,
+                                        "updatedAt": now,
+                                    })
+                                except Exception:
+                                    pass
+
+                            # SL item
+                            if sl_val is not None:
+                                try:
+                                    docs.append({
+                                        "userId": user_oid,
+                                        "botId": bot_oid,
+                                        "kind": "sl",
+                                        "level": 0,
+                                        "targetPrice": float(sl_val),
+                                        "status": "active",
+                                        "createdAt": now,
+                                        "updatedAt": now,
+                                    })
+                                except Exception:
+                                    pass
+
+                            # TP items
+                            for idx, tp in enumerate(tp_items, start=1):
+                                docs.append({
+                                    "userId": user_oid,
+                                    "botId": bot_oid,
+                                    "kind": "tp",
+                                    "level": idx,
+                                    "targetPrice": tp["targetPrice"],
+                                    "percent": tp["percent"],
+                                    "status": "pending",
+                                    "createdAt": now,
+                                    "updatedAt": now,
+                                })
+
+                            if docs:
+                                await mongo_db["telegram_trades"].insert_many(docs)
+                        except Exception as e:
+                            logger.error(f"Failed creating telegram_trades items for bot {current_id}: {e}")
+
+                        # Usar el servicio de trades inyectado (workflow legacy)
+                        # Ensure legacy trade uses the bot's exchange/market (not global config.exchanges[0])
+                        cfg2 = dict(config or {})
+                        try:
+                            cfg2["telegramExchangeId"] = bot_doc.get("exchangeId")
+                            cfg2["telegramMarketType"] = bot_doc.get("marketType")
+                        except Exception:
+                            pass
+                        result = await self.trade_service.create_telegram_trade(analysis, user_id, cfg2, signal_id=current_id)
                         
                         final_status = SignalStatus.EXECUTING if result.success else SignalStatus.FAILED
                         await self.signal_repository.update(current_id, {

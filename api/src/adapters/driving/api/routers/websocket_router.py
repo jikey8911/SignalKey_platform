@@ -1,13 +1,16 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
-from typing import Dict, Any
+from typing import Dict, Any, Set, Tuple
 import logging
 import json
+import time
 
 # Imports de tus servicios (Ajusta las rutas según tu estructura real)
 from api.src.adapters.driven.notifications.socket_service import SocketService
 from api.src.domain.ports.output.BotRepository import IBotRepository
 from api.src.domain.ports.output.signal_repository import ISignalRepository
 # from api.src.domain.ports.output.trade_repository import TradeRepository 
+
+from api.src.infrastructure.di.container import container
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,55 @@ from api.src.adapters.driven.persistence.mongodb import db
 
 bot_repo = MongoBotRepository()
 signal_repo = MongoDBSignalRepository(db)
+
+# Track per-websocket active price topics so we can diff subscriptions.
+_ws_price_topics: Dict[int, Set[str]] = {}
+
+# Throttle ticker emits per topic to <= 1 update / 2 seconds.
+_last_price_emit: Dict[str, float] = {}
+_THROTTLE_SECONDS = 2.0
+
+async def _stream_listener(event_type: str, payload: Dict[str, Any]):
+    """Listen to MarketStreamService events and fan-out to subscribed sockets."""
+    if event_type != "ticker_update":
+        return
+
+    try:
+        exchange_id = (payload.get("exchange") or "").lower()
+        symbol = payload.get("symbol")
+        ticker = payload.get("ticker") or {}
+        last = ticker.get("last") if isinstance(ticker, dict) else None
+        if last is None:
+            return
+
+        market_type = payload.get("marketType") or payload.get("market_type") or "SPOT"
+        market_type = str(market_type).upper()
+        if market_type == "CEX":
+            market_type = "SPOT"
+        symbol = str(symbol).strip().replace("#", "")
+        topic = f"price:{exchange_id}:{market_type}:{symbol}"
+
+        now = time.time()
+        last_ts = _last_price_emit.get(topic, 0.0)
+        if (now - last_ts) < _THROTTLE_SECONDS:
+            return
+        _last_price_emit[topic] = now
+
+        await socket_service.emit_to_topic(topic, "price_update", {
+            "exchangeId": exchange_id,
+            "marketType": market_type,
+            "symbol": symbol,
+            "price": float(last),
+            "ts": int(now * 1000),
+        })
+    except Exception as e:
+        logger.error(f"Error in stream listener: {e}")
+
+# Attach listener once
+try:
+    container.stream_service.add_listener(_stream_listener)
+except Exception as e:
+    logger.error(f"Failed to attach market stream listener: {e}")
 
 @router.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
@@ -54,10 +106,16 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 if bot_id:
                     await handle_bot_unsubscription(websocket, bot_id)
 
+            elif action == "PRICES_SUBSCRIBE":
+                items = message.get("items") or []
+                await handle_prices_subscribe(websocket, user_id, items)
+
             elif action == "PING":
                 await websocket.send_json({"type": "PONG"})
 
     except WebSocketDisconnect:
+        # Unsubscribe prices for this websocket
+        await handle_prices_subscribe(websocket, user_id, [])
         socket_service.disconnect(websocket, user_id)
     except Exception as e:
         logger.error(f"Error en websocket: {e}")
@@ -110,8 +168,8 @@ async def handle_bot_subscription(websocket: WebSocket, bot_id: str):
         "signals": [s.to_dict() for s in signals]
     }
     
-    # B) ENVIAR SNAPSHOT
-    await websocket.send_json(snapshot_data)
+    # B) ENVIAR SNAPSHOT (avoid datetime serialization issues)
+    await websocket.send_text(json.dumps(snapshot_data, default=str))
     
     # C) GESTIONAR SUSCRIPCIÓN EN EL SOCKET MANAGER
     await socket_service.subscribe_to_topic(websocket, topic=f"bot:{bot_id}")
@@ -127,6 +185,73 @@ async def handle_bot_unsubscription(websocket: WebSocket, bot_id: str):
     # Nota: También deberíamos desuscribir de las velas, pero esto requiere 
     # saber qué velas estaba viendo este bot.
     # Por ahora simplificado.
+
+
+async def handle_prices_subscribe(websocket: WebSocket, user_id: str, items: list[dict]):
+    """Subscribe this websocket to a set of ticker topics.
+
+    items: [{exchangeId, marketType, symbol}]
+    """
+    ws_key = id(websocket)
+    current = _ws_price_topics.get(ws_key, set())
+
+    wanted: Set[str] = set()
+
+    for it in items or []:
+        try:
+            exchange_id = (it.get("exchangeId") or it.get("exchange") or "").lower()
+            market_type = (it.get("marketType") or it.get("market_type") or "SPOT")
+            market_type = str(market_type).upper()
+            if market_type == "CEX":
+                market_type = "SPOT"
+            symbol = it.get("symbol")
+            if not exchange_id or not symbol:
+                continue
+
+            # sanitize symbol (remove hashtags / spaces)
+            symbol = str(symbol).strip().replace("#", "")
+            if "/" not in symbol:
+                continue
+
+            topic = f"price:{exchange_id}:{market_type}:{symbol}"
+            wanted.add(topic)
+        except Exception:
+            continue
+
+    to_add = wanted - current
+    to_remove = current - wanted
+
+    # Add new
+    for topic in to_add:
+        await socket_service.subscribe_to_topic(websocket, topic=topic)
+        try:
+            parts = topic.split(":", 3)
+            exchange_id = parts[1]
+            market_type = parts[2]
+            symbol = parts[3]
+            await container.stream_service.subscribe_ticker(exchange_id, symbol, market_type=market_type)
+        except Exception as e:
+            logger.error(f"Failed subscribe_ticker for {topic}: {e}")
+
+    # Remove old
+    for topic in to_remove:
+        await socket_service.unsubscribe_from_topic(websocket, topic=topic)
+        # If no one else is subscribed, cancel the CCXT task
+        try:
+            subs = socket_service.topic_subscriptions.get(topic)
+            if not subs:
+                parts = topic.split(":", 3)
+                exchange_id = parts[1]
+                market_type = parts[2]
+                symbol = parts[3]
+                await container.stream_service.unsubscribe(f"ticker:{exchange_id}:{market_type}:{symbol}")
+        except Exception as e:
+            logger.error(f"Failed unsubscribe ticker for {topic}: {e}")
+
+    if wanted:
+        _ws_price_topics[ws_key] = wanted
+    else:
+        _ws_price_topics.pop(ws_key, None)
 
 def _serialize_mongo(obj):
     from bson import ObjectId

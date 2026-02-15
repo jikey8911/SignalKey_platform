@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 async def check_mongo():
     try:
         # Ping DB
-        await db.db.command('ping')
+        await db.command('ping')
         return "connected"
     except Exception as e:
         logger.error(f"Health Check Mongo Error: {e}")

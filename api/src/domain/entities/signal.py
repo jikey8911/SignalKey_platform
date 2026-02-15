@@ -54,6 +54,8 @@ class TradingParameters:
     amount: Optional[float] = None
     investment: Optional[float] = None # Recommended investment value
     network: Optional[str] = None
+    exchangeId: Optional[str] = None  # Selected exchange for execution (must be configured by user)
+    validForMinutes: Optional[int] = None  # Only if message specifies a time window
 
     def to_dict(self):
         return {
@@ -63,7 +65,10 @@ class TradingParameters:
             "sl": self.sl,
             "leverage": self.leverage,
             "amount": self.amount,
-            "network": self.network
+            "investment": self.investment,
+            "network": self.network,
+            "exchangeId": self.exchangeId,
+            "validForMinutes": self.validForMinutes,
         }
 
 @dataclass

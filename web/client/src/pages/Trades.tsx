@@ -1,7 +1,7 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { fetchTelegramBots } from '@/lib/api';
+import { fetchTelegramBots, fetchTelegramTradesByBot } from '@/lib/api';
 import { TrendingUp, TrendingDown, Filter, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { useSocket } from '@/_core/hooks/useSocket';
@@ -42,30 +42,73 @@ export default function Trades() {
   const [filterMode, setFilterMode] = useState<'all' | 'demo' | 'real'>('all');
   const [searchSymbol, setSearchSymbol] = useState('');
 
-  const { lastMessage } = useSocket(user?.openId);
+  const { lastMessage, sendMessage } = useSocket(user?.openId);
+  const [expandedBotId, setExpandedBotId] = useState<string | null>(null);
+  const detailsRef = useRef<HTMLTableRowElement | null>(null);
+
+  const { data: expandedItems, isLoading: isLoadingExpanded } = useQuery({
+    queryKey: ['telegram_trades_items', user?.openId, expandedBotId],
+    queryFn: () => fetchTelegramTradesByBot(expandedBotId as string),
+    enabled: !!user?.openId && !!expandedBotId,
+  });
+
+  // close details on click outside
+  useEffect(() => {
+    if (!expandedBotId) return;
+
+    const onDown = (e: MouseEvent) => {
+      const el = detailsRef.current;
+      if (!el) return;
+      if (el.contains(e.target as any)) return;
+      setExpandedBotId(null);
+    };
+
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [expandedBotId]);
 
   // Escuchar actualizaciones de bots por socket
   useEffect(() => {
-    if (lastMessage && (lastMessage.event === 'telegram_trade_new' || lastMessage.event === 'telegram_trade_update')) {
+    if (!lastMessage) return;
+
+    // Bot list updates
+    if (lastMessage.event === 'telegram_trade_new' || lastMessage.event === 'telegram_trade_update') {
       const updatedData = lastMessage.data;
 
       queryClient.setQueryData(['telegram_trades', user?.openId], (oldData: any[] | undefined) => {
-        if (!oldData) return [updatedData]; // Si es nuevo y no hay datos
+        if (!oldData) return [updatedData];
 
-        // Verificar si ya existe (por id o _id)
         const exists = oldData.find(bot => (bot.id === updatedData.id || bot._id === updatedData.id));
-        
         if (exists) {
           return oldData.map(bot => {
-            if (bot.id === updatedData.id || bot._id === updatedData.id) {
-              return { ...bot, ...updatedData };
-            }
+            if (bot.id === updatedData.id || bot._id === updatedData.id) return { ...bot, ...updatedData };
             return bot;
           });
-        } else {
-          // Es un nuevo trade
-          return [updatedData, ...oldData];
         }
+        return [updatedData, ...oldData];
+      });
+      return;
+    }
+
+    // Price updates
+    if (lastMessage.event === 'price_update') {
+      const { exchangeId, marketType, symbol, price } = lastMessage.data || {};
+      if (!symbol) return;
+
+      queryClient.setQueryData(['telegram_trades', user?.openId], (oldData: any[] | undefined) => {
+        if (!oldData) return oldData;
+        return oldData.map((bot: any) => {
+          const ex = (bot.exchangeId || bot.exchange_id || bot.config?.exchangeId || bot.config?.exchange_id || '').toString().toLowerCase();
+          const mt = (bot.marketType || bot.market_type || '').toString().toUpperCase();
+          if (
+            ex === (exchangeId || '').toString().toLowerCase() &&
+            mt === (marketType || '').toString().toUpperCase() &&
+            bot.symbol === symbol
+          ) {
+            return { ...bot, currentPrice: price };
+          }
+          return bot;
+        });
       });
     }
   }, [lastMessage, queryClient, user?.openId]);
@@ -81,6 +124,55 @@ export default function Trades() {
       return matchMarket && matchSide && matchMode && matchSymbol;
     });
   }, [bots, filterMarket, filterSide, filterMode, searchSymbol]);
+
+  const lastPricesSubKeyRef = useRef<string>('');
+  const subscribeTimerRef = useRef<any>(null);
+
+  // Subscribe tickers based on what is currently visible (only active bots)
+  useEffect(() => {
+    if (!sendMessage) return;
+
+    const active = filteredBots.filter((b: any) => b.status === 'active' || b.status === 'waiting_entry');
+    const items = active
+      .map((b: any) => ({
+        exchangeId: (b.exchangeId || b.exchange_id || b.config?.exchangeId || b.config?.exchange_id || 'binance'),
+        marketType: ((b.marketType || b.market_type || 'SPOT').toString().toUpperCase() === 'CEX'
+          ? 'SPOT'
+          : (b.marketType || b.market_type || 'SPOT')),
+        symbol: b.symbol
+      }))
+      .filter((x: any) => !!x.exchangeId && !!x.symbol);
+
+    // De-dup + stable sort for key
+    const uniq = Array.from(new Map(items.map((i: any) => [`${String(i.exchangeId).toLowerCase()}|${i.symbol}`, i])).values());
+    uniq.sort((a: any, b: any) => {
+      const ka = `${String(a.exchangeId).toLowerCase()}|${String(a.marketType || '').toUpperCase()}|${a.symbol}`;
+      const kb = `${String(b.exchangeId).toLowerCase()}|${String(b.marketType || '').toUpperCase()}|${b.symbol}`;
+      return ka.localeCompare(kb);
+    });
+
+    const key = uniq.map((i: any) => `${String(i.exchangeId).toLowerCase()}|${String(i.marketType || '').toUpperCase()}|${i.symbol}`).join(',');
+    if (key === lastPricesSubKeyRef.current) return;
+    lastPricesSubKeyRef.current = key;
+
+    // Debounce to avoid flapping during rapid re-renders
+    if (subscribeTimerRef.current) clearTimeout(subscribeTimerRef.current);
+    subscribeTimerRef.current = setTimeout(() => {
+      sendMessage({ action: 'PRICES_SUBSCRIBE', items: uniq });
+    }, 300);
+
+    return () => {
+      if (subscribeTimerRef.current) clearTimeout(subscribeTimerRef.current);
+    };
+  }, [filteredBots, sendMessage]);
+
+  // On unmount: unsubscribe all
+  useEffect(() => {
+    if (!sendMessage) return;
+    return () => {
+      sendMessage({ action: 'PRICES_SUBSCRIBE', items: [] });
+    };
+  }, [sendMessage]);
 
   const stats = useMemo(() => {
     if (filteredBots.length === 0) {
@@ -202,9 +294,18 @@ export default function Trades() {
                 </tr>
               </thead>
               <tbody>
-                {filteredBots.map((bot: any) => (
-                  <tr key={bot.id || bot._id} className="border-b border-slate-800 hover:bg-slate-800/30 transition-colors">
-                    <td className="px-6 py-4 text-sm font-bold text-white">{bot.symbol}</td>
+                {filteredBots.map((bot: any) => {
+                  const rowId = (bot.id || bot._id) as string;
+                  const expanded = expandedBotId === rowId;
+                  const items = Array.isArray(expandedItems) ? expandedItems : [];
+                  const entryItem = items.find((x: any) => x.kind === 'entry');
+                  const slItems = items.filter((x: any) => x.kind === 'sl');
+                  const tpItems = items.filter((x: any) => x.kind === 'tp').sort((a: any, b: any) => (a.level ?? 0) - (b.level ?? 0));
+
+                  return (
+                    <>
+                      <tr key={rowId} className="border-b border-slate-800 hover:bg-slate-800/30 transition-colors">
+                        <td className="px-6 py-4 text-sm font-bold text-white">{bot.symbol}</td>
                     <td className="px-6 py-4 text-sm">
                       {bot.side ? (
                         <div className="flex items-center gap-2">
@@ -216,14 +317,24 @@ export default function Trades() {
                       )}
                     </td>
                     <td className="px-6 py-4 text-sm text-slate-300">{bot.marketType}</td>
-                    <td className="px-6 py-4 text-sm text-slate-300 font-mono">${(bot.entryPrice ?? 0).toFixed(4)}</td>
+                    <td className="px-6 py-4 text-sm text-slate-300 font-mono">${(bot.config?.entryPrice ?? bot.entryPrice ?? 0).toFixed(4)}</td>
                     <td className="px-6 py-4 text-sm font-mono text-slate-300">
                        ${(bot.position?.currentPrice ?? bot.currentPrice ?? 0).toFixed(4)}
                     </td>
-                    <td className="px-6 py-4 text-sm text-blue-400 text-xs">
-                        {bot.takeProfits?.length} Niveles
+                    <td className="px-6 py-4">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const id = (bot.id || bot._id) as string;
+                          setExpandedBotId((cur) => (cur === id ? null : id));
+                        }}
+                        className="text-blue-400 text-xs hover:underline"
+                      >
+                        {(bot.config?.takeProfits?.length ?? bot.takeProfits?.length ?? 0)} niveles ▾
+                      </button>
                     </td>
-                    <td className="px-6 py-4 text-sm text-slate-300">${(bot.investment ?? bot.amount ?? 0).toFixed(0)}</td>
+                    <td className="px-6 py-4 text-sm text-slate-300">${(bot.config?.investment ?? bot.investment ?? bot.amount ?? 0).toFixed(0)}</td>
                     <td className="px-6 py-4 text-sm font-bold">
                         <span className={(bot.roi ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}>
                             {(bot.roi ?? 0).toFixed(2)}%
@@ -267,7 +378,71 @@ export default function Trades() {
                         {new Date(bot.createdAt).toLocaleString()}
                     </td>
                   </tr>
-                ))}
+
+                  {expanded && (
+                    <tr ref={detailsRef} className="border-b border-slate-800 bg-slate-950/40">
+                      <td colSpan={12} className="px-6 py-4">
+                        <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="text-sm font-semibold text-slate-200">Detalles</div>
+                            <button className="text-xs text-slate-400 hover:text-slate-200" onClick={() => setExpandedBotId(null)}>
+                              Cerrar
+                            </button>
+                          </div>
+
+                          {isLoadingExpanded ? (
+                            <div className="text-sm text-slate-400">Cargando…</div>
+                          ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                              <div>
+                                <div className="text-xs text-slate-500 mb-1">Entrada</div>
+                                <div className="font-mono text-slate-200">
+                                  ${Number(entryItem?.targetPrice ?? bot.config?.entryPrice ?? 0).toFixed(6)}
+                                </div>
+                              </div>
+
+                              <div>
+                                <div className="text-xs text-slate-500 mb-1">Stop Loss</div>
+                                <div className="space-y-1">
+                                  {slItems.length === 0 ? (
+                                    <div className="text-slate-400">—</div>
+                                  ) : (
+                                    slItems.map((sl: any, idx: number) => (
+                                      <div key={(sl.id || sl._id || `${sl.kind || 'sl'}-${sl.level || 0}-${sl.targetPrice}-${idx}`)} className="flex items-center justify-between gap-2">
+                                        <span className="font-mono text-slate-200">${Number(sl.targetPrice ?? 0).toFixed(6)}</span>
+                                        <span className="text-[10px] uppercase text-slate-400">{sl.status}</span>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+
+                              <div>
+                                <div className="text-xs text-slate-500 mb-1">Take Profits</div>
+                                <div className="space-y-1">
+                                  {tpItems.length === 0 ? (
+                                    <div className="text-slate-400">—</div>
+                                  ) : (
+                                    tpItems.map((tp: any, idx: number) => (
+                                      <div key={(tp.id || tp._id || `${tp.kind || 'tp'}-${tp.level}-${tp.targetPrice}-${idx}`)} className="flex items-center justify-between gap-2">
+                                        <span className="text-xs text-slate-400">TP{tp.level}</span>
+                                        <span className="font-mono text-slate-200">${Number(tp.targetPrice ?? 0).toFixed(6)}</span>
+                                        <span className="text-[10px] uppercase text-slate-400">{tp.status}</span>
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+
+                    </>
+                  );
+                })}
               </tbody>
             </table>
           </div>

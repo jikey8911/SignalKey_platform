@@ -13,9 +13,10 @@ logger = logging.getLogger(__name__)
 class MonitorService:
     def __init__(self, cex_service: Optional[CEXService] = None, dex_service: Optional[DEXService] = None):
         self.running = False
-        self.interval = 60 # Reducido a 1 minuto para mejor monitoreo
+        self.interval = 60 # 1 minuto
         self.cex_service = cex_service or CEXService()
         self.dex_service = dex_service or DEXService()
+        self._telegram_expiry_service = None
 
     async def start_monitoring(self):
         if self.running:
@@ -26,6 +27,7 @@ class MonitorService:
             try:
                 await self.check_open_positions()
                 await self.push_connection_status()
+                await self.check_expired_telegram_bots()
             except Exception as e:
                 logger.error(f"Error en el ciclo de monitoreo: {e}")
             await asyncio.sleep(self.interval)
@@ -150,6 +152,16 @@ class MonitorService:
                 await update_virtual_balance(user_open_id, market_type, asset, new_balance)
                 logger.info(f"Balance virtual actualizado para {user_open_id}: {new_balance}")
 
+    async def check_expired_telegram_bots(self):
+        """Checks expired telegram_bots and runs AI decision (close vs update)."""
+        try:
+            if self._telegram_expiry_service is None:
+                from api.src.application.services.telegram_expiry_service import TelegramExpiryService
+                self._telegram_expiry_service = TelegramExpiryService()
+            await self._telegram_expiry_service.check_and_handle_expired(limit=10)
+        except Exception as e:
+            logger.error(f"Error checking expired telegram bots: {e}")
+
     async def push_connection_status(self):
         """Envía el estado de conexión a todos los usuarios conectados vía WebSocket"""
         from api.src.adapters.driven.notifications.socket_service import socket_service
@@ -191,13 +203,20 @@ class MonitorService:
                 if config.get("zeroExApiKey") or config.get("gmgnApiKey"):
                     status["gmgn"] = True
                 
-                # Fetch Real Balance simplified for status (UNIFIED via CEXService)
+                # Balance for status:
+                # - demoMode => use virtualBalances (do NOT call exchange)
+                # - real mode => fetch via CEXService
                 try:
-                    balances = await self.cex_service.fetch_balance(user_id)
-                    if balances and 'total' in balances:
-                        status["balance_usdt"] = balances['total'].get('USDT', 0.0)
+                    if config.get("demoMode", True):
+                        vb = (config.get("virtualBalances") or {}).get("cex")
+                        if vb is not None:
+                            status["balance_usdt"] = float(vb)
+                    else:
+                        balances = await self.cex_service.fetch_balance(user_id)
+                        if balances and 'total' in balances:
+                            status["balance_usdt"] = balances['total'].get('USDT', 0.0)
                 except Exception as e:
-                    logger.error(f"Error fetching unified balance for status: {e}")
+                    logger.error(f"Error fetching balance for status: {e}")
 
                 await socket_service.emit_to_user(user_id, "status_update", status)
             except Exception as e:

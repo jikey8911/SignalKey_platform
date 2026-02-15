@@ -87,15 +87,15 @@ class AIAdapter(IAIPort):
             
             try:
                 if provider == "gemini":
-                    content = await self._call_gemini(self._build_prompt(signal.text), api_key)
+                    content = await self._call_gemini(self._build_prompt(signal.text, config), api_key)
                 elif provider == "openai":
-                    content = await self._call_openai(self._build_prompt(signal.text), api_key)
+                    content = await self._call_openai(self._build_prompt(signal.text, config), api_key)
                 elif provider == "perplexity":
-                    content = await self._call_perplexity(self._build_prompt(signal.text), api_key)
+                    content = await self._call_perplexity(self._build_prompt(signal.text, config), api_key)
                 elif provider == "grok":
-                    content = await self._call_grok(self._build_prompt(signal.text), api_key)
+                    content = await self._call_grok(self._build_prompt(signal.text, config), api_key)
                 elif provider == "groq":
-                    content = await self._call_groq(self._build_prompt(signal.text), api_key)
+                    content = await self._call_groq(self._build_prompt(signal.text, config), api_key)
                 else:
                     continue
 
@@ -284,58 +284,86 @@ class AIAdapter(IAIPort):
         }
         return getattr(Config, env_keys.get(provider, ""), None)
 
-    def _build_prompt(self, text: str) -> str:
+    def _build_prompt(self, text: str, config: dict = None) -> str:
+        # Investment limits (USDT)
+        inv = (config or {}).get("investmentLimits") or {}
+        cex_max = inv.get("cexMaxAmount")
+        dex_max = inv.get("dexMaxAmount")
+        limits_line = ""
+        if cex_max is not None or dex_max is not None:
+            limits_line = f"\n        LÍMITES DE INVERSIÓN (USDT): cexMaxAmount={cex_max}, dexMaxAmount={dex_max}. " \
+                          f"Si market_type es SPOT o FUTURES (CEX), investment NO puede superar cexMaxAmount. " \
+                          f"Si market_type es DEX, investment NO puede superar dexMaxAmount.\n"
+
+        # Allowed exchanges for this user
+        allowed_exchanges = []
+        try:
+            for ex in ((config or {}).get("exchanges") or []):
+                if ex.get("isActive", True) and ex.get("exchangeId"):
+                    allowed_exchanges.append(str(ex.get("exchangeId")).lower())
+        except Exception:
+            allowed_exchanges = []
+
+        exchanges_line = ""
+        if allowed_exchanges:
+            exchanges_line = (
+                "\n        EXCHANGES PERMITIDOS (debes elegir UNO y devolverlo en parameters.exchangeId): "
+                + ", ".join(sorted(set(allowed_exchanges)))
+                + "\n"
+            )
+
         return f"""
-        Tu tarea es actuar como un Analista de Trading Experto. Debes extraer parámetros técnicos detallados de un mensaje de Telegram y devolverlos en un formato JSON estricto.
-        
-        REGLAS DE EXTRACCIÓN Y GENERACIÓN:
-        1. SÍMBOLO: Extrae el par (p.ej. BTC/USDT) o la dirección de contrato (CA).
-        2. MERCADO: 'SPOT', 'FUTURES' o 'DEX'.
-        3. DECISIÓN: "approved" si la operación es viable y segura, "rejected" si no lo es.
-        4. DIRECCIÓN: "LONG" (Compra/Subida), "SHORT" (Venta/Bajada) o "HOLD" (No entrar).
-        5. CONFIANZA: Un valor entre 0.0 y 1.0.
-        6. INVERSIÓN: Recomienda un valor de inversión (USD o moneda base) basado en el riesgo percibido.
-        7. PARÁMETROS DE TRADING (MANDATORIOS SI DECISIÓN es "approved"):
-           - entry_price: Precio de entrada sugerido.
-           - sl: Precio de Stop Loss (obligatorio).
-           - tp: Lista de Take Profit.
-             DEBE incluir mínimo 1 TP con:
-               - price numérico (> 0)
-               - percent numérico (> 0) (y la suma total debe ser 100)
-             Si el mensaje trae un solo TP exacto, respétalo (no inventes 3).
-             Si el mensaje no trae TPs claros, puedes proponer niveles (1-3) razonables.
-             Para cada TP, incluye "percent" (que en total debe sumar 100) y opcionalmente "qty".
-           - leverage: 1 para SPOT/DEX, o valor acorde para FUTURES.
-        
-        TEXTO A PROCESAR:
-        "{text}"
-        
-        RESPUESTA JSON (Sin preámbulos, devuelve un ARRAY [] de objetos):
-        [
-            {{
-                "decision": "approved" | "rejected",
-                "direction": "LONG" | "SHORT" | "HOLD",
-                "symbol": "Símbolo/CA",
-                "market_type": "SPOT" | "FUTURES" | "DEX",
-                "confidence": 0.0 a 1.0,
-                "investment": 0.0,
-                "is_safe": true | false,
-                "risk_score": 0.0 a 10.0,
-                "reasoning": "Explicación técnica en español",
-                "parameters": {{
-                    "entry_price": 0.0,
-                    "entry_type": "market" | "limit",
-                    "tp": [
-                        {{"price": 0.0, "percent": 100.0, "qty": 0.0, "status": "pending"}}
-                    ],
-                    "sl": 0.0,
-                    "leverage": 1,
-                    "amount": 0.0,
-                    "network": "solana" | "ethereum" | "bsc" | "unknown"
-                }}
-            }}
-        ]
-        """
+Eres un analista experto en mercados financieros de criptomonedas.
+
+Tu objetivo es evaluar una oportunidad de trading para el símbolo que aparece en el mensaje y decidir si se debe aprobar o rechazar la operación.
+Debes actuar con la diligencia de un trader profesional, priorizando gestión de riesgo y una conclusión bien fundamentada.
+{limits_line}{exchanges_line}
+
+Análisis de Mercado Requerido (Etapa de Investigación):
+1) Análisis Técnico:
+- Tendencia, soportes/resistencias, momentum (RSI/MACD/medias/volumen cuando aplique).
+- Define niveles: entry_price, tp, sl.
+2) Sentimiento/Contexto:
+- Considera sentimiento general (fear/greed) y si el mensaje sugiere noticias/eventos.
+- Considera volatilidad y liquidez en EXCHANGES PERMITIDOS.
+
+Reglas Estrictas para Formato (JSON):
+- Devuelve SOLO un array JSON con un único objeto.
+- market_type: "SPOT" | "FUTURES" | "DEX" (NO uses "CEX").
+- investment: USDT (respeta LÍMITES DE INVERSIÓN).
+- parameters.exchangeId: obligatorio, debe ser UNO de EXCHANGES PERMITIDOS.
+- Si decision="approved": entry_price y sl obligatorios, tp al menos 1, suma percent=100.
+- validForMinutes: si el mensaje incluye marco de tiempo, convertir a minutos; si no, null u omitido.
+
+TEXTO ORIGINAL:
+"{text}"
+
+RESPUESTA JSON:
+[
+  {{
+    "decision": "approved" | "rejected",
+    "direction": "LONG" | "SHORT" | "HOLD",
+    "symbol": "GOAT/USDT",
+    "market_type": "SPOT" | "FUTURES" | "DEX",
+    "confidence": 0.0,
+    "investment": 0.0,
+    "is_safe": true,
+    "risk_score": 0.0,
+    "reasoning": "...",
+    "parameters": {{
+      "exchangeId": "binance",
+      "entry_price": 0.0,
+      "entry_type": "market" | "limit",
+      "tp": [{{"price": 0.0, "percent": 100.0, "qty": 0.0, "status": "pending"}}],
+      "sl": 0.0,
+      "leverage": 1,
+      "amount": 0.0,
+      "network": "unknown",
+      "validForMinutes": null
+    }}
+  }}
+]
+"""
 
     def _build_backtest_prompt(self, window: List[dict], current_candle: dict) -> str:
         """

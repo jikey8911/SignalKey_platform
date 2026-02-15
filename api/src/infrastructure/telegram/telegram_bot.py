@@ -9,6 +9,7 @@ import httpx
 import logging
 import asyncio
 import os
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +162,25 @@ class TelegramUserBot:
                     if not is_allowed:
                         return
 
-                    # 4. PROCESAMIENTO DE SEÑAL
+                    # 4. PRE-FILTRO: Ignorar mensajes tipo reporte (TP hit / Profit / in: ...)
+                    lowered = text.lower()
+                    is_report = False
+                    try:
+                        # Examples: "Target Tuch 1 ✅ Profit: 21% in: 10 Hours"
+                        if ("profit" in lowered and "target" in lowered) or ("target tuch" in lowered) or ("target touch" in lowered):
+                            is_report = True
+                        if "✅" in text and "profit" in lowered:
+                            is_report = True
+                        if re.search(r"\bin:\s*\d+\s*(hours?|hrs?|h)\b", lowered) and "profit" in lowered:
+                            is_report = True
+                    except Exception:
+                        is_report = False
+
+                    if is_report:
+                        logger.info(f"Ignoring telegram report message (no AI): chat {chat_id} ({chat_title})")
+                        return
+
+                    # 5. PROCESAMIENTO DE SEÑAL
                     logger.info(f"Signal authorized for AI processing from chat {chat_id} ({chat_title})")
                     
                     # Actualizar status en log

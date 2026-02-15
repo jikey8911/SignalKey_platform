@@ -46,6 +46,7 @@ class DexConfig(BaseModel):
 
 class BotStrategyConfig(BaseModel):
     maxActiveBots: int = 5
+    maxActiveTelegramBots: int = 0  # 0 = sin límite
     tpLevels: int = 3 # Número de niveles de Take Profit
     tpPercent: float = 2.0 # Porcentaje de cambio para TP por defecto
     slPercent: float = 1.5 # Porcentaje de cambio para SL por defecto

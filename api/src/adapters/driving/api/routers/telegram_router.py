@@ -418,6 +418,22 @@ async def get_telegram_bots(
 
     cursor = db.telegram_bots.find({"userId": user_oid}).sort("createdAt", -1).limit(limit)
     bots = await cursor.to_list(length=limit)
+
+    # Add countdown fields (derived) for UI
+    now = datetime.utcnow()
+    for b in bots:
+        try:
+            exp = b.get("expiresAt")
+            if isinstance(exp, datetime):
+                remaining = int((exp - now).total_seconds() // 60)
+                if (exp - now).total_seconds() > 0 and ((exp - now).total_seconds() % 60) > 0:
+                    remaining += 1  # ceil
+                if remaining < 0:
+                    remaining = 0
+                b["remainingMinutes"] = remaining
+        except Exception:
+            pass
+
     return _serialize_mongo(bots)
 
 

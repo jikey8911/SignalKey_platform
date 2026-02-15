@@ -57,9 +57,12 @@ export default function BotsPage() {
 
     const fetchBots = async () => {
         try {
-            const response = await api.get('/bots');
+            const response = await api.get('/bots/');
             // Asegurar que 'data' sea un array antes de actualizar el estado
-            const data = Array.isArray(response.data) ? response.data : [];
+            const payload = response.data;
+            const data = Array.isArray(payload)
+              ? payload
+              : (Array.isArray(payload?.bots) ? payload.bots : []);
             setBots(data);
             // Seleccionar el primer bot si no hay selección actual y hay datos
             if (data.length > 0 && !selectedBot) {
@@ -131,9 +134,8 @@ export default function BotsPage() {
             if (msg.bot_id === selectedBot?.id) {
                 setSignals(msg.signals || []);
                 setPositions(msg.positions || []);
-                if (msg.config) {
-                    setSelectedBot(prev => ({ ...prev, ...msg.config }));
-                }
+                // IMPORTANT: Do NOT setSelectedBot here; it causes a subscription loop
+                // (selectedBot changes -> effect resubscribes -> server sends snapshot again).
             }
         }
         else if (event === 'bot_update') {
@@ -147,15 +149,28 @@ export default function BotsPage() {
         else if (event === 'candle_update') {
             const data = msg.data || msg;
             if (data.symbol === selectedBot?.symbol) {
-                // Actualizar gráfico
+                const c = data.candle || {};
+                const t = c.time ?? c.timestamp;
+                if (!t) return;
+                const candle = {
+                    time: t,
+                    open: Number(c.open),
+                    high: Number(c.high),
+                    low: Number(c.low),
+                    close: Number(c.close),
+                    volume: c.volume,
+                };
+
+                // Actualizar solo la última vela o agregar nueva (sin recargar todo)
                 setChartData(prev => {
+                    if (!prev || prev.length === 0) return [candle];
                     const last = prev[prev.length - 1];
-                    if (last && last.time === data.candle.time) {
+                    if (last && (last.time === candle.time)) {
                         const updated = [...prev];
-                        updated[updated.length - 1] = data.candle;
+                        updated[updated.length - 1] = { ...last, ...candle };
                         return updated;
                     }
-                    return [...prev, data.candle];
+                    return [...prev, candle];
                 });
             }
         }
@@ -180,16 +195,29 @@ export default function BotsPage() {
 
     }, [lastMessage, selectedBot]);
 
-    // Transformar señales en marcadores para el gráfico (Adaptar a TradeMarker interface)
-    const botTrades = signals.map(sig => {
-        const side = (sig.decision === 'SELL' || sig.type === 'SELL') ? 'SELL' : 'BUY';
-        return {
-            time: sig.createdAt || sig.timestamp || Date.now(),
-            side: side as 'BUY' | 'SELL',
-            price: sig.price,
-            label: sig.decision || sig.type
-        };
-    });
+    const toMs = (t: any): number | null => {
+        if (!t) return null;
+        if (typeof t === 'string') return new Date(t).getTime();
+        if (typeof t === 'number') return t > 20000000000 ? t : t * 1000; // ms vs seconds
+        if (typeof t === 'object' && typeof t.$date === 'string') return new Date(t.$date).getTime();
+        return null;
+    };
+
+    // Transformar señales/trades en marcadores para el gráfico (NO inventar tiempo)
+    const botTrades = (signals || [])
+        .map((sig: any, idx: number) => {
+            const side = (sig.decision === 'SELL' || sig.type === 'SELL' || sig.side === 'SELL') ? 'SELL' : 'BUY';
+            const ms = toMs(sig.timestamp) ?? toMs(sig.createdAt);
+            if (!ms) return null;
+            return {
+                id: sig.id || sig._id || `${side}-${ms}-${idx}`,
+                time: ms,
+                side: side as 'BUY' | 'SELL',
+                price: Number(sig.price || 0),
+                label: sig.decision || sig.type || sig.side
+            };
+        })
+        .filter(Boolean) as any[];
 
     // Manejadores de acciones
     const handleStartBot = async () => {
@@ -215,11 +243,11 @@ export default function BotsPage() {
     };
 
     return (
-        <div className="flex h-[calc(100vh-4rem)] w-full bg-background overflow-hidden">
+        <div className="flex h-[calc(100vh-4rem)] w-full bg-slate-950 text-slate-200 overflow-hidden">
 
             {/* --- Sidebar: Lista de Bots --- */}
-            <div className="w-80 border-r bg-card/30 flex flex-col hidden md:flex">
-                <div className="p-4 border-b flex justify-between items-center bg-background/50">
+            <div className="w-80 border-r border-slate-800 bg-slate-900/60 backdrop-blur-3xl flex flex-col hidden md:flex">
+                <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900/60">
                     <h2 className="font-semibold flex items-center gap-2 text-sm">
                         <Activity className="h-4 w-4 text-primary" /> Mis Bots
                     </h2>
@@ -276,10 +304,10 @@ export default function BotsPage() {
             </div>
 
             {/* --- Contenido Principal --- */}
-            <div className="flex-1 flex flex-col min-w-0 bg-background/50">
+            <div className="flex-1 flex flex-col min-w-0 bg-slate-950/60">
 
                 {/* Header del Bot Seleccionado */}
-                <header className="h-16 border-b flex items-center px-6 justify-between bg-card/50 backdrop-blur-sm sticky top-0 z-20">
+                <header className="h-16 border-b border-slate-800 flex items-center px-6 justify-between bg-slate-900/60 backdrop-blur-sm sticky top-0 z-20">
                     <div className="flex items-center gap-6">
                         {selectedBot ? (
                             <div>

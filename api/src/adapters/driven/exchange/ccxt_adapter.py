@@ -15,14 +15,37 @@ class CcxtAdapter:
     def __init__(self, **kwargs):
         self.exchanges: Dict[str, ccxtpro.Exchange] = {}
         self._locks: Dict[str, asyncio.Lock] = {}
+        self._markets_loaded: set[str] = set()
         self.db = kwargs.get('db_adapter')
 
-    async def _get_exchange(self, exchange_id: str, user_id: str = None) -> ccxtpro.Exchange:
+    def _normalize_default_type(self, exchange_id: str, market_type: Optional[str]) -> str:
+        """Map app marketType (CEX/SPOT/FUTURES) to ccxt defaultType."""
+        if not market_type:
+            return "spot"
+        mt = str(market_type).lower()
+        eid = str(exchange_id).lower()
+
+        # common normalizations
+        if mt in ["spot", "cex"]:
+            return "spot"
+        if mt in ["futures", "future", "swap", "perp", "perpetual"]:
+            # exchange-specific
+            if eid == "binance":
+                return "future"
+            if eid == "okx":
+                return "swap"
+            return "swap"
+
+        return "spot"
+
+    async def _get_exchange(self, exchange_id: str, user_id: str = None, market_type: Optional[str] = None) -> ccxtpro.Exchange:
         """
         Obtiene una instancia de exchange. Si se provee user_id, intenta cargar credenciales.
         """
         eid = exchange_id.lower()
-        instance_key = f"{eid}:{user_id}" if user_id else eid
+        normalized_type = self._normalize_default_type(eid, market_type)
+        # Include market type in the instance key for public (no user) streams
+        instance_key = f"{eid}:{user_id}" if user_id else f"{eid}:{normalized_type}"
         
         if instance_key not in self._locks:
             self._locks[instance_key] = asyncio.Lock()
@@ -33,7 +56,7 @@ class CcxtAdapter:
                 config = {
                     'enableRateLimit': True,
                     'options': {
-                        'defaultType': 'spot',
+                        'defaultType': normalized_type,
                         'fetchCurrencies': False
                     }
                 }
@@ -75,12 +98,20 @@ class CcxtAdapter:
                     logger.error(f"Exchange {eid} no soportado por CCXT Pro")
                     raise ValueError(f"Exchange {eid} not supported")
 
+                # 4. Load markets once (required by some WS methods, e.g. OKX)
+                try:
+                    if instance_key not in self._markets_loaded:
+                        await self.exchanges[instance_key].load_markets()
+                        self._markets_loaded.add(instance_key)
+                except Exception as e:
+                    logger.warning(f"Failed to load markets for {instance_key}: {e}")
+
             return self.exchanges[instance_key]
 
     # --- WEBSOCKETS (EVENT-DRIVEN) ---
 
-    async def watch_ticker(self, exchange_id: str, symbol: str) -> AsyncGenerator[Dict[str, Any], None]:
-        exchange = await self._get_exchange(exchange_id)
+    async def watch_ticker(self, exchange_id: str, symbol: str, market_type: Optional[str] = None) -> AsyncGenerator[Dict[str, Any], None]:
+        exchange = await self._get_exchange(exchange_id, market_type=market_type)
         while True:
             try:
                 ticker = await exchange.watch_ticker(symbol)
@@ -89,8 +120,8 @@ class CcxtAdapter:
                 logger.error(f"Error WS Ticker ({exchange_id}:{symbol}): {e}")
                 await asyncio.sleep(10)
 
-    async def watch_ohlcv(self, exchange_id: str, symbol: str, timeframe: str) -> AsyncGenerator[list, None]:
-        exchange = await self._get_exchange(exchange_id)
+    async def watch_ohlcv(self, exchange_id: str, symbol: str, timeframe: str, market_type: Optional[str] = None) -> AsyncGenerator[list, None]:
+        exchange = await self._get_exchange(exchange_id, market_type=market_type)
         while True:
             try:
                 ohlcv = await exchange.watch_ohlcv(symbol, timeframe)
@@ -100,8 +131,8 @@ class CcxtAdapter:
                 logger.error(f"Error WS OHLCV ({exchange_id}:{symbol}:{timeframe}): {e}")
                 await asyncio.sleep(10)
 
-    async def watch_trades(self, exchange_id: str, symbol: str) -> AsyncGenerator[List[Dict[str, Any]], None]:
-        exchange = await self._get_exchange(exchange_id)
+    async def watch_trades(self, exchange_id: str, symbol: str, market_type: Optional[str] = None) -> AsyncGenerator[List[Dict[str, Any]], None]:
+        exchange = await self._get_exchange(exchange_id, market_type=market_type)
         while True:
             try:
                 trades = await exchange.watch_trades(symbol)
@@ -250,16 +281,54 @@ class CcxtAdapter:
         return ["spot", "futures", "swap"]
 
     async def get_symbols(self, exchange_id: str, market_type: str) -> List[str]:
-        """Retorna los símbolos activos para un tipo de mercado."""
-        exchange = await self._get_exchange(exchange_id)
+        """Retorna los símbolos activos para un tipo de mercado.
+
+        market_type esperado: spot | swap | future | futures
+        """
+        exchange = await self._get_exchange(exchange_id, market_type=market_type)
         if not exchange.markets:
             await exchange.load_markets()
-        
-        symbols = []
-        for symbol, market in exchange.markets.items():
-            if market.get('active', True) and market.get('type') == market_type:
-                symbols.append(symbol)
-        return sorted(symbols)
+
+        mt = (market_type or "spot").lower()
+        if mt == "cex":
+            mt = "spot"
+        if mt == "futures":
+            # allow both future and swap
+            mt_set = {"future", "swap"}
+        else:
+            mt_set = {mt}
+
+        symbols: List[str] = []
+        for symbol, market in (exchange.markets or {}).items():
+            try:
+                if not market.get("active", True):
+                    continue
+
+                m_type = (market.get("type") or "").lower()
+
+                # Common CCXT flags
+                is_spot = bool(market.get("spot")) or m_type == "spot"
+                is_swap = bool(market.get("swap")) or m_type == "swap"
+                is_future = bool(market.get("future")) or m_type == "future" or m_type == "futures"
+
+                if "spot" in mt_set and is_spot:
+                    symbols.append(symbol)
+                elif "swap" in mt_set and is_swap:
+                    symbols.append(symbol)
+                elif "future" in mt_set and is_future:
+                    symbols.append(symbol)
+            except Exception:
+                continue
+
+        return sorted(set(symbols))
+
+    async def get_symbols_with_tickers(self, exchange_id: str, market_type: str) -> List[Dict[str, Any]]:
+        """Compat helper for backtest UI.
+
+        Returns a lightweight list of objects. We avoid fetching tickers for all symbols (too heavy).
+        """
+        syms = await self.get_symbols(exchange_id, market_type)
+        return [{"symbol": s, "price": 0, "priceChange": 0, "priceChangePercent": 0, "volume": 0} for s in syms]
 
     async def close_all(self):
         for exchange in self.exchanges.values():
