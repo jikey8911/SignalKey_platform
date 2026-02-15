@@ -96,13 +96,13 @@ class AIService:
            - "code": The FULL valid Python code of the new strategy class.
 
         RESPONSE FORMAT (JSON ONLY):
-        {
+        {{
             "analysis": "...",
             "modifications": ["..."],
             "expected_profit_pct": 0.0,
             "expected_win_rate": 0.0,
             "code": "..."
-        }
+        }}
         """
 
         try:
