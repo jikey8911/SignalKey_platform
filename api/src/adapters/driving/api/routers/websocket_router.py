@@ -3,6 +3,7 @@ from typing import Dict, Any, Set, Tuple
 import logging
 import json
 import time
+import asyncio
 
 # Imports de tus servicios (Ajusta las rutas según tu estructura real)
 from api.src.adapters.driven.notifications.socket_service import SocketService
@@ -112,6 +113,11 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
 
             elif action == "PING":
                 await websocket.send_json({"type": "PONG"})
+
+            elif action == "run_batch_backtest":
+                # Batch backtest for Semi-Auto tab (server resolves active symbols).
+                payload = message.get("data") or {}
+                asyncio.create_task(run_batch_backtest_ws(user_id, payload))
 
     except WebSocketDisconnect:
         # Unsubscribe prices for this websocket
@@ -252,6 +258,87 @@ async def handle_prices_subscribe(websocket: WebSocket, user_id: str, items: lis
         _ws_price_topics[ws_key] = wanted
     else:
         _ws_price_topics.pop(ws_key, None)
+
+async def run_batch_backtest_ws(user_id: str, data: Dict[str, Any]):
+    """Runs a batch backtest and streams progress/results to the user via WS.
+
+    Expected data:
+      { exchangeId, marketType, timeframe, days, initialBalance, tradeAmount, topN }
+    """
+    try:
+        exchange_id = (data.get("exchangeId") or data.get("exchange_id") or "").strip()
+        market_type = (data.get("marketType") or data.get("market_type") or "spot").strip()
+        timeframe = (data.get("timeframe") or "1h").strip()
+        days = int(data.get("days") or 7)
+        initial_balance = float(data.get("initialBalance") or data.get("initial_balance") or 10000)
+        trade_amount = data.get("tradeAmount") or data.get("trade_amount")
+        trade_amount = float(trade_amount) if trade_amount not in (None, "") else None
+        top_n = int(data.get("topN") or 10)
+
+        if not exchange_id:
+            await socket_service.emit_to_user(user_id, "backtest_error", {"message": "Missing exchangeId"})
+            return
+
+        # Resolve ACTIVE symbols only (CcxtAdapter.get_symbols already filters market.active)
+        symbols = await ccxt_service.get_symbols(exchange_id, market_type)
+        symbols = [s for s in symbols if isinstance(s, str) and "/" in s]
+
+        total = len(symbols)
+        await socket_service.emit_to_user(user_id, "backtest_start", {"total": total})
+
+        # Lazy import to avoid circulars at module load
+        from api.src.application.services.backtest_service import BacktestService
+
+        backtest_service = BacktestService(exchange_adapter=ccxt_service)
+
+        for idx, symbol in enumerate(symbols, start=1):
+            try:
+                percent = int((idx / max(total, 1)) * 100)
+                await socket_service.emit_to_user(user_id, "backtest_progress", {
+                    "current": idx,
+                    "total": total,
+                    "percent": percent,
+                    "symbol": symbol
+                })
+
+                details = await backtest_service.run_backtest(
+                    symbol=symbol,
+                    days=days,
+                    timeframe=timeframe,
+                    market_type=market_type,
+                    use_ai=True,
+                    user_config=None,
+                    strategy="auto",
+                    user_id=user_id,
+                    exchange_id=exchange_id,
+                    initial_balance=initial_balance,
+                    trade_amount=trade_amount,
+                )
+
+                # WS payload shape expected by the web mapper in Backtest.tsx
+                await socket_service.emit_to_user(user_id, "backtest_result", {
+                    "symbol": symbol,
+                    "pnl": float(details.get("profit_pct") or 0),
+                    "win_rate": float(details.get("win_rate") or 0),
+                    "trades": int(details.get("total_trades") or 0),
+                    "strategy": details.get("strategy_name") or details.get("winner", {}).get("strategy"),
+                    "details": details,
+                    "topN": top_n,
+                })
+
+            except Exception as e:
+                logger.error(f"Batch backtest symbol error {symbol}: {e}")
+                await socket_service.emit_to_user(user_id, "backtest_symbol_error", {
+                    "symbol": symbol,
+                    "error": str(e)
+                })
+
+        await socket_service.emit_to_user(user_id, "backtest_complete", {"total": total})
+
+    except Exception as e:
+        logger.error(f"Batch backtest critical error: {e}")
+        await socket_service.emit_to_user(user_id, "backtest_error", {"message": str(e), "Critical": True})
+
 
 def _serialize_mongo(obj):
     from bson import ObjectId

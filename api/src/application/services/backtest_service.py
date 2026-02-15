@@ -144,21 +144,33 @@ class BacktestService:
 
         # 2. Descubrir estrategias (Dynamic Discovery from Models Directory)
         model_dir_specific = os.path.normpath(os.path.join(self.models_dir, market_type.lower()))
-        
+
         if not os.path.exists(model_dir_specific):
-             self.logger.warning(f"No model directory found for {market_type} at {model_dir_specific}")
-             strategies_to_test = []
+            self.logger.warning(f"No model directory found for {market_type} at {model_dir_specific}")
+            strategies_to_test = []
         else:
-             strategies_to_test = [f[:-4] for f in os.listdir(model_dir_specific) if f.endswith(".pkl")]
-             
+            strategies_to_test = [f[:-4] for f in os.listdir(model_dir_specific) if f.endswith(".pkl")]
+
         self.logger.info(f"Available models for backtest in {market_type}: {strategies_to_test}")
 
         if not strategies_to_test:
             self.logger.info("No compiled models found, attempting to discover from source code...")
             strategies_to_test = self.trainer.discover_strategies(market_type)
-        
+
         if not strategies_to_test:
             raise ValueError(f"No hay estrategias disponibles para el mercado {market_type} (Ni modelos .pkl ni código fuente).")
+
+        # If a specific strategy was requested, only test that one.
+        if strategy and str(strategy).lower() not in {"auto", "all"}:
+            requested = str(strategy).strip()
+            if requested not in strategies_to_test:
+                # allow optimizing strategies that exist in source but no pkl yet
+                if requested in self.trainer.discover_strategies(market_type):
+                    strategies_to_test = [requested]
+                else:
+                    raise ValueError(f"Strategy '{requested}' not available for market {market_type}.")
+            else:
+                strategies_to_test = [requested]
 
         tournament_results = []
         best_strategy_data = None

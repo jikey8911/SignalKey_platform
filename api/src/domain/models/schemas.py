@@ -147,17 +147,45 @@ class AIAgent(BaseModel):
         populate_by_name = True
 
 class StrategyOptimizationRequest(BaseModel):
+    """Request to ask the AI to review/optimize a strategy implementation.
+
+    Notes:
+    - Models (.pkl) still generate the signals in backtests.
+    - This request is for *code review/refactor* of the strategy source.
+    """
+
     strategy_name: str
     symbol: str
     timeframe: str
     market_type: str = "spot"
     days: int
     initial_balance: float
-    # Datos del Backtest reciente (enviados por el Frontend)
-    metrics: Dict[str, Any] # win_rate, profit_pct, etc.
-    trades: List[Dict[str, Any]] # Lista de operaciones (time, price, pnl, type...)
 
-    # Opcional: Feedback del usuario ("Hazla más conservadora")
+    # Backtest artifacts (can be supplied by frontend; if not, backend can regenerate).
+    metrics: Dict[str, Any]  # win_rate, profit_pct, max_drawdown, total_trades, etc.
+    trades: List[Dict[str, Any]]  # operations list (time, price, pnl, type...)
+    candles: Optional[List[Dict[str, Any]]] = None  # OHLCV set used in the backtest (optional)
+    decisions: Optional[List[Dict[str, Any]]] = None  # model decisions per candle (optional)
+    holds: Optional[List[Dict[str, Any]]] = None  # optional list/summary of HOLD periods
+
+    # Optional: raw code sent by frontend. If omitted, backend will load from strategies folder.
+    source_code: Optional[str] = None
+
+    # Optional: user feedback ("hazla más conservadora")
+    user_feedback: Optional[str] = None
+
+
+class StrategyOptimizeRunRequest(BaseModel):
+    """Convenience request: backend runs a single-strategy backtest and then calls AI optimizer."""
+
+    strategy_name: str
+    symbol: str
+    exchange_id: str = "okx"
+    timeframe: str = "1h"
+    market_type: str = "spot"
+    days: int = 7
+    initial_balance: float = 10000.0
+    trade_amount: Optional[float] = None
     user_feedback: Optional[str] = None
 
 class StrategyOptimizationResponse(BaseModel):
@@ -165,6 +193,10 @@ class StrategyOptimizationResponse(BaseModel):
     optimized_code: str
     analysis: str
     modifications: List[str]
+
+    # Optional: AI-proposed expected improvements (to show side-by-side in UI)
+    expected_profit_pct: Optional[float] = None
+    expected_win_rate: Optional[float] = None
 
 class SaveStrategyRequest(BaseModel):
     strategy_name: str

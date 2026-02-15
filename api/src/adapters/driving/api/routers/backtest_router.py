@@ -5,13 +5,15 @@ from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional, List, Dict, Any
 import logging
 from datetime import datetime
+import os
 from api.src.adapters.driven.persistence.mongodb import db
 from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
 from api.src.application.services.ml_service import MLService
+from api.src.application.services.ai_service import AIService
 from api.src.domain.entities.bot_instance import BotInstance
 from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
 from api.src.infrastructure.security.auth_deps import get_current_user
-from api.src.domain.models.schemas import StrategyOptimizationRequest, StrategyOptimizationResponse, SaveStrategyRequest
+from api.src.domain.models.schemas import StrategyOptimizationRequest, StrategyOptimizationResponse, StrategyOptimizeRunRequest, SaveStrategyRequest
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +210,118 @@ async def run_backtest(
         raise
     except Exception as e:
         logger.error(f"Error running backtest: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/optimize", response_model=StrategyOptimizationResponse)
+async def optimize_strategy(
+    req: StrategyOptimizeRunRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Optimize a strategy's source code using AI.
+
+    - Runs a single-strategy backtest to gather metrics/trades (keeps .pkl behavior intact).
+    - Sends OHLCV + trades summary + current code to the AI.
+    - Saves the optimized strategy under: strategiesOpt/<market>/<strategy>_opt.py
+    """
+    try:
+        user = current_user
+        user_id = user["openId"]
+
+        # Load user's AI config (provider + keys)
+        config = await db.app_configs.find_one({"userId": user["_id"]}) or {}
+
+        # Run a single-strategy backtest to produce trades/metrics (use_ai=False here; AI is separate)
+        from api.src.application.services.backtest_service import BacktestService
+        backtest_service = BacktestService(exchange_adapter=ccxt_service)
+
+        details = await backtest_service.run_backtest(
+            symbol=req.symbol,
+            days=req.days,
+            timeframe=req.timeframe,
+            market_type=req.market_type,
+            use_ai=False,
+            user_config=None,
+            strategy=req.strategy_name,
+            user_id=user_id,
+            exchange_id=req.exchange_id,
+            model_id=None,
+            initial_balance=req.initial_balance,
+            trade_amount=req.trade_amount,
+        )
+
+        # Load original strategy source code from repository
+        market = (req.market_type or "spot").lower()
+        strategy_name = req.strategy_name
+        # strict path: api/src/domain/strategies/<market>/<strategy>.py
+        src_path = os.path.normpath(os.path.join("api", "src", "domain", "strategies", market, f"{strategy_name}.py"))
+        if not os.path.exists(src_path):
+            raise HTTPException(status_code=404, detail=f"Strategy source not found: {src_path}")
+
+        with open(src_path, "r", encoding="utf-8") as f:
+            source_code = f.read()
+
+        # Build basic trades summary
+        trades = details.get("trades") or []
+        pnls = [t.get("pnl") for t in trades if isinstance(t, dict) and t.get("pnl") is not None]
+        pnls_num = [float(x) for x in pnls if isinstance(x, (int, float, str)) and str(x) not in ("nan", "None")]
+        worst = sorted(pnls_num)[:5]
+        best = sorted(pnls_num, reverse=True)[:5]
+
+        trades_summary = {
+            "worst_losses": worst,
+            "best_wins": best,
+        }
+
+        metrics = details.get("metrics") or {
+            "win_rate": details.get("win_rate"),
+            "profit_pct": details.get("profit_pct"),
+            "total_trades": details.get("total_trades"),
+            "max_drawdown": (details.get("metrics") or {}).get("max_drawdown"),
+        }
+
+        # Call AI optimizer
+        ai_service = AIService()
+        opt = await ai_service.optimize_strategy_code(
+            source_code=source_code,
+            metrics=metrics,
+            trades_summary=trades_summary,
+            config=config,
+            feedback=req.user_feedback,
+        )
+
+        optimized_code = (opt.get("code") or source_code)
+
+        # Persist optimized code
+        # Save under api/src/domain/strategiesopt/<market>/<strategy>_opt.py
+        out_dir = os.path.normpath(os.path.join("api", "src", "domain", "strategiesopt", market))
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, f"{strategy_name}_opt.py")
+
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(optimized_code)
+
+        def _to_float(x):
+            try:
+                if x is None:
+                    return None
+                return float(x)
+            except Exception:
+                return None
+
+        return StrategyOptimizationResponse(
+            original_code=source_code,
+            optimized_code=optimized_code,
+            analysis=str(opt.get("analysis") or ""),
+            modifications=list(opt.get("modifications") or []),
+            expected_profit_pct=_to_float(opt.get("expected_profit_pct")),
+            expected_win_rate=_to_float(opt.get("expected_win_rate")),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error optimizing strategy: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

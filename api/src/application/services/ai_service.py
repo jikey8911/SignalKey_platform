@@ -91,14 +91,18 @@ class AIService:
         4. RETURN JSON format with:
            - "analysis": Brief explanation of flaws.
            - "modifications": List of changes made.
+           - "expected_profit_pct": Estimated profit % after optimization (best effort, may be approximate)
+           - "expected_win_rate": Estimated win rate % after optimization (best effort, may be approximate)
            - "code": The FULL valid Python code of the new strategy class.
 
         RESPONSE FORMAT (JSON ONLY):
-        {{
+        {
             "analysis": "...",
             "modifications": ["..."],
+            "expected_profit_pct": 0.0,
+            "expected_win_rate": 0.0,
             "code": "..."
-        }}
+        }
         """
 
         try:

@@ -94,7 +94,7 @@ export default function Backtest() {
 
   // Exchange, Market, Symbol selection
   const [selectedExchange, setSelectedExchange] = useState<string>('');
-  const [selectedMarket, setSelectedMarket] = useState<string>('SPOT');
+  const [selectedMarket, setSelectedMarket] = useState<string>('');
   const [selectedSymbol, setSelectedSymbol] = useState<string>('');
 
   // Backtest config
@@ -127,9 +127,25 @@ export default function Backtest() {
       })
       .then(data => {
         console.log("[Backtest] User exchanges loaded:", data);
-        if (Array.isArray(data)) {
-          // API already returns [{exchangeId,isActive}]
-          setExchanges(data.filter((x: any) => x?.exchangeId));
+        if (!Array.isArray(data)) return;
+
+        // API already returns [{exchangeId,isActive}]
+        const list: Exchange[] = data.filter((x: any) => x?.exchangeId);
+        setExchanges(list);
+
+        // Default exchange: prefer OKX if present, else first.
+        if (list.length > 0) {
+          const okx = list.find((e: any) => String(e.exchangeId).toLowerCase() === 'okx');
+          const defaultExchange = (okx?.exchangeId || list[0]?.exchangeId || '').toString();
+
+          setSelectedExchange(defaultExchange);
+
+          // Reset dependent selections and load markets (which will also load symbols)
+          setMarkets([]);
+          setSelectedMarket('');
+          setSymbols([]);
+          setSelectedSymbol('');
+          loadMarkets(defaultExchange);
         }
       })
       .catch(err => {
@@ -151,9 +167,6 @@ export default function Backtest() {
     };
   }, [user?.openId]);
 
-  // Markets are fixed for Backtest UI
-  const marketOptions = ['SPOT', 'FUTURES', 'DEX'];
-
   // Fetch Symbols
   const [symbols, setSymbols] = useState<Symbol[]>([]);
   const [loadingSymbols, setLoadingSymbols] = useState(false);
@@ -161,18 +174,10 @@ export default function Backtest() {
   const loadSymbols = useCallback((exchangeId: string, marketType: string) => {
     if (!exchangeId || !marketType) return;
 
-    const mtUi = String(marketType).toUpperCase();
-    if (mtUi === 'DEX') {
+    const mt = String(marketType).toLowerCase();
+    if (mt === 'dex') {
       setSymbols([]);
       return;
-    }
-
-    // Map UI SPOT/FUTURES to CCXT market types
-    let mt = 'spot';
-    if (mtUi === 'FUTURES') {
-      const ex = String(exchangeId).toLowerCase();
-      // CCXT: okx futures => swap; binance futures => future
-      mt = ex === 'binance' ? 'future' : 'swap';
     }
 
     setLoadingSymbols(true);
@@ -198,28 +203,61 @@ export default function Backtest() {
       })
       .catch(err => console.error('Error fetching symbols:', err))
       .finally(() => setLoadingSymbols(false));
-  }, [selectedSymbol]);
+  }, []);
+
+  // Fetch Markets (dynamic from CCXT, per exchange)
+  const [markets, setMarkets] = useState<string[]>([]);
+  const [loadingMarkets, setLoadingMarkets] = useState(false);
+
+  const loadMarkets = useCallback((exchangeId: string) => {
+    if (!exchangeId) {
+      setMarkets([]);
+      return;
+    }
+    setLoadingMarkets(true);
+    fetch(`${CONFIG.API_BASE_URL}/backtest/markets/${encodeURIComponent(exchangeId)}`, { credentials: 'include' })
+      .then(res => res.json())
+      .then(data => {
+        const arr = Array.isArray(data) ? data : (Array.isArray(data?.markets) ? data.markets : []);
+        if (Array.isArray(arr)) {
+          setMarkets(arr);
+
+          // Default market: prefer spot if present, else first.
+          if (arr.length > 0) {
+            const spot = arr.find((m: any) => String(m).toLowerCase() === 'spot');
+            const preferred = String(spot ?? arr[0]);
+
+            setSelectedMarket(preferred);
+            setSelectedSymbol('');
+            loadSymbols(exchangeId, preferred);
+          }
+        }
+      })
+      .catch(err => {
+        console.error('Error fetching markets:', err);
+        setMarkets([]);
+      })
+      .finally(() => setLoadingMarkets(false));
+  }, [loadSymbols]);
 
   // Handle Exchange Change
   const handleExchangeChange = (exchangeId: string) => {
     setSelectedExchange(exchangeId);
 
-    // Default to SPOT on exchange change
-    setSelectedMarket('SPOT');
-
     // Clear dependent states
+    setMarkets([]);
+    setSelectedMarket('');
     setSymbols([]);
     setSelectedSymbol('');
 
-    // Auto-load symbols for SPOT
     if (exchangeId) {
-      loadSymbols(exchangeId, 'SPOT');
+      loadMarkets(exchangeId);
     }
   };
 
   // Handle Market Change
   const handleMarketChange = (marketType: string) => {
-    const mt = String(marketType).toUpperCase();
+    const mt = String(marketType);
     setSelectedMarket(mt);
     if (selectedExchange) {
       loadSymbols(selectedExchange, mt);
@@ -302,9 +340,18 @@ export default function Backtest() {
         final_balance: details.final_balance
       };
 
+      // Mantener SOLO top 10 (no acumular en memoria): ordenar por mayor profit y, en empate, mayor winRate.
       setScanResults(prev => {
-        const newResults = [...prev, result];
-        return newResults.sort((a, b) => parseFloat(b.totalReturn) - parseFloat(a.totalReturn));
+        const merged = [...prev, result];
+        merged.sort((a, b) => {
+          const profitA = Number.parseFloat(a.totalReturn) || 0;
+          const profitB = Number.parseFloat(b.totalReturn) || 0;
+          if (profitB !== profitA) return profitB - profitA;
+          const wrA = Number(a.winRate) || 0;
+          const wrB = Number(b.winRate) || 0;
+          return wrB - wrA;
+        });
+        return merged.slice(0, 10);
       });
     };
 
@@ -349,7 +396,7 @@ export default function Backtest() {
       return;
     }
 
-    // Enviar comando por WS
+    // Enviar comando por WS. El backend debe resolver los symbols (solo activos) y hacer el batch.
     wsService.send({
       action: "run_batch_backtest",
       data: {
@@ -358,12 +405,12 @@ export default function Backtest() {
         timeframe: timeframe,
         days: days,
         initialBalance: initialBalance,
-        tradeAmount: tradeAmount
+        tradeAmount: tradeAmount,
+        topN: 10
       }
     });
 
-    // Reset UI state implicitly handled by 'backtest_start' event
-    // But we can set loading state here just in case WS lags a bit
+    // Reset UI state (y además el backend emitirá backtest_start)
     setIsScanning(true);
     setScanResults([]);
   };
@@ -393,21 +440,15 @@ export default function Backtest() {
           }
 
           if (activeEx) {
-            setSelectedExchange(activeEx);
+            // Keep exchange/market/symbols in sync
+            handleExchangeChange(activeEx);
           }
         }
       })
       .catch(err => console.error("Error fetching user config for active exchange:", err));
   }, [user?.openId]);
 
-  // Auto-select defaults if no config found or no active exchange
-  useEffect(() => {
-    if (exchanges.length > 0 && !selectedExchange) {
-      setSelectedExchange(exchanges[0].exchangeId);
-    }
-  }, [exchanges, selectedExchange]);
-
-  // Market is fixed options now; default is set on exchange change.
+  // NOTE: Default selection is handled when exchanges are fetched (prefers OKX) and when user config loads.
 
 
   // Fetch Virtual Balance
@@ -647,18 +688,27 @@ export default function Backtest() {
                 <label className="block text-sm font-semibold text-foreground mb-2">
                   Mercado
                 </label>
-                <select
-                  value={selectedMarket}
-                  onChange={(e) => handleMarketChange(e.target.value)}
-                  disabled={!selectedExchange}
-                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
-                >
-                  {marketOptions.map((m) => (
-                    <option key={m} value={m} disabled={m === 'DEX'}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
+                {loadingMarkets ? (
+                  <div className="flex items-center gap-2 px-4 py-2 bg-slate-900 rounded-lg border border-slate-700 h-[42px]">
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                    <span className="text-muted-foreground text-sm">Cargando...</span>
+                  </div>
+                ) : (
+                  <select
+                    value={selectedMarket}
+                    onChange={(e) => handleMarketChange(e.target.value)}
+                    disabled={!selectedExchange || markets.length === 0}
+                    className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                  >
+                    <option value="">Seleccionar mercado</option>
+                    {markets.map((m) => (
+                      <option key={m} value={m}>
+                        {String(m).toUpperCase()}
+                      </option>
+                    ))}
+                    <option value="dex" disabled>DEX</option>
+                  </select>
+                )}
               </div>
 
               <div>
@@ -820,6 +870,7 @@ export default function Backtest() {
                           <th className="text-right py-2 px-4 text-muted-foreground font-semibold">Win Rate</th>
                           <th className="text-right py-2 px-4 text-muted-foreground font-semibold">Operaciones</th>
                           <th className="text-right py-2 px-4 text-muted-foreground font-semibold">Balance Final</th>
+                          <th className="text-right py-2 px-4 text-muted-foreground font-semibold">Acciones</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -838,6 +889,45 @@ export default function Backtest() {
                             <td className="py-3 px-4 text-right">{res.win_rate}%</td>
                             <td className="py-3 px-4 text-right">{res.total_trades}</td>
                             <td className="py-3 px-4 text-right font-mono">${res.final_balance.toLocaleString()}</td>
+                            <td className="py-3 px-4 text-right">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={async () => {
+                                  const toastId = toast.loading(`Optimizando ${res.strategy}...`);
+                                  try {
+                                    const response = await fetch(`${CONFIG.API_BASE_URL}/backtest/optimize`, {
+                                      method: 'POST',
+                                      headers: { 'Content-Type': 'application/json' },
+                                      credentials: 'include',
+                                      body: JSON.stringify({
+                                        strategy_name: res.strategy,
+                                        symbol: results.symbol,
+                                        exchange_id: selectedExchange || 'okx',
+                                        timeframe: results.timeframe,
+                                        market_type: selectedMarket || 'spot',
+                                        days: results.days,
+                                        initial_balance: results.initial_balance || initialBalance,
+                                        trade_amount: tradeAmount,
+                                      })
+                                    });
+                                    if (!response.ok) {
+                                      const err = await response.json().catch(() => ({}));
+                                      throw new Error(err.detail || 'Error optimizando');
+                                    }
+                                    const opt = await response.json();
+                                    const extra = (opt?.expected_profit_pct != null || opt?.expected_win_rate != null)
+                                      ? ` (AI: PnL~${opt.expected_profit_pct ?? 'N/A'}%, WR~${opt.expected_win_rate ?? 'N/A'}%)`
+                                      : '';
+                                    toast.success(`Estrategia ${res.strategy} optimizada y guardada${extra}`, { id: toastId });
+                                  } catch (e: any) {
+                                    toast.error(`Error: ${e.message}`, { id: toastId });
+                                  }
+                                }}
+                              >
+                                Optimizar
+                              </Button>
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -1130,18 +1220,27 @@ export default function Backtest() {
                 <label className="block text-sm font-semibold text-foreground mb-2">
                   Mercado
                 </label>
-                <select
-                  value={selectedMarket}
-                  onChange={(e) => handleMarketChange(e.target.value)}
-                  disabled={!selectedExchange}
-                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
-                >
-                  {marketOptions.map((m) => (
-                    <option key={m} value={m} disabled={m === 'DEX'}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
+                {loadingMarkets ? (
+                  <div className="flex items-center gap-2 px-4 py-2 bg-slate-900 rounded-lg border border-slate-700 h-[42px]">
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                    <span className="text-muted-foreground text-sm">Cargando...</span>
+                  </div>
+                ) : (
+                  <select
+                    value={selectedMarket}
+                    onChange={(e) => handleMarketChange(e.target.value)}
+                    disabled={!selectedExchange || markets.length === 0}
+                    className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                  >
+                    <option value="">Seleccionar mercado</option>
+                    {markets.map((m) => (
+                      <option key={m} value={m}>
+                        {String(m).toUpperCase()}
+                      </option>
+                    ))}
+                    <option value="dex" disabled>DEX</option>
+                  </select>
+                )}
               </div>
 
               {/* Timeframe */}
@@ -1319,9 +1418,47 @@ export default function Backtest() {
                     <BacktestChart candles={selectedResult.candles} trades={selectedResult.trades} />
                   </div>
 
-                  {/* Deploy Action */}
+                  {/* Deploy / Optimize Action */}
                   <div className="flex justify-end gap-3 pt-4 border-t border-border">
                     <Button variant="outline" onClick={() => setSelectedResult(null)}>Cerrar</Button>
+
+                    <Button
+                      variant="outline"
+                      onClick={async () => {
+                        const toastId = toast.loading(`Optimizando ${selectedResult.strategy_name}...`);
+                        try {
+                          const response = await fetch(`${CONFIG.API_BASE_URL}/backtest/optimize`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            credentials: 'include',
+                            body: JSON.stringify({
+                              strategy_name: selectedResult.strategy_name,
+                              symbol: selectedResult.symbol,
+                              exchange_id: selectedExchange || 'okx',
+                              timeframe: selectedResult.timeframe,
+                              market_type: selectedMarket || 'spot',
+                              days: selectedResult.days,
+                              initial_balance: selectedResult.initial_balance || initialBalance,
+                              trade_amount: tradeAmount,
+                            })
+                          });
+                          if (!response.ok) {
+                            const err = await response.json().catch(() => ({}));
+                            throw new Error(err.detail || 'Error optimizando');
+                          }
+                          const opt = await response.json();
+                          const extra = (opt?.expected_profit_pct != null || opt?.expected_win_rate != null)
+                            ? ` (AI: PnL~${opt.expected_profit_pct ?? 'N/A'}%, WR~${opt.expected_win_rate ?? 'N/A'}%)`
+                            : '';
+                          toast.success(`Estrategia ${selectedResult.strategy_name} optimizada y guardada${extra}`, { id: toastId });
+                        } catch (e: any) {
+                          toast.error(`Error: ${e.message}`, { id: toastId });
+                        }
+                      }}
+                    >
+                      Optimizar
+                    </Button>
+
                     <Button
                       className="bg-green-600 hover:bg-green-700"
                       onClick={() => {

@@ -275,10 +275,40 @@ class CcxtAdapter:
             return []
 
     async def get_markets(self, exchange_id: str) -> List[str]:
-        """Retorna tipos de mercados soportados por el exchange."""
-        # Simplificación: CCXT suele soportar estos, o podemos cargar markets
-        # Para SignalKey, nos interesan spot y swap/futures
-        return ["spot", "futures", "swap"]
+        """Retorna tipos de mercados soportados por el exchange (según CCXT markets).
+
+        Values are returned as CCXT-style strings: spot, swap, future, margin, option, etc.
+        """
+        exchange = await self._get_exchange(exchange_id)
+        if not exchange.markets:
+            await exchange.load_markets()
+
+        types: set[str] = set()
+        for _sym, m in (exchange.markets or {}).items():
+            try:
+                if not m.get("active", True):
+                    continue
+
+                # Prefer explicit type
+                t = (m.get("type") or "").lower().strip()
+                if t:
+                    types.add(t)
+
+                # Also detect via flags
+                if m.get("spot"):
+                    types.add("spot")
+                if m.get("swap"):
+                    types.add("swap")
+                if m.get("future"):
+                    types.add("future")
+                if m.get("margin"):
+                    types.add("margin")
+                if m.get("option"):
+                    types.add("option")
+            except Exception:
+                continue
+
+        return sorted(types)
 
     async def get_symbols(self, exchange_id: str, market_type: str) -> List[str]:
         """Retorna los símbolos activos para un tipo de mercado.
@@ -301,7 +331,24 @@ class CcxtAdapter:
         symbols: List[str] = []
         for symbol, market in (exchange.markets or {}).items():
             try:
+                # --- Tradeable filter ---
+                # CCXT normalized fields (best effort across exchanges):
+                # - active: market is enabled
+                # - expired: contracts that are no longer tradeable
+                # Exchange-specific 'info' often has status/state flags (e.g., OKX: state=live)
                 if not market.get("active", True):
+                    continue
+                if market.get("expired") is True:
+                    continue
+
+                info = market.get("info") or {}
+                # OKX: info.state == 'live' for tradeable markets
+                state = (info.get("state") or info.get("status") or "").lower().strip() if isinstance(info, dict) else ""
+                if state and state not in {"live", "trading", "online", "open"}:
+                    continue
+
+                # Basic symbol sanity (avoid weird entries)
+                if not isinstance(symbol, str) or "/" not in symbol:
                     continue
 
                 m_type = (market.get("type") or "").lower()
@@ -309,7 +356,7 @@ class CcxtAdapter:
                 # Common CCXT flags
                 is_spot = bool(market.get("spot")) or m_type == "spot"
                 is_swap = bool(market.get("swap")) or m_type == "swap"
-                is_future = bool(market.get("future")) or m_type == "future" or m_type == "futures"
+                is_future = bool(market.get("future")) or m_type in {"future", "futures"}
 
                 if "spot" in mt_set and is_spot:
                     symbols.append(symbol)

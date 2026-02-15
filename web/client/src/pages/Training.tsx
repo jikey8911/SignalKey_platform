@@ -21,6 +21,11 @@ export default function Training() {
     const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
     const [selectedSymbols, setSelectedSymbols] = useState<string[]>(['BTC/USDT', 'ETH/USDT']); // Defaults
 
+    // Loading flags for each select
+    const [loadingExchanges, setLoadingExchanges] = useState(false);
+    const [loadingMarkets, setLoadingMarkets] = useState(false);
+    const [loadingSymbols, setLoadingSymbols] = useState(false);
+
     const [loading, setLoading] = useState(false);
     const [models, setModels] = useState<string[]>([]);
     const [logs, setLogs] = useState<string[]>([]);
@@ -74,14 +79,24 @@ export default function Training() {
     // 1. Fetch Exchanges on Mount
     useEffect(() => {
         const fetchExchanges = async () => {
+            setLoadingExchanges(true);
             try {
                 const res = await fetch(`${CONFIG.API_BASE_URL}/market/exchanges`);
                 if (res.ok) {
                     const data = await res.json();
-                    setExchanges(data);
+                    const list: string[] = (data || []).map((x: any) => String(x).toLowerCase());
+                    setExchanges(list);
+
+                    // Default: OKX if present, else first
+                    if (list.length) {
+                        if (list.includes('okx')) setSelectedExchange('okx');
+                        else setSelectedExchange(list[0]);
+                    }
                 }
             } catch (error) {
                 console.error("Failed to fetch exchanges:", error);
+            } finally {
+                setLoadingExchanges(false);
             }
         };
         fetchExchanges();
@@ -91,17 +106,27 @@ export default function Training() {
     useEffect(() => {
         const fetchMarkets = async () => {
             if (!selectedExchange) return;
+            setLoadingMarkets(true);
             try {
+                // reset dependent state
+                setAvailableSymbols([]);
+
                 const res = await fetch(`${CONFIG.API_BASE_URL}/market/exchanges/${selectedExchange}/markets`);
                 if (res.ok) {
                     const data = await res.json();
-                    setMarkets(data);
+                    const list: string[] = (data || []).map((x: any) => String(x).toLowerCase());
+                    setMarkets(list);
                     // Reset to spot if available, else first one
-                    if (data.includes('spot')) setSelectedMarket('spot');
-                    else if (data.length > 0) setSelectedMarket(data[0]);
+                    if (list.includes('spot')) setSelectedMarket('spot');
+                    else if (list.length > 0) setSelectedMarket(list[0]);
+                } else {
+                    setMarkets([]);
                 }
             } catch (error) {
                 console.error("Failed to fetch markets:", error);
+                setMarkets([]);
+            } finally {
+                setLoadingMarkets(false);
             }
         };
         fetchMarkets();
@@ -111,14 +136,21 @@ export default function Training() {
     useEffect(() => {
         const fetchSymbols = async () => {
             if (!selectedExchange || !selectedMarket) return;
+            setLoadingSymbols(true);
             try {
                 const res = await fetch(`${CONFIG.API_BASE_URL}/market/exchanges/${selectedExchange}/markets/${selectedMarket}/symbols`);
                 if (res.ok) {
                     const data = await res.json();
-                    setAvailableSymbols(data);
+                    const list: string[] = (data || []).map((x: any) => String(x));
+                    setAvailableSymbols(list);
+                } else {
+                    setAvailableSymbols([]);
                 }
             } catch (error) {
                 console.error("Failed to fetch symbols:", error);
+                setAvailableSymbols([]);
+            } finally {
+                setLoadingSymbols(false);
             }
         };
         fetchSymbols();
@@ -203,26 +235,38 @@ export default function Training() {
                             {/* Exchange Selector */}
                             <div className="space-y-2">
                                 <label className="text-[10px] font-bold uppercase text-slate-500">Exchange</label>
-                                <select
-                                    value={selectedExchange}
-                                    onChange={(e) => setSelectedExchange(e.target.value)}
-                                    className="w-full bg-slate-800 border-none rounded-xl px-3 py-2 text-xs text-white outline-none ring-1 ring-white/5"
-                                >
-                                    {exchanges.map(ex => <option key={ex} value={ex}>{ex.toUpperCase()}</option>)}
-                                    {exchanges.length === 0 && <option value="okx">OKX (Default)</option>}
-                                </select>
+                                <div className="relative">
+                                    <select
+                                        value={selectedExchange}
+                                        onChange={(e) => setSelectedExchange(e.target.value)}
+                                        disabled={loadingExchanges}
+                                        className="w-full bg-slate-800 border-none rounded-xl px-3 py-2 text-xs text-white outline-none ring-1 ring-white/5 disabled:opacity-60"
+                                    >
+                                        {exchanges.map(ex => <option key={ex} value={ex}>{ex.toUpperCase()}</option>)}
+                                        {exchanges.length === 0 && <option value="okx">OKX (Default)</option>}
+                                    </select>
+                                    {(loadingExchanges) && (
+                                        <div className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">Cargando…</div>
+                                    )}
+                                </div>
                             </div>
 
                             {/* Market Selector */}
                             <div className="space-y-2">
                                 <label className="text-[10px] font-bold uppercase text-slate-500">Mercado</label>
-                                <select
-                                    value={selectedMarket}
-                                    onChange={(e) => setSelectedMarket(e.target.value)}
-                                    className="w-full bg-slate-800 border-none rounded-xl px-3 py-2 text-xs text-white outline-none ring-1 ring-white/5"
-                                >
-                                    {markets.map(m => <option key={m} value={m}>{m.toUpperCase()}</option>)}
-                                </select>
+                                <div className="relative">
+                                    <select
+                                        value={selectedMarket}
+                                        onChange={(e) => setSelectedMarket(e.target.value)}
+                                        disabled={loadingMarkets || !markets.length}
+                                        className="w-full bg-slate-800 border-none rounded-xl px-3 py-2 text-xs text-white outline-none ring-1 ring-white/5 disabled:opacity-60"
+                                    >
+                                        {markets.map(m => <option key={m} value={m}>{m.toUpperCase()}</option>)}
+                                    </select>
+                                    {(loadingMarkets) && (
+                                        <div className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">Cargando…</div>
+                                    )}
+                                </div>
                             </div>
                         </div>
 
@@ -233,7 +277,7 @@ export default function Training() {
                                     Símbolos Seleccionados ({selectedSymbols.length})
                                 </label>
                                 <span className="text-[10px] text-slate-600">
-                                    Disponibles: {availableSymbols.length}
+                                    {loadingSymbols ? 'Cargando símbolos…' : `Disponibles: ${availableSymbols.length}`}
                                 </span>
                             </div>
 
