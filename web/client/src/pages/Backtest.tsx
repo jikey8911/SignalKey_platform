@@ -106,6 +106,10 @@ export default function Backtest() {
   const [initialBalance, setInitialBalance] = useState<number>(10000); // Default 10000
   const [tradeAmount, setTradeAmount] = useState<number>(1000); // Default 1000 for DCA step
 
+  // Guardar estimados (AI) devueltos por /backtest/optimize para mostrarlos en la UI
+  const [optEstimates, setOptEstimates] = useState<Record<string, { expected_profit_pct?: number; expected_win_rate?: number }>>({});
+  const optKey = useCallback((strategyName?: string, sym?: string) => `${sym || ''}__${strategyName || ''}`, []);
+
   // Symbol Search
   const [symbolSearch, setSymbolSearch] = useState('');
 
@@ -884,9 +888,25 @@ export default function Backtest() {
                               {res.strategy}
                             </td>
                             <td className={`py-3 px-4 text-right font-bold ${res.profit_pct >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                              {res.profit_pct >= 0 ? '+' : ''}{res.profit_pct}%
+                              <div>
+                                {res.profit_pct >= 0 ? '+' : ''}{res.profit_pct}%
+                                {(() => {
+                                  const est = optEstimates[optKey(res.strategy, results.symbol)];
+                                  if (!est || est.expected_profit_pct == null) return null;
+                                  return <div className="text-[10px] text-muted-foreground font-normal">AI~ {est.expected_profit_pct}%</div>;
+                                })()}
+                              </div>
                             </td>
-                            <td className="py-3 px-4 text-right">{res.win_rate}%</td>
+                            <td className="py-3 px-4 text-right">
+                              <div>
+                                {res.win_rate}%
+                                {(() => {
+                                  const est = optEstimates[optKey(res.strategy, results.symbol)];
+                                  if (!est || est.expected_win_rate == null) return null;
+                                  return <div className="text-[10px] text-muted-foreground">AI~ {est.expected_win_rate}%</div>;
+                                })()}
+                              </div>
+                            </td>
                             <td className="py-3 px-4 text-right">{res.total_trades}</td>
                             <td className="py-3 px-4 text-right font-mono">${res.final_balance.toLocaleString()}</td>
                             <td className="py-3 px-4 text-right">
@@ -916,6 +936,16 @@ export default function Backtest() {
                                       throw new Error(err.detail || 'Error optimizando');
                                     }
                                     const opt = await response.json();
+
+                                    // Guardar estimado para mostrarlo al lado de los valores actuales
+                                    setOptEstimates(prev => ({
+                                      ...prev,
+                                      [optKey(res.strategy, results.symbol)]: {
+                                        expected_profit_pct: opt?.expected_profit_pct,
+                                        expected_win_rate: opt?.expected_win_rate,
+                                      }
+                                    }));
+
                                     const extra = (opt?.expected_profit_pct != null || opt?.expected_win_rate != null)
                                       ? ` (AI: PnL~${opt.expected_profit_pct ?? 'N/A'}%, WR~${opt.expected_win_rate ?? 'N/A'}%)`
                                       : '';
@@ -1413,6 +1443,35 @@ export default function Backtest() {
                     <StatBox label="Max Drawdown" value={selectedResult.maxDrawdown} unit="%" valueColor="text-orange-500" />
                   </div>
 
+                  {/* Estimado AI (se llena al darle "Optimizar") */}
+                  {(() => {
+                    const est = optEstimates[optKey(selectedResult.strategy_name, selectedResult.symbol)];
+                    if (!est || (est.expected_profit_pct == null && est.expected_win_rate == null)) return null;
+                    return (
+                      <Card className="p-4 bg-muted/40 border border-border">
+                        <div className="flex items-center justify-between gap-4">
+                          <div className="flex items-center gap-2">
+                            <BrainCircuit className="text-cyan-500" size={18} />
+                            <div>
+                              <p className="text-sm font-semibold">Estimado (AI)</p>
+                              <p className="text-xs text-muted-foreground">Proyección aproximada para esta optimización</p>
+                            </div>
+                          </div>
+                          <div className="flex gap-4 text-sm">
+                            <div className="text-right">
+                              <p className="text-[10px] text-muted-foreground uppercase font-bold">PnL estimado</p>
+                              <p className="font-mono font-bold">{est.expected_profit_pct ?? 'N/A'}%</p>
+                            </div>
+                            <div className="text-right">
+                              <p className="text-[10px] text-muted-foreground uppercase font-bold">WR estimado</p>
+                              <p className="font-mono font-bold">{est.expected_win_rate ?? 'N/A'}%</p>
+                            </div>
+                          </div>
+                        </div>
+                      </Card>
+                    );
+                  })()}
+
                   {/* Chart */}
                   <div className="h-64 md:h-80 w-full">
                     <BacktestChart candles={selectedResult.candles} trades={selectedResult.trades} />
@@ -1447,6 +1506,16 @@ export default function Backtest() {
                             throw new Error(err.detail || 'Error optimizando');
                           }
                           const opt = await response.json();
+
+                          // Guardar estimado para mostrarlo al lado de los valores actuales
+                          setOptEstimates(prev => ({
+                            ...prev,
+                            [optKey(selectedResult.strategy_name, selectedResult.symbol)]: {
+                              expected_profit_pct: opt?.expected_profit_pct,
+                              expected_win_rate: opt?.expected_win_rate,
+                            }
+                          }));
+
                           const extra = (opt?.expected_profit_pct != null || opt?.expected_win_rate != null)
                             ? ` (AI: PnL~${opt.expected_profit_pct ?? 'N/A'}%, WR~${opt.expected_win_rate ?? 'N/A'}%)`
                             : '';
