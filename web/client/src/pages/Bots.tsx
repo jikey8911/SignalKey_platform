@@ -46,6 +46,7 @@ export default function BotsPage() {
     const [signals, setSignals] = useState<Signal[]>([]);
     const [positions, setPositions] = useState<Position[]>([]);
     const [isLoadingChart, setIsLoadingChart] = useState(false);
+    const [latestSignals, setLatestSignals] = useState<any[]>([]); // Nuevo estado para las últimas 5 señales
 
     // Hook de WebSocket
     const { lastMessage, sendMessage, isConnected } = useSocket();
@@ -84,24 +85,8 @@ export default function BotsPage() {
         setSignals([]);
         setPositions([]);
 
-        // A) Cargar historial de velas (para que el gráfico no empiece vacío)
-        const fetchHistory = async () => {
-            try {
-                const response = await api.get(`/market/candles`, {
-                    params: {
-                        symbol: selectedBot.symbol,
-                        timeframe: selectedBot.timeframe,
-                        limit: 1000
-                    }
-                });
-                setChartData(response.data || []);
-            } catch (error) {
-                console.error("Error historial API:", error);
-            } finally {
-                setIsLoadingChart(false);
-            }
-        };
-        fetchHistory();
+        // A) Ya no se carga historial por HTTP, se espera el bot_snapshot por socket.
+        //    El estado isLoadingChart se manejará cuando llegue el snapshot.
 
         // B) Suscribirse al Bot específico vía WebSocket
         if (isConnected) {
@@ -134,6 +119,8 @@ export default function BotsPage() {
             if (msg.bot_id === selectedBot?.id) {
                 setSignals(msg.signals || []);
                 setPositions(msg.positions || []);
+                setChartData(msg.candles || []); // Inicializar chartData con las velas del snapshot
+                setIsLoadingChart(false); // Indicar que la carga inicial ha terminado
                 // IMPORTANT: Do NOT setSelectedBot here; it causes a subscription loop
                 // (selectedBot changes -> effect resubscribes -> server sends snapshot again).
             }
@@ -174,11 +161,36 @@ export default function BotsPage() {
                 });
             }
         }
-        else if (event === 'signal_alert' || event === 'new_signal') {
+        else if (event === 'signal_alert' || event === 'new_signal' || event === 'signal_update') {
             const data = msg.data || msg;
+            // Actualizar señales del bot seleccionado
             if (data.botId === selectedBot?.id) {
-                setSignals(prev => [...prev, data]);
+                setSignals(prev => {
+                    const existingIndex = prev.findIndex(s => s.id === data.id);
+                    if (existingIndex > -1) {
+                        const updatedSignals = [...prev];
+                        updatedSignals[existingIndex] = { ...updatedSignals[existingIndex], ...data };
+                        return updatedSignals;
+                    } else {
+                        return [...prev, data];
+                    }
+                });
             }
+            // Actualizar el panel de las últimas 5 señales (problema 2)
+            if (data.type === 'BUY' || data.type === 'SELL' || data.decision === 'BUY' || data.decision === 'SELL') {
+                setLatestSignals(prev => {
+                    const newSignal = {
+                        botName: bots.find(b => b.id === data.botId)?.name || 'Desconocido',
+                        symbol: data.symbol || selectedBot?.symbol || 'Desconocido',
+                        type: data.type || data.decision,
+                        status: data.status || 'esperando',
+                        timestamp: data.timestamp || data.createdAt || Date.now()
+                    };
+                    const updated = [newSignal, ...prev].slice(0, 5);
+                    return updated;
+                });
+            }
+        }
         }
         else if (event === 'position_update' || event === 'operation_update') {
             const data = msg.data || msg;
@@ -246,6 +258,34 @@ export default function BotsPage() {
         <div className="flex h-[calc(100vh-4rem)] w-full bg-slate-950 text-slate-200 overflow-hidden">
 
             {/* --- Sidebar: Lista de Bots --- */}
+            <div className="w-full p-4 border-b border-slate-800 bg-slate-900/60">
+                <h2 className="font-semibold flex items-center gap-2 text-sm mb-2">
+                    <Zap className="h-4 w-4 text-primary" /> Últimas 5 Señales
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-2">
+                    {latestSignals.length > 0 ? (
+                        latestSignals.map((signal, index) => (
+                            <Card key={index} className="bg-slate-800 border-slate-700 text-xs">
+                                <CardContent className="p-2 flex flex-col gap-1">
+                                    <div className="flex justify-between items-center">
+                                        <span className="font-medium">{signal.botName}</span>
+                                        <Badge variant={signal.type === 'BUY' ? 'success' : 'destructive'}>
+                                            {signal.type}
+                                        </Badge>
+                                    </div>
+                                    <div className="text-slate-400">{signal.symbol}</div>
+                                    <div className="text-slate-400">Estado: {signal.status}</div>
+                                    <div className="text-slate-500 text-[0.65rem]">
+                                        {new Date(signal.timestamp).toLocaleTimeString()}
+                                    </div>
+                                </CardContent>
+                            </Card>
+                        ))
+                    ) : (
+                        <p className="text-slate-500 col-span-5">Esperando señales...</p>
+                    )}
+                </div>
+            </div>
             <div className="w-80 border-r border-slate-800 bg-slate-900/60 backdrop-blur-3xl flex flex-col hidden md:flex">
                 <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900/60">
                     <h2 className="font-semibold flex items-center gap-2 text-sm">

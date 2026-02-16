@@ -49,29 +49,8 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
     const seriesRef = useRef<any>(null);
     const markersPrimitiveRef = useRef<any>(null);
 
-    // Internal state for self-fetched data
-    const [fetchedData, setFetchedData] = useState<any[]>([]);
-
-    // If data is provided via props, use it. Otherwise use fetchedData.
-    const activeData = (data && data.length > 0) ? data : fetchedData;
-
-    // EFECTO DE CARGA INTERNA (Sincronización solicitada)
-    useEffect(() => {
-        if (!symbol || !timeframe || (data && data.length > 0)) return;
-
-        const loadData = async () => {
-            try {
-                const res = await fetch(`${CONFIG.API_BASE_URL}/market/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${timeframe}&limit=1000`);
-                if (res.ok) {
-                    const json = await res.json();
-                    setFetchedData(json);
-                }
-            } catch (e) {
-                console.error("Failed to fetch chart data internally", e);
-            }
-        };
-        loadData();
-    }, [symbol, timeframe, data]);
+    // Usamos directamente los datos pasados por props.
+    const activeData = data || [];
 
     const formattedData = useMemo(() => {
         return [...activeData]
@@ -82,27 +61,14 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
     const markers = useMemo(() => {
         if (!trades || trades.length === 0 || formattedData.length === 0) return [];
 
-        const firstCandleTime = formattedData[0].time as number;
-        const lastCandleTime = formattedData[formattedData.length - 1].time as number;
-
-        const candleTimes = new Set(formattedData.map(d => d.time as number));
-        const sortedCandleTimes = formattedData.map(d => d.time as number);
-
         return trades
             .map(t => {
                 const tradeTime = toSeconds(t.time) as number;
 
-                // CRITICAL FIX: Only show markers that are within our visible candle range
-                // A marker at time 0 or too far in the past/future stretches the price scale to infinity
-                if (tradeTime < firstCandleTime - 3600 * 24 || tradeTime > lastCandleTime + 3600) {
-                    return null;
-                }
-
+                // Usar el tiempo exacto de la señal para el marcador
+                // lightweight-charts puede posicionar marcadores en tiempos arbitrarios.
+                // No es necesario buscar una vela coincidente.
                 let validTime = tradeTime;
-                if (!candleTimes.has(tradeTime)) {
-                    const found = sortedCandleTimes.slice().reverse().find(ct => ct <= tradeTime);
-                    if (found) validTime = found;
-                }
 
                 return {
                     time: validTime as Time,
@@ -230,16 +196,14 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
     useEffect(() => {
         if (!chartRef.current || formattedData.length === 0) return;
 
-        // Defer a tick so DOM sizing + setData settle before fitting
-        const t = window.setTimeout(() => {
-            try {
-                chartRef.current?.timeScale().fitContent();
-            } catch (e) {
-                console.warn("Auto-centering failed", e);
-            }
-        }, 0);
-
-        return () => window.clearTimeout(t);
+        // Asegurar que fitContent se llama después de que los datos se hayan aplicado.
+        // Esto se maneja en el EFECTO 1.5 cuando se llama a setData.
+        // Aquí solo necesitamos asegurarnos de que el gráfico se ajuste al cambiar de bot.
+        try {
+            chartRef.current?.timeScale().fitContent();
+        } catch (e) {
+            console.warn("Auto-centering failed", e);
+        }
     }, [symbol, timeframe, formattedData.length]);
 
     return <div ref={chartContainerRef} className="w-full shadow-xl rounded-lg overflow-hidden border border-slate-800" />;
