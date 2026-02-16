@@ -2,7 +2,8 @@ import logging
 import asyncio
 from datetime import datetime
 from typing import Dict, Any, List, Optional
-from api.src.adapters.driven.persistence.mongodb import update_virtual_balance
+from bson import ObjectId
+from api.src.adapters.driven.persistence.mongodb import update_virtual_balance, db
 from api.src.domain.entities.signal import SignalAnalysis
 from api.src.domain.models.schemas import ExecutionResult
 from api.src.application.services.cex_service import CEXService
@@ -86,6 +87,12 @@ class TelegramTradeService:
                     )
                     logger.info(f"🔔 ¡DESPERTANDO! {symbol} cerca de entrada. Activando monitoreo fuerte.")
                     sleep_targets = [float(entry_price)]
+                    
+                    # Actualizar estado de la alerta de entrada en DB
+                    try:
+                        await self.trade_repository.update_trade_item_status(trade_id, "entry", "hit")
+                    except Exception as e:
+                        logger.warning(f"No se pudo actualizar estado de alerta entry para {trade_id}: {e}")
 
                 elif status == "active":
                     # Crear 2 alertas: next TP y SL (si existen)
@@ -362,6 +369,12 @@ class TelegramTradeService:
                 trade["status"] = "closed"
                 should_notify = True
                 
+                # Actualizar estado de la alerta SL en DB
+                try:
+                    await self.trade_repository.update_trade_item_status(trade_id, "sl", "hit")
+                except Exception as e:
+                    logger.warning(f"No se pudo actualizar estado de alerta SL para {trade_id}: {e}")
+                
                 if mode == "simulated":
                     # Devolver remanente al balance
                     return_amount = investment + pnl_value # (Ej: 100 - 10 = 90)
@@ -389,6 +402,20 @@ class TelegramTradeService:
                             tp["hitPrice"] = current_price
                             tp["roiAtHit"] = roi
                             tp_changed = True
+                            
+                            # Actualizar estado de la alerta TP en DB
+                            try:
+                                # Usamos el precio para identificar el TP específico en la colección telegram_trades
+                                await db["telegram_trades"].update_one(
+                                    {
+                                        "botId": ObjectId(trade_id) if isinstance(trade_id, str) and len(trade_id) == 24 else trade_id,
+                                        "kind": "tp",
+                                        "targetPrice": tp["price"]
+                                    },
+                                    {"$set": {"status": "hit", "updatedAt": datetime.utcnow()}}
+                                )
+                            except Exception as e:
+                                logger.warning(f"No se pudo actualizar estado de alerta TP para {trade_id}: {e}")
 
                             # Trailing SL by TP ladder:
                             # - After TP1 hit -> SL moves to entry (break-even)

@@ -291,7 +291,7 @@ class ProcessSignalUseCase:
                                         "kind": "entry",
                                         "level": 0,
                                         "targetPrice": float(entry_val),
-                                        "status": "pending",
+                                        "status": "active",
                                         "createdAt": now,
                                         "updatedAt": now,
                                     })

@@ -29,6 +29,11 @@ class ITelegramTradeRepository(ABC):
         """Verifica si ya existe una operación abierta o esperando para ese par."""
         pass
 
+    @abstractmethod
+    async def update_trade_item_status(self, bot_id: str, kind: str, status: str):
+        """Actualiza el estado de un item de trade (entry, tp, sl) para un bot."""
+        pass
+
 class ITelegramPositionRepository(ABC):
     @abstractmethod
     async def upsert_position(self, trade_id: str, position_data: Dict[str, Any]):

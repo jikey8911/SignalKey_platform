@@ -35,6 +35,15 @@ class MongoTelegramTradeRepository(ITelegramTradeRepository):
         })
         return existing is not None
 
+    async def update_trade_item_status(self, bot_id: str, kind: str, status: str):
+        await db["telegram_trades"].update_many(
+            {
+                "botId": ObjectId(bot_id) if isinstance(bot_id, str) and len(bot_id) == 24 else bot_id,
+                "kind": kind
+            },
+            {"$set": {"status": status, "updatedAt": datetime.utcnow()}}
+        )
+
 class MongoTelegramPositionRepository(ITelegramPositionRepository):
     async def upsert_position(self, trade_id: str, position_data: Dict[str, Any]):
         # Usamos update_one con upsert=True para crear o reemplazar
