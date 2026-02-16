@@ -30,6 +30,36 @@ async def list_user_trades(
     
     return _serialize_mongo(trades)
 
+@router.get("/trades/bot/{bot_id}")
+async def list_trades_by_bot(
+    bot_id: str,
+    current_user: dict = Depends(get_current_user),
+    limit: int = 300
+):
+    """Lista trades de un bot específico del usuario autenticado."""
+    user_id_obj = current_user["_id"]
+    q = {
+        "userId": user_id_obj,
+        "$or": [
+            {"botId": bot_id},
+            {"botId": str(bot_id)},
+        ]
+    }
+
+    # También intentar ObjectId por compatibilidad
+    try:
+        q["$or"].append({"botId": ObjectId(bot_id)})
+    except Exception:
+        pass
+
+    cursor = db.trades.find(q).sort("createdAt", -1).limit(limit)
+    trades = []
+    async for doc in cursor:
+        doc["id"] = str(doc.get("_id"))
+        trades.append(doc)
+
+    return _serialize_mongo(trades)
+
 @router.get("/balances")
 async def get_user_balances(current_user: dict = Depends(get_current_user)):
     """

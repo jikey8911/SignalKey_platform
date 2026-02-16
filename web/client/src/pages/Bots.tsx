@@ -46,7 +46,9 @@ export default function BotsPage() {
     const [signals, setSignals] = useState<Signal[]>([]);
     const [positions, setPositions] = useState<Position[]>([]);
     const [isLoadingChart, setIsLoadingChart] = useState(false);
-    const [latestSignals, setLatestSignals] = useState<any[]>([]); // Nuevo estado para las últimas 5 señales
+    const [latestSignals, setLatestSignals] = useState<any[]>([]); // Top general (todos los bots)
+    const [recentBotSignals, setRecentBotSignals] = useState<any[]>([]); // Últimas señales del bot seleccionado
+    const [lastLiveSignalId, setLastLiveSignalId] = useState<string>('');
 
     // Hook de WebSocket
     const { lastMessage, sendMessage, isConnected } = useSocket();
@@ -79,29 +81,64 @@ export default function BotsPage() {
     useEffect(() => {
         if (!selectedBot) return;
 
-        // Resetear estados visuales
+        let cancelled = false;
+        const activeBotId = selectedBot.id;
+
+        // Resetear estados visuales al cambiar bot
         setIsLoadingChart(true);
         setChartData([]);
         setSignals([]);
         setPositions([]);
+        setRecentBotSignals([]);
 
-        // A) Ya no se carga historial por HTTP, se espera el bot_snapshot por socket.
-        //    El estado isLoadingChart se manejará cuando llegue el snapshot.
+        // A) Cargar histórico de velas (>=40) y trades del bot por HTTP como bootstrap
+        (async () => {
+            try {
+                const ex = (selectedBot as any).exchangeId || (selectedBot as any).exchange_id || 'binance';
+                const mt = (selectedBot as any).marketType || (selectedBot as any).market_type || 'spot';
+
+                const [candlesRes, tradesRes] = await Promise.all([
+                    api.get('/market/candles', {
+                        params: {
+                            symbol: selectedBot.symbol,
+                            timeframe: selectedBot.timeframe,
+                            exchange_id: ex,
+                            market_type: mt,
+                            limit: 120,
+                        }
+                    }),
+                    api.get(`/trades/bot/${activeBotId}`, { params: { limit: 300 } })
+                ]);
+
+                if (cancelled) return;
+
+                const candles = Array.isArray(candlesRes?.data) ? candlesRes.data : [];
+                const trades = Array.isArray(tradesRes?.data) ? tradesRes.data : [];
+
+                if (candles.length > 0) setChartData(candles);
+                if (trades.length > 0) setSignals(trades as any);
+            } catch (e) {
+                if (!cancelled) console.warn('Bootstrap histórico/trades falló, se usará snapshot WS', e);
+            } finally {
+                if (!cancelled) setIsLoadingChart(false);
+            }
+        })();
 
         // B) Suscribirse al Bot específico vía WebSocket
         if (isConnected) {
             sendMessage({
                 action: "SUBSCRIBE_BOT",
-                bot_id: selectedBot.id
+                bot_id: activeBotId
             });
         }
 
-        // C) Limpieza: Desuscribirse al cambiar de bot o desmontar
+        // C) Limpieza: evitar race conditions al cambiar rápido de bot
         return () => {
-            if (isConnected && selectedBot) {
+            cancelled = true;
+            if (isConnected) {
                 sendMessage({
                     action: "UNSUBSCRIBE_BOT",
-                    bot_id: selectedBot.id
+                    bot_id: activeBotId
                 });
             }
         };
@@ -117,12 +154,34 @@ export default function BotsPage() {
         if (event === 'bot_snapshot') {
             // Inicialización completa desde el servidor
             if (msg.bot_id === selectedBot?.id) {
-                setSignals(msg.signals || []);
+                const snapshotTrades = Array.isArray(msg.trades) ? msg.trades : [];
+                const snapshotSignals = Array.isArray(msg.signals) ? msg.signals : [];
+                const snapshotCandles = Array.isArray(msg.candles) ? msg.candles : [];
+
+                // Priorizar trades (colección trades) para marcadores precisos del gráfico.
+                setSignals(snapshotTrades.length > 0 ? snapshotTrades : snapshotSignals);
                 setPositions(msg.positions || []);
-                setChartData(msg.candles || []); // Inicializar chartData con las velas del snapshot
+
+                // Señales recientes del bot (arranca con histórico + luego live)
+                const normalizedSignals = [...snapshotSignals]
+                    .map((s: any) => ({
+                        id: s.id || s._id,
+                        decision: s.decision || s.type || s.signal,
+                        symbol: s.symbol || selectedBot?.symbol,
+                        reasoning: s.reasoning || s.status || '',
+                        timestamp: s.timestamp || s.createdAt || Date.now(),
+                    }))
+                    .sort((a: any, b: any) => Number(new Date(b.timestamp as any)) - Number(new Date(a.timestamp as any)))
+                    .slice(0, 10);
+                setRecentBotSignals(normalizedSignals);
+                if (normalizedSignals.length > 0) setLastLiveSignalId(String(normalizedSignals[0].id || ''));
+
+                // IMPORTANTE: no pisar histórico ya cargado con [] si snapshot llega sin candles.
+                if (snapshotCandles.length > 0) {
+                    setChartData(snapshotCandles);
+                }
+
                 setIsLoadingChart(false); // Indicar que la carga inicial ha terminado
-                // IMPORTANT: Do NOT setSelectedBot here; it causes a subscription loop
-                // (selectedBot changes -> effect resubscribes -> server sends snapshot again).
             }
         }
         else if (event === 'bot_update') {
@@ -145,14 +204,14 @@ export default function BotsPage() {
                     high: Number(c.high),
                     low: Number(c.low),
                     close: Number(c.close),
-                    volume: c.volume,
+                    volume: Number(c.volume || 0),
                 };
 
-                // Actualizar solo la última vela o agregar nueva (sin recargar todo)
+                // Actualizar última vela o agregar nueva cuando cierre la actual
                 setChartData(prev => {
                     if (!prev || prev.length === 0) return [candle];
                     const last = prev[prev.length - 1];
-                    if (last && (last.time === candle.time)) {
+                    if (last && Number(last.time) === Number(candle.time)) {
                         const updated = [...prev];
                         updated[updated.length - 1] = { ...last, ...candle };
                         return updated;
@@ -161,12 +220,30 @@ export default function BotsPage() {
                 });
             }
         }
+        else if (event === 'price_update') {
+            const data = msg.data || msg;
+            if (data.symbol !== selectedBot?.symbol) return;
+            const price = Number(data.price);
+            if (!Number.isFinite(price) || price <= 0) return;
+
+            // Tick en vivo: actualizar cierre/alto/bajo de la vela en formación.
+            setChartData(prev => {
+                if (!prev || prev.length === 0) return prev;
+                const updated = [...prev];
+                const last = { ...updated[updated.length - 1] } as any;
+                last.close = price;
+                last.high = Math.max(Number(last.high ?? price), price);
+                last.low = Math.min(Number(last.low ?? price), price);
+                updated[updated.length - 1] = last;
+                return updated;
+            });
+        }
         else if (event === 'signal_alert' || event === 'new_signal' || event === 'signal_update') {
             const data = msg.data || msg;
             // Actualizar señales del bot seleccionado
             if (data.botId === selectedBot?.id) {
                 setSignals(prev => {
-                    const existingIndex = prev.findIndex(s => s.id === data.id);
+                    const existingIndex = prev.findIndex((s: any) => (s as any).id === data.id || (s as any)._id === data._id);
                     if (existingIndex > -1) {
                         const updatedSignals = [...prev];
                         updatedSignals[existingIndex] = { ...updatedSignals[existingIndex], ...data };
@@ -174,6 +251,20 @@ export default function BotsPage() {
                     } else {
                         return [...prev, data];
                     }
+                });
+
+                // Panel live de últimas 10 señales del bot seleccionado
+                setRecentBotSignals(prev => {
+                    const row = {
+                        id: data.id || data._id || `${Date.now()}-${Math.random()}`,
+                        decision: data.decision || data.type || data.signal,
+                        symbol: data.symbol || selectedBot?.symbol,
+                        reasoning: data.reasoning || data.status || '',
+                        timestamp: data.timestamp || data.createdAt || Date.now(),
+                    };
+                    setLastLiveSignalId(String(row.id));
+                    const dedup = [row, ...prev.filter((p: any) => String(p.id) !== String(row.id))];
+                    return dedup.slice(0, 10);
                 });
             }
             // Actualizar el panel de las últimas 5 señales (problema 2)
@@ -190,7 +281,6 @@ export default function BotsPage() {
                     return updated;
                 });
             }
-        }
         }
         else if (event === 'position_update' || event === 'operation_update') {
             const data = msg.data || msg;
@@ -215,21 +305,68 @@ export default function BotsPage() {
         return null;
     };
 
-    // Transformar señales/trades en marcadores para el gráfico (NO inventar tiempo)
+    const timeframeToMs = (tf?: string): number => {
+        const v = (tf || '1m').toLowerCase().trim();
+        const m = v.match(/^(\d+)([mhdw])$/);
+        if (!m) return 60_000;
+        const n = Number(m[1]);
+        const u = m[2];
+        if (u === 'm') return n * 60_000;
+        if (u === 'h') return n * 3_600_000;
+        if (u === 'd') return n * 86_400_000;
+        if (u === 'w') return n * 604_800_000;
+        return 60_000;
+    };
+
+    // Transformar trades/señales en marcadores alineados al timeframe del bot.
+    const tfMs = timeframeToMs(selectedBot?.timeframe);
     const botTrades = (signals || [])
         .map((sig: any, idx: number) => {
-            const side = (sig.decision === 'SELL' || sig.type === 'SELL' || sig.side === 'SELL') ? 'SELL' : 'BUY';
-            const ms = toMs(sig.timestamp) ?? toMs(sig.createdAt);
-            if (!ms) return null;
+            const rawSide = String(sig.decision || sig.type || sig.side || sig.signal || '').toUpperCase();
+            const side = (rawSide.includes('SELL') || rawSide.includes('SHORT') || rawSide === '2') ? 'SELL' : 'BUY';
+            const msRaw = toMs(sig.timestamp) ?? toMs(sig.createdAt) ?? toMs(sig.openedAt);
+            if (!msRaw) return null;
+
+            // Alinear marcador a la vela del timeframe para que no queden desfasados.
+            const ms = Math.floor(msRaw / tfMs) * tfMs;
+            const price = Number(sig.price ?? sig.entryPrice ?? sig.avgEntryPrice ?? sig.executedPrice ?? 0);
+
             return {
                 id: sig.id || sig._id || `${side}-${ms}-${idx}`,
                 time: ms,
                 side: side as 'BUY' | 'SELL',
-                price: Number(sig.price || 0),
-                label: sig.decision || sig.type || sig.side
+                price,
+                label: side,
+                originalTime: msRaw,
             };
         })
-        .filter(Boolean) as any[];
+        .filter((x: any) => !!x && Number.isFinite(x.price) && x.price > 0) as any[];
+
+    const lastFiveOps = [...botTrades]
+        .sort((a: any, b: any) => Number(b.originalTime || b.time) - Number(a.originalTime || a.time))
+        .slice(0, 5);
+
+    const livePrice = Number((chartData && chartData.length > 0)
+        ? (chartData[chartData.length - 1]?.close)
+        : 0);
+
+    const activePos: any = positions && positions.length > 0 ? positions[0] : null;
+    const entryPrice = Number(activePos?.avgEntryPrice ?? activePos?.entryPrice ?? 0);
+    const currentQty = Number(activePos?.currentQty ?? activePos?.amount ?? 0);
+    const sideRaw = String(activePos?.side ?? activePos?.direction ?? '').toUpperCase();
+    const positionSide = sideRaw.includes('SHORT') || sideRaw.includes('SELL') ? 'SHORT' : (activePos ? 'LONG' : '-');
+
+    const profitValue = (activePos && entryPrice > 0 && currentQty > 0 && Number.isFinite(livePrice) && livePrice > 0)
+        ? (positionSide === 'SHORT'
+            ? (entryPrice - livePrice) * currentQty
+            : (livePrice - entryPrice) * currentQty)
+        : 0;
+
+    const pnlPercent = (activePos && entryPrice > 0 && Number.isFinite(livePrice) && livePrice > 0)
+        ? ((positionSide === 'SHORT'
+            ? (entryPrice - livePrice)
+            : (livePrice - entryPrice)) / entryPrice) * 100
+        : 0;
 
     // Manejadores de acciones
     const handleStartBot = async () => {
@@ -255,10 +392,16 @@ export default function BotsPage() {
     };
 
     return (
-        <div className="flex h-[calc(100vh-4rem)] w-full bg-slate-950 text-slate-200 overflow-hidden">
+        <div className="flex flex-col h-[calc(100vh-4rem)] w-full bg-slate-950 text-slate-200 overflow-hidden">
+            <style>{`
+                @keyframes liveSignalSlideIn {
+                    0% { transform: translateX(42px); opacity: 0; }
+                    100% { transform: translateX(0); opacity: 1; }
+                }
+            `}</style>
 
-            {/* --- Sidebar: Lista de Bots --- */}
-            <div className="w-full p-4 border-b border-slate-800 bg-slate-900/60">
+            {/* --- Barra superior: Últimas señales --- */}
+            <div className="w-full p-4 border-b border-slate-800 bg-slate-900/60 shrink-0">
                 <h2 className="font-semibold flex items-center gap-2 text-sm mb-2">
                     <Zap className="h-4 w-4 text-primary" /> Últimas 5 Señales
                 </h2>
@@ -286,7 +429,9 @@ export default function BotsPage() {
                     )}
                 </div>
             </div>
-            <div className="w-80 border-r border-slate-800 bg-slate-900/60 backdrop-blur-3xl flex flex-col hidden md:flex">
+
+            <div className="flex-1 min-h-0 flex overflow-hidden">
+                <div className="w-80 border-r border-slate-800 bg-slate-900/60 backdrop-blur-3xl flex flex-col hidden md:flex">
                 <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900/60">
                     <h2 className="font-semibold flex items-center gap-2 text-sm">
                         <Activity className="h-4 w-4 text-primary" /> Mis Bots
@@ -401,6 +546,70 @@ export default function BotsPage() {
                 <main className="flex-1 overflow-y-auto p-4 md:p-6 space-y-6">
                     {selectedBot ? (
                         <>
+                            {/* Cards informativas rápidas */}
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                <Card className="shadow-sm"><CardContent className="p-3"><div className="text-xs text-muted-foreground">Operaciones</div><div className="text-lg font-semibold">{botTrades.length}</div></CardContent></Card>
+                                <Card className="shadow-sm"><CardContent className="p-3"><div className="text-xs text-muted-foreground">Posición (currentQty)</div><div className="text-lg font-semibold font-mono">{activePos ? `${currentQty}` : '0'}</div></CardContent></Card>
+                                <Card className="shadow-sm"><CardContent className="p-3"><div className="text-xs text-muted-foreground">Lado</div><div className={`text-lg font-semibold ${positionSide === 'SHORT' ? 'text-red-500' : 'text-green-500'}`}>{positionSide}</div></CardContent></Card>
+                                <Card className="shadow-sm"><CardContent className="p-3"><div className="text-xs text-muted-foreground">Entry (avgEntryPrice)</div><div className="text-lg font-semibold font-mono">{entryPrice > 0 ? entryPrice : '-'}</div></CardContent></Card>
+                                <Card className="shadow-sm"><CardContent className="p-3"><div className="text-xs text-muted-foreground">PnL % (live)</div><div className={`text-lg font-semibold font-mono ${pnlPercent >= 0 ? 'text-green-500' : 'text-red-500'}`}>{activePos ? `${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%` : '-'}</div></CardContent></Card>
+                                <Card className="shadow-sm"><CardContent className="p-3"><div className="text-xs text-muted-foreground">Profit (live)</div><div className={`text-lg font-semibold font-mono ${profitValue >= 0 ? 'text-green-500' : 'text-red-500'}`}>{activePos ? `${profitValue >= 0 ? '+' : ''}${profitValue.toFixed(4)}` : '-'}</div></CardContent></Card>
+                            </div>
+
+                            <Card className="shadow-sm md:col-span-3 border-primary/20 bg-gradient-to-r from-primary/5 to-transparent">
+                                <CardHeader className="py-3 px-5 border-b bg-muted/10">
+                                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                        <span className="inline-flex items-center gap-2 rounded-full bg-red-500/15 text-red-400 px-2.5 py-1 text-xs font-semibold tracking-wide">
+                                            <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+                                            EN VIVO
+                                        </span>
+                                        <Zap className="h-4 w-4 text-primary" /> Señales del bot (últimas 10)
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="p-3">
+                                    <ScrollArea className="w-full whitespace-nowrap">
+                                        {recentBotSignals.length > 0 ? (
+                                            <div className="flex items-stretch gap-2 pb-1">
+                                                <div className="shrink-0 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 flex items-center">
+                                                    <span className="text-xs font-semibold tracking-wide text-primary">EN VIVO</span>
+                                                </div>
+                                                {recentBotSignals.map((s: any, idx: number) => {
+                                                    const isSell = String(s.decision || '').toUpperCase().includes('SELL') || String(s.decision || '').toUpperCase().includes('SHORT');
+                                                    const isNewest = String(s.id) === String(lastLiveSignalId);
+                                                    return (
+                                                        <div
+                                                            key={s.id || idx}
+                                                            className={`shrink-0 w-[290px] rounded-lg border p-3 flex items-center justify-between gap-3 transition-all ${isSell ? 'border-red-500/30 bg-red-500/5' : 'border-green-500/30 bg-green-500/5'} ${isNewest ? 'ring-2 ring-primary/50 shadow-lg' : ''}`}
+                                                            style={isNewest ? { animation: 'liveSignalSlideIn 420ms cubic-bezier(.22,.9,.2,1)' } : undefined}
+                                                        >
+                                                            <div className="flex items-center gap-3 min-w-0">
+                                                                <div className={`h-10 w-1.5 rounded-full ${isSell ? 'bg-red-500' : 'bg-green-500'}`} />
+                                                                <div className="min-w-0">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <Badge variant={isSell ? 'destructive' : 'default'} className="w-20 justify-center">
+                                                                            {String(s.decision || 'SIGNAL').toUpperCase()}
+                                                                        </Badge>
+                                                                        <span className="text-sm font-medium truncate">{s.symbol || selectedBot.symbol}</span>
+                                                                    </div>
+                                                                    <div className="text-xs text-muted-foreground truncate mt-1">{s.reasoning || 'Señal recibida'}</div>
+                                                                </div>
+                                                            </div>
+                                                            <span className="text-xs font-mono text-muted-foreground whitespace-nowrap">
+                                                                {new Date(s.timestamp || Date.now()).toLocaleTimeString()}
+                                                            </span>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        ) : (
+                                            <div className="h-full flex items-center justify-center text-muted-foreground opacity-70 p-6 text-sm">
+                                                Esperando señales en vivo para este bot...
+                                            </div>
+                                        )}
+                                    </ScrollArea>
+                                </CardContent>
+                            </Card>
+
                             {/* Gráfico Principal */}
                             <Card className="flex flex-col shadow-sm border-muted transition-all hover:shadow-md min-h-[500px]">
                                 <CardHeader className="py-3 px-5 border-b bg-muted/5 flex flex-row justify-between items-center">
@@ -421,6 +630,40 @@ export default function BotsPage() {
                                         timeframe={selectedBot.timeframe}
                                         trades={botTrades}
                                     />
+                                </CardContent>
+                            </Card>
+
+                            {/* Últimas 5 operaciones del bot (desde trades) */}
+                            <Card className="shadow-sm">
+                                <CardHeader className="py-3 px-5 border-b bg-muted/5">
+                                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                                        <Zap className="h-4 w-4 text-primary" /> Últimas 5 operaciones
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="p-0">
+                                    <ScrollArea className="h-[180px]">
+                                        {lastFiveOps.length > 0 ? (
+                                            <div className="divide-y">
+                                                {lastFiveOps.map((op: any, idx: number) => (
+                                                    <div key={op.id || idx} className="flex items-center justify-between p-3 text-sm">
+                                                        <div className="flex items-center gap-2">
+                                                            <Badge variant={op.side === 'BUY' ? 'default' : 'destructive'} className="w-16 justify-center">
+                                                                {op.side}
+                                                            </Badge>
+                                                            <span className="font-mono text-xs text-muted-foreground">
+                                                                {new Date(op.originalTime || op.time).toLocaleString()}
+                                                            </span>
+                                                        </div>
+                                                        <div className="font-mono font-medium">{op.price}</div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <div className="h-full flex items-center justify-center text-muted-foreground opacity-60 p-6 text-sm">
+                                                Sin operaciones para este bot
+                                            </div>
+                                        )}
+                                    </ScrollArea>
                                 </CardContent>
                             </Card>
 
@@ -539,6 +782,7 @@ export default function BotsPage() {
                         </div>
                     )}
                 </main>
+            </div>
             </div>
         </div>
     );

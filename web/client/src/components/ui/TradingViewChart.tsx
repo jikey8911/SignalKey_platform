@@ -58,6 +58,18 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
             .sort((a, b) => (a.time as number) - (b.time as number)) as CandlestickData<Time>[];
     }, [activeData]);
 
+    const priceFormatCfg = useMemo(() => {
+        const last = formattedData[formattedData.length - 1] as any;
+        const px = Number(last?.close ?? 0);
+        if (!Number.isFinite(px) || px <= 0) {
+            return { type: 'price' as const, precision: 6, minMove: 0.000001 };
+        }
+        if (px >= 1000) return { type: 'price' as const, precision: 2, minMove: 0.01 };
+        if (px >= 1) return { type: 'price' as const, precision: 4, minMove: 0.0001 };
+        if (px >= 0.01) return { type: 'price' as const, precision: 6, minMove: 0.000001 };
+        return { type: 'price' as const, precision: 8, minMove: 0.00000001 };
+    }, [formattedData]);
+
     const markers = useMemo(() => {
         if (!trades || trades.length === 0 || formattedData.length === 0) return [];
 
@@ -120,11 +132,7 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
             borderVisible: false,
             wickUpColor: '#22c55e',
             wickDownColor: '#ef4444',
-            priceFormat: {
-                type: 'price',
-                precision: 8,
-                minMove: 0.00000001,
-            },
+            priceFormat: priceFormatCfg,
         });
 
         // Asignamos las referencias
@@ -151,35 +159,61 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
         };
     }, [colors, height]);
 
+    // Ajustar formato de precio según rango/símbolo activo sin recrear el chart.
+    useEffect(() => {
+        if (!seriesRef.current) return;
+        try {
+            seriesRef.current.applyOptions({ priceFormat: priceFormatCfg });
+        } catch {}
+    }, [priceFormatCfg, symbol, timeframe]);
+
     const lastAppliedRef = useRef<{ len: number; lastTime: number } | null>(null);
+    const lastSymbolTfRef = useRef<string>('');
 
     // EFECTO 1.5: Actualizar Datos (Sin recrear gráfico)
     useEffect(() => {
         if (!seriesRef.current || formattedData.length === 0) return;
 
+        const key = `${symbol || ''}:${timeframe || ''}`;
+        const symbolChanged = lastSymbolTfRef.current !== key;
+
         const last = formattedData[formattedData.length - 1];
         const lastTime = Number(last.time as any);
         const prev = lastAppliedRef.current;
+
+        // Cambio de símbolo/timeframe: reset total del dataset y escala
+        if (symbolChanged) {
+            lastSymbolTfRef.current = key;
+            lastAppliedRef.current = null;
+            seriesRef.current.setData(formattedData);
+            try {
+                chartRef.current?.priceScale('right')?.applyOptions({ autoScale: true });
+                chartRef.current?.timeScale().fitContent();
+            } catch {}
+            lastAppliedRef.current = { len: formattedData.length, lastTime };
+            return;
+        }
 
         // First load or big jump: setData
         if (!prev || formattedData.length < prev.len || formattedData.length - prev.len > 5) {
             seriesRef.current.setData(formattedData);
             lastAppliedRef.current = { len: formattedData.length, lastTime };
-            try { chartRef.current?.timeScale().fitContent(); } catch {}
+            try {
+                chartRef.current?.priceScale('right')?.applyOptions({ autoScale: true });
+                chartRef.current?.timeScale().fitContent();
+            } catch {}
             return;
         }
 
         // Incremental updates: update last candle (and possibly append)
-        // lightweight-charts update() can handle both same-time updates and next-bar append
         try {
             seriesRef.current.update(last);
         } catch {
-            // fallback
             seriesRef.current.setData(formattedData);
         }
 
         lastAppliedRef.current = { len: formattedData.length, lastTime };
-    }, [formattedData]);
+    }, [formattedData, symbol, timeframe]);
 
     // EFECTO 2: Actualizar Marcadores Dinámicamente
     useEffect(() => {

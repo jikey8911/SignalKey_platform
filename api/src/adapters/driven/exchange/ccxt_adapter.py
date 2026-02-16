@@ -207,7 +207,8 @@ class CcxtAdapter:
         Obtiene datos históricos (velas).
         Si use_random_date = True, busca un punto aleatorio en el tiempo (para entrenamiento ML).
         """
-        exchange = await self._get_exchange(exchange_id, user_id)
+        market_type = kwargs.get("market_type") or kwargs.get("marketType")
+        exchange = await self._get_exchange(exchange_id, user_id, market_type=market_type)
         
         since = None
         if use_random_date:

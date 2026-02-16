@@ -30,5 +30,19 @@ class TrendEma(BaseStrategy):
 
         return df
 
+    def on_price_tick(self, price: float, current_position: dict = None, context: dict = None) -> int:
+        ctx = context or {}
+        prev_price = float(ctx.get("prev_price") or 0)
+        if price is None or price <= 0 or prev_price <= 0:
+            return self.SIGNAL_WAIT
+
+        change = (float(price) - prev_price) / prev_price
+        trigger = float(self.config.get("tick_trend_trigger_pct", 0.2)) / 100.0
+        if change >= trigger:
+            return self.SIGNAL_BUY
+        if change <= -trigger:
+            return self.SIGNAL_SELL
+        return self.SIGNAL_WAIT
+
     def get_features(self):
         return ['ema_diff', 'vol_ratio']

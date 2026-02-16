@@ -4,6 +4,7 @@ import logging
 import json
 import time
 import asyncio
+from bson import ObjectId
 
 # Imports de tus servicios (Ajusta las rutas según tu estructura real)
 from api.src.adapters.driven.notifications.socket_service import SocketService
@@ -22,6 +23,7 @@ from api.src.adapters.driven.notifications.socket_service import socket_service
 from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
 from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository
 from api.src.adapters.driven.persistence.mongodb import db
+from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
 
 bot_repo = MongoBotRepository()
 signal_repo = MongoDBSignalRepository(db)
@@ -152,7 +154,37 @@ async def handle_bot_subscription(websocket: WebSocket, bot_id: str):
 
     # Obtener señales recientes
     signals = await signal_repo.find_by_bot_id(bot_id)
-    
+
+    # Obtener trades del bot (fuente canónica para marcadores)
+    trade_query = {"$or": [{"botId": bot_id_str}, {"botId": bot_doc.get("_id")}]}
+    trades_docs = await db["trades"].find(trade_query).sort("createdAt", -1).limit(400).to_list(length=400)
+
+    # Obtener velas históricas para el símbolo/timeframe del bot
+    candles = []
+    try:
+        market_type = (bot_doc.get("marketType") or bot_doc.get("market_type") or "spot")
+        df = await ccxt_service.get_historical_data(
+            symbol=symbol,
+            timeframe=timeframe,
+            limit=120,  # >=40 velas, dejamos margen para contexto visual
+            exchange_id=exchange_id,
+            market_type=market_type,
+        )
+        if df is not None and not df.empty:
+            candles = [
+                {
+                    "time": int(ts.timestamp()),
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                    "volume": float(row["volume"]),
+                }
+                for ts, row in df.iterrows()
+            ]
+    except Exception as e:
+        logger.warning(f"No se pudo cargar histórico para snapshot {exchange_id}:{symbol}:{timeframe}: {e}")
+
     # Obtener posición activa
     active_position = await db["positions"].find_one({
         "botId": bot_doc["_id"],
@@ -171,7 +203,9 @@ async def handle_bot_subscription(websocket: WebSocket, bot_id: str):
             "status": bot_doc.get("status")
         },
         "positions": [_serialize_mongo(active_position)] if active_position else [],
-        "signals": [s.to_dict() for s in signals]
+        "signals": [s.to_dict() for s in signals],
+        "trades": _serialize_mongo(trades_docs),
+        "candles": candles,
     }
     
     # B) ENVIAR SNAPSHOT (avoid datetime serialization issues)
@@ -179,11 +213,26 @@ async def handle_bot_subscription(websocket: WebSocket, bot_id: str):
     
     # C) GESTIONAR SUSCRIPCIÓN EN EL SOCKET MANAGER
     await socket_service.subscribe_to_topic(websocket, topic=f"bot:{bot_id}")
-    
-    # D) SUSCRIBIR A VELAS
+
+    # D) SUSCRIBIR A VELAS (histórico + live por timeframe del bot)
     market_topic = f"candles:{exchange_id}:{symbol}:{timeframe}"
     logger.info(f"Suscribiendo socket a stream de mercado: {market_topic}")
     await socket_service.subscribe_to_topic(websocket, topic=market_topic)
+    try:
+        await container.stream_service.subscribe_candles(exchange_id, symbol, timeframe)
+    except Exception as e:
+        logger.warning(f"No se pudo suscribir velas en vivo para {symbol} {timeframe}: {e}")
+
+    # E) SUSCRIBIR A TICKER EN VIVO PARA ESTE BOT
+    bot_market_type = str(bot_doc.get("marketType") or bot_doc.get("market_type") or "SPOT").upper()
+    if bot_market_type == "CEX":
+        bot_market_type = "SPOT"
+    price_topic = f"price:{exchange_id}:{bot_market_type}:{symbol}"
+    await socket_service.subscribe_to_topic(websocket, topic=price_topic)
+    try:
+        await container.stream_service.subscribe_ticker(exchange_id, symbol, market_type=bot_market_type)
+    except Exception as e:
+        logger.warning(f"No se pudo suscribir ticker en vivo para {symbol}: {e}")
 
 async def handle_bot_unsubscription(websocket: WebSocket, bot_id: str):
     logger.info(f"Cliente desuscribiéndose del bot {bot_id}")

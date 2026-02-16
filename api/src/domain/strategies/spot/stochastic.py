@@ -30,5 +30,10 @@ class StochasticStrategy(BaseStrategy):
 
         return df
 
+    def on_price_tick(self, price: float, current_position: dict = None, context: dict = None) -> int:
+        """Tick intravela liviano (fallback): delega al BaseStrategy."""
+        return super().on_price_tick(price, current_position=current_position, context=context)
+
+
     def get_features(self) -> List[str]:
         return ['stoch_k', 'stoch_d']

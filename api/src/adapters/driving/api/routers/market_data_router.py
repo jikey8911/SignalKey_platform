@@ -21,7 +21,12 @@ async def list_market_types(exchange_id: str):
     Retorna los tipos de mercado disponibles (spot, swap, future, margin) para un exchange.
     Delegado a CCXTService.
     """
-    markets = await ccxt_service.get_markets(exchange_id)
+    try:
+        markets = await ccxt_service.get_markets(exchange_id)
+    except Exception as e:
+        logger.error(f"Error fetching markets for {exchange_id}: {e}")
+        raise HTTPException(status_code=503, detail=f"No se pudieron obtener mercados para {exchange_id}. Verifica conexión DNS/Internet. Error: {str(e)}")
+
     if not markets:
         # Check if exchange exists in list or service returned empty due to error
         if exchange_id not in ccxt.exchanges:
@@ -36,35 +41,49 @@ async def list_symbols(exchange_id: str, market_type: str):
     Retorna la lista de símbolos activos para un exchange y tipo de mercado específico.
     Delegado a CCXTService.
     """
-    symbols = await ccxt_service.get_symbols(exchange_id, market_type)
+    try:
+        symbols = await ccxt_service.get_symbols(exchange_id, market_type)
+    except Exception as e:
+        logger.error(f"Error fetching symbols for {exchange_id} ({market_type}): {e}")
+        raise HTTPException(status_code=503, detail=f"No se pudieron obtener símbolos para {exchange_id}/{market_type}. Verifica conexión DNS/Internet. Error: {str(e)}")
     return symbols
 
 @router.get("/candles")
-async def get_candles(symbol: str, timeframe: str = "1h", limit: int = 100):
+async def get_candles(
+    symbol: str,
+    timeframe: str = "1h",
+    limit: int = 300,
+    exchange_id: str = "binance",
+    market_type: str = "spot",
+):
     """
     Get historical candles for charts.
     """
     try:
-        # We use the public data fetcher which is robust
-        df = await ccxt_service.get_historical_data(symbol, timeframe, limit=limit)
-        
+        # Public historical candles resolved by exchange + market type.
+        df = await ccxt_service.get_historical_data(
+            symbol=symbol,
+            timeframe=timeframe,
+            limit=limit,
+            exchange_id=exchange_id,
+            market_type=market_type,
+        )
+
         if df.empty:
              return []
-             
-        # Convert to list of dicts for frontend {time, open, high, low, close, volume}
-        # Timestamp in df index is datetime64, convert to int timestamp (seconds)
+
         data = []
         for timestamp, row in df.iterrows():
             data.append({
-                "time": int(timestamp.timestamp()), # Frontend charts usually expect seconds
-                "open": row['open'],
-                "high": row['high'],
-                "low": row['low'],
-                "close": row['close'],
-                "volume": row['volume']
+                "time": int(timestamp.timestamp()),
+                "open": float(row['open']),
+                "high": float(row['high']),
+                "low": float(row['low']),
+                "close": float(row['close']),
+                "volume": float(row['volume'])
             })
         return data
-        
+
     except Exception as e:
-        logger.error(f"Error fetching candles for {symbol}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error fetching candles for {symbol} ({exchange_id}/{market_type}/{timeframe}): {e}")
+        raise HTTPException(status_code=503, detail=str(e))

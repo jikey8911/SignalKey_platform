@@ -42,5 +42,9 @@ class SpotArbitrage(BaseStrategy):
         
         return df
 
+    def on_price_tick(self, price: float, current_position: dict = None, context: dict = None) -> int:
+        """Tick rápido arbitraje: fallback neutro (evitar falsas señales sin zscore en vivo)."""
+        return self.SIGNAL_WAIT
+
     def get_features(self) -> List[str]:
         return ['z_score', 'deviation_pct', 'volatility_z']

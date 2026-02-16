@@ -27,5 +27,10 @@ class BollingerBandsStrategy(BaseStrategy):
 
         return df
 
+    def on_price_tick(self, price: float, current_position: dict = None, context: dict = None) -> int:
+        """Tick intravela liviano (fallback): delega al BaseStrategy."""
+        return super().on_price_tick(price, current_position=current_position, context=context)
+
+
     def get_features(self) -> List[str]:
         return ['bb_upper', 'bb_mid', 'bb_lower', 'bb_std']

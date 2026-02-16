@@ -31,5 +31,22 @@ class RsiReversion(BaseStrategy):
         
         return df
 
+    def on_price_tick(self, price: float, current_position: dict = None, context: dict = None) -> int:
+        """Tick rápido: busca reversión por spike intravela."""
+        ctx = context or {}
+        prev_price = float(ctx.get("prev_price") or 0)
+        if price is None or price <= 0 or prev_price <= 0:
+            return self.SIGNAL_WAIT
+
+        # reversión agresiva: caída brusca => BUY, subida brusca => SELL
+        change = (float(price) - prev_price) / prev_price
+        spike = float(self.config.get("tick_reversion_spike_pct", 0.45)) / 100.0
+
+        if change <= -spike:
+            return self.SIGNAL_BUY
+        if change >= spike:
+            return self.SIGNAL_SELL
+        return self.SIGNAL_WAIT
+
     def get_features(self):
         return ['rsi', 'roc']
