@@ -13,6 +13,7 @@ import axios from "axios";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useQueryClient } from "@tanstack/react-query";
 import { CONFIG } from "@/config";
+import { AUTH_TOKEN_KEY } from "@/lib/api";
 
 const formSchema = z.object({
     username: z.string().min(3, "Username must be at least 3 characters"),
@@ -52,6 +53,9 @@ export default function Login() {
             });
 
             console.log('Auth response:', response.data);
+            if (response.data?.token) {
+                localStorage.setItem(AUTH_TOKEN_KEY, response.data.token);
+            }
             toast.success(activeTab === "login" ? "Login successful" : "Registration successful");
 
             // Invalidate auth cache to force refetch

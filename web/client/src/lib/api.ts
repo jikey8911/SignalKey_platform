@@ -3,9 +3,22 @@ import { CONFIG } from '@/config';
 
 export const API_BASE = CONFIG.API_BASE_URL;
 
+export const AUTH_TOKEN_KEY = 'signalkey.auth.token';
+
+const getAuthToken = () => localStorage.getItem(AUTH_TOKEN_KEY);
+
 export const api = axios.create({
   baseURL: API_BASE,
   withCredentials: true,
+});
+
+api.interceptors.request.use((config) => {
+  const token = getAuthToken();
+  if (token) {
+    config.headers = config.headers || {};
+    (config.headers as any).Authorization = `Bearer ${token}`;
+  }
+  return config;
 });
 
 export class ApiError extends Error {
@@ -17,7 +30,17 @@ export class ApiError extends Error {
 }
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, { ...options, credentials: 'include' });
+  const token = getAuthToken();
+  const headers: Record<string, string> = {
+    ...((options?.headers as Record<string, string>) || {}),
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const res = await fetch(url, {
+    ...options,
+    headers,
+    credentials: 'include'
+  });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
     throw new ApiError(`API Error: ${res.status} ${res.statusText} - ${text}`, res.status);
@@ -36,7 +59,8 @@ export async function fetchUser() {
 }
 
 export async function logout() {
-  await fetch(`${API_BASE}/auth/logout`, { method: 'POST' });
+  await fetch(`${API_BASE}/auth/logout`, { method: 'POST', credentials: 'include' });
+  localStorage.removeItem(AUTH_TOKEN_KEY);
 }
 
 // Trading
