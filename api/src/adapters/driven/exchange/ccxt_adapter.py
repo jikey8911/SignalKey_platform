@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import ccxt.pro as ccxtpro
 from typing import Dict, Any, Optional, AsyncGenerator, List
 import pandas as pd
@@ -17,6 +18,10 @@ class CcxtAdapter:
         self._locks: Dict[str, asyncio.Lock] = {}
         self._markets_loaded: set[str] = set()
         self.db = kwargs.get('db_adapter')
+        # Safety switch: disabled by default to prevent accidental real orders.
+        # Enable explicitly with CCXT_ALLOW_ORDER_EXECUTION=true|1|yes when ready.
+        raw_flag = str(os.getenv('CCXT_ALLOW_ORDER_EXECUTION', 'false')).strip().lower()
+        self.allow_order_execution = raw_flag in {'1', 'true', 'yes', 'on'}
 
     def _normalize_default_type(self, exchange_id: str, market_type: Optional[str]) -> str:
         """Map app marketType (CEX/SPOT/FUTURES) to ccxt defaultType."""
@@ -184,8 +189,20 @@ class CcxtAdapter:
     # --- REST METHODS ---
 
     async def execute_trade(self, symbol: str, side: str, amount: float, price: Optional[float] = None, user_id: str = None, exchange_id: str = 'binance') -> Dict[str, Any]:
+        # HARD SAFETY GUARD: block real execution unless explicitly enabled.
+        if not self.allow_order_execution:
+            msg = (
+                "Real order execution is disabled by safety policy "
+                "(set CCXT_ALLOW_ORDER_EXECUTION=true to enable)."
+            )
+            logger.warning(
+                f"[BLOCKED_ORDER] exchange={exchange_id} user={user_id} symbol={symbol} "
+                f"side={side} amount={amount} price={price}"
+            )
+            return {"success": False, "blocked": True, "message": msg}
+
         exchange = await self._get_exchange(exchange_id, user_id)
-        
+
         # Validar si tenemos credenciales antes de intentar operar
         if not getattr(exchange, 'apiKey', None):
              return {"success": False, "message": f"No API Credentials found for {exchange_id}"}
@@ -196,7 +213,7 @@ class CcxtAdapter:
                 order = await exchange.create_market_order(symbol, side_low, amount)
             else:
                 order = await exchange.create_limit_order(symbol, side_low, amount, price)
-            
+
             return {"success": True, "order_id": order.get('id'), "status": order.get('status'), "details": order}
         except Exception as e:
             logger.error(f"Error executing trade on {exchange_id}: {e}")

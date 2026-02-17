@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi import APIRouter, HTTPException, Depends, Request, Query
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import os
@@ -152,6 +152,34 @@ async def update_config(
 
         return {"success": True, "config": config}
     
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+@router.post("/telegram_activate")
+async def set_telegram_activation(
+    active: bool = Query(..., description="Enable/disable Telegram signal analysis"),
+    current_user: dict = Depends(get_current_user),
+    config_repo: ConfigRepository = Depends(get_config_repository)
+):
+    """Toggle Telegram analysis switch without disconnecting Telegram session.
+
+    - active=True  => process incoming Telegram signals
+    - active=False => keep receiving/logging messages but skip AI analysis
+    """
+    try:
+        user_id = current_user["openId"]
+        ok = await config_repo.update_config(user_id, {"botTelegramActivate": bool(active)})
+        if not ok:
+            await config_repo.create_config(user_id, {"botTelegramActivate": bool(active)})
+
+        config = await config_repo.get_or_create_config(user_id)
+        return {
+            "success": True,
+            "botTelegramActivate": bool(config.get("botTelegramActivate", False))
+        }
     except HTTPException:
         raise
     except Exception as e:

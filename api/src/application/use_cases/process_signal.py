@@ -48,9 +48,9 @@ class ProcessSignalUseCase:
             "createdAt": saved_signal.createdAt.isoformat() + "Z"
         })
 
-        # Validación rápida de configuración
-        if not config.get("isAutoEnabled", True) and not config.get("botTelegramActivate", False):
-            await self._cancel_signal(saved_signal.id, "Auto-processing disabled by user")
+        # Telegram master switch: if disabled, cancel analysis flow.
+        if not config.get("botTelegramActivate", False):
+            await self._cancel_signal(saved_signal.id, "Telegram analysis disabled by user")
             return
 
         try:

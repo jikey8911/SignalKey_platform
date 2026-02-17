@@ -141,7 +141,11 @@ export default function Dashboard() {
     const fetchStatus = async () => {
       if (!user?.openId) return;
       try {
-        const res = await fetch(`${CONFIG.API_BASE_URL}/status/${user.openId}`);
+        const token = localStorage.getItem('signalkey.auth.token');
+        const res = await fetch(`${CONFIG.API_BASE_URL}/status/${user.openId}`, {
+          credentials: 'include',
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        });
         const data = await res.json();
         setConnectionStatus(data);
       } catch (e) {
@@ -157,12 +161,18 @@ export default function Dashboard() {
     setConnectionStatus((prev: any) => ({ ...prev, botTelegramActivate: checked }));
 
     try {
-      const res = await fetch(`${CONFIG.API_BASE_URL}/config/telegram_activate?user_id=${user.openId}&active=${checked}`, {
-        method: 'POST'
+      const token = localStorage.getItem('signalkey.auth.token');
+      const res = await fetch(`${CONFIG.API_BASE_URL}/config/telegram_activate?active=${checked}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       });
       if (!res.ok) throw new Error('Failed to update config');
 
-      const statusRes = await fetch(`${CONFIG.API_BASE_URL}/status/${user.openId}`);
+      const statusRes = await fetch(`${CONFIG.API_BASE_URL}/status/${user.openId}`, {
+        credentials: 'include',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
       const data = await statusRes.json();
       setConnectionStatus(data);
     } catch (e) {
@@ -201,6 +211,14 @@ export default function Dashboard() {
       });
     }
   }, [lastMessage, queryClient, user?.openId]);
+
+  const cexBalance = useMemo(() => {
+    return balances?.find((b: any) => String(b.marketType || '').toUpperCase() === 'CEX');
+  }, [balances]);
+
+  const dexBalance = useMemo(() => {
+    return balances?.find((b: any) => String(b.marketType || '').toUpperCase() === 'DEX');
+  }, [balances]);
 
   const stats = useMemo(() => {
     if (!trades || trades.length === 0) {
@@ -302,22 +320,20 @@ export default function Dashboard() {
           {balancesLoading ? (
             <div className="h-12 bg-slate-800/50 animate-pulse rounded" />
           ) : (
-            <div className="space-y-3">
-              <div>
-                <p className="text-xs text-slate-500 mb-1">Virtual (Simulación)</p>
-                <p className="text-3xl font-black text-white">
-                  ${(balances?.find((b: any) => b.marketType === 'CEX')?.amount || 0).toFixed(2)}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-3 rounded-lg border border-green-500/20 bg-green-500/5">
+                <p className="text-xs text-slate-400 mb-1">Real (Exchange)</p>
+                <p className="text-2xl font-black text-green-400">
+                  ${Number(cexBalance?.realBalance || 0).toFixed(2)} <span className="text-sm text-slate-500">USDT</span>
                 </p>
               </div>
 
-              {balances?.find((b: any) => b.marketType === 'CEX')?.realBalance !== undefined && (
-                <div className="pt-3 border-t border-white/5">
-                  <p className="text-xs text-slate-500 mb-1">Real (Exchange)</p>
-                  <p className="text-xl font-bold text-green-400">
-                    ${(balances.find((b: any) => b.marketType === 'CEX').realBalance || 0).toFixed(2)} <span className="text-sm text-slate-500">USDT</span>
-                  </p>
-                </div>
-              )}
+              <div className="p-3 rounded-lg border border-white/10 bg-slate-800/30">
+                <p className="text-xs text-slate-400 mb-1">Virtual (Simulación)</p>
+                <p className="text-2xl font-black text-white">
+                  ${Number(cexBalance?.amount || 0).toFixed(2)}
+                </p>
+              </div>
             </div>
           )}
         </Card>
@@ -330,7 +346,7 @@ export default function Dashboard() {
             <div>
               <p className="text-xs text-slate-500 mb-1">Virtual (Simulación)</p>
               <p className="text-3xl font-black text-white">
-                {(balances?.find((b: any) => b.marketType === 'DEX')?.amount || 0).toFixed(4)} <span className="text-lg text-slate-500">SOL</span>
+                {Number(dexBalance?.amount || 0).toFixed(4)} <span className="text-lg text-slate-500">SOL</span>
               </p>
             </div>
           )}

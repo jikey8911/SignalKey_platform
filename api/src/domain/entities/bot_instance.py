@@ -29,7 +29,10 @@ class BotInstance:
     def to_dict(self):
         return {
             "id": self.id,
+            # Keep both keys for compatibility during migration.
+            # Canonical internal owner should be ObjectId in user_id/userId.
             "user_id": self.user_id,
+            "userId": self.user_id,
             "name": self.name,
             "symbol": self.symbol,
             "strategy_name": self.strategy_name,

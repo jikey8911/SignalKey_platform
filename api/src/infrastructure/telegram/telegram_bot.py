@@ -154,8 +154,9 @@ class TelegramUserBot:
                     if not text:
                         return
 
-                    # Master switch: if auto disabled, do not process
-                    if not config.get("isAutoEnabled", True) and not config.get("botTelegramActivate", False):
+                    # Master switch for Telegram analysis.
+                    # If disabled, keep receiving/logging messages but skip AI processing.
+                    if not config.get("botTelegramActivate", False):
                         return
 
                     # Processing allow-list: if empty, do not process anyone by default

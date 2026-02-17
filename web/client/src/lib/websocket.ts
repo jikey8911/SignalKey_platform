@@ -17,9 +17,10 @@ class WebSocketService {
 
         // Lógica de URL idéntica a tu SocketContext para consistencia
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsBase = CONFIG.WS_BASE_URL.replace(/^ws(s)?:/, protocol);
-        const cleanWsBase = wsBase.endsWith('/ws') ? wsBase : `${wsBase}/ws`;
-        const url = `${cleanWsBase}/${userId}`;
+        const wsBase = CONFIG.WS_BASE_URL.replace(/^ws(s)?:/i, protocol);
+        const normalizedBase = wsBase.replace(/\/+$/, '');
+        const baseWithoutWs = normalizedBase.replace(/\/ws$/i, '');
+        const url = `${baseWithoutWs}/ws/${userId}`;
 
         console.log(`[WS-Lib] Connecting to ${url}`);
         this.socket = new WebSocket(url);

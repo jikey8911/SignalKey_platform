@@ -85,18 +85,28 @@ async def get_user_balances(current_user: dict = Depends(get_current_user)):
         # Primero intentar leer de la colección dedicada virtual_balances
         virtual_cex = await db.virtual_balances.find_one({"userId": user_id_obj, "marketType": "cex", "asset": "USDT"})
         virtual_dex = await db.virtual_balances.find_one({"userId": user_id_obj, "marketType": "dex", "asset": "SOL"})
-        
+
         # Fallback a configuración inicial si no existen registros
         config_virtual = config.get("virtualBalances", {})
-        
+
         cex_amount = virtual_cex["amount"] if virtual_cex else config_virtual.get("USDT", config_virtual.get("cex", 1000.0))
         dex_amount = virtual_dex["amount"] if virtual_dex else config_virtual.get("SOL", config_virtual.get("dex", 1.0))
 
+        # Intentar traer también balance REAL CEX (solo lectura) para mostrar en dashboard
+        real_cex_usdt = 0.0
+        try:
+            from api.main import cex_service
+            balances = await cex_service.fetch_balance(str(user_id_obj))
+            real_cex_usdt = float((balances.get("total") or {}).get("USDT") or 0.0)
+        except Exception as e:
+            logger.warning(f"Could not fetch real CEX balance in demo mode for {user_id_str}: {e}")
+
         res = []
-        # CEX Balance (USDT)
+        # CEX Balance (USDT): virtual + real side-by-side support
         res.append({
             "asset": "USDT",
             "amount": cex_amount,
+            "realBalance": real_cex_usdt,
             "marketType": "CEX",
             "isDemo": True
         })

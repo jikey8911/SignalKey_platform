@@ -232,8 +232,43 @@ api_router.include_router(ai_router.router)
 # --- ENDPOINTS AUXILIARES ---
 @api_router.get("/status/{user_id}")
 async def get_user_status(user_id: str):
-    # Implementación simplificada para health check rápido
-    return {"status": "online", "user_id": user_id, "system_booting": boot_task is not None and not boot_task.done()}
+    """User-facing dashboard status.
+
+    user_id is openId from frontend.
+    """
+    try:
+        user = await db.users.find_one({"openId": user_id})
+        config = await db.app_configs.find_one({"userId": user.get("_id")}) if user else None
+
+        telegram_active = bool((config or {}).get("botTelegramActivate", False))
+        telegram_connected = False
+        if user and user.get("openId"):
+            try:
+                telegram_connected = bot_manager.is_bot_active(user["openId"])
+            except Exception:
+                telegram_connected = False
+
+        # Lightweight flags expected by dashboard
+        return {
+            "status": "online",
+            "user_id": user_id,
+            "system_booting": boot_task is not None and not boot_task.done(),
+            "gemini": True,
+            "exchange": True,
+            "telegram": telegram_connected,
+            "botTelegramActivate": telegram_active,
+        }
+    except Exception as e:
+        logger.error(f"Error in /status/{user_id}: {e}")
+        return {
+            "status": "online",
+            "user_id": user_id,
+            "system_booting": boot_task is not None and not boot_task.done(),
+            "gemini": False,
+            "exchange": False,
+            "telegram": False,
+            "botTelegramActivate": False,
+        }
 
 app.include_router(api_router)
 

@@ -32,13 +32,22 @@ export default function Home() {
     }
   }, [isAuthenticated, loading, setLocation, init]);
 
+  const authHeaders = () => {
+    const token = localStorage.getItem('signalkey.auth.token');
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  };
+
   const checkSystemStatus = async () => {
     // 1. Get Config
     try {
-      const configRes = await fetch(`${CONFIG.API_BASE_URL}/config/`);
+      const configRes = await fetch(`${CONFIG.API_BASE_URL}/config/`, {
+        credentials: 'include',
+        headers: {
+          ...authHeaders(),
+        },
+      });
       const configData = await configRes.json();
       const config = configData.config || {};
-      const userId = user?.openId || config.userId;
 
       // 2. Check AI
       setAiStatus(prev => ({ ...prev, status: "loading", message: "Verificando..." }));
@@ -46,7 +55,11 @@ export default function Home() {
       try {
         const res = await fetch(`${CONFIG.API_BASE_URL}/config/test-ai`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          headers: {
+            'Content-Type': 'application/json',
+            ...authHeaders(),
+          },
           body: JSON.stringify({ provider: aiProvider })
         });
         const data = await res.json();
@@ -68,7 +81,11 @@ export default function Home() {
         try {
           const res = await fetch(`${CONFIG.API_BASE_URL}/config/test-exchange`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            headers: {
+              'Content-Type': 'application/json',
+              ...authHeaders(),
+            },
             body: JSON.stringify({ exchangeId: activeExchange.exchangeId })
           });
           const data = await res.json();
@@ -87,18 +104,18 @@ export default function Home() {
       // 4. Check Telegram
       setTelegramStatus(prev => ({ ...prev, status: "loading", message: "Verificando..." }));
       try {
-        if (userId) {
-          const res = await fetch(`${CONFIG.API_BASE_URL}/telegram/status/${userId}`);
-          const data = await res.json();
-          if (data.connected) {
-            setTelegramStatus({ name: "Telegram Bot", status: "success", message: `Conectado (${data.phone_number || ''})` });
-          } else {
-            setTelegramStatus({ name: "Telegram Bot", status: "error", message: "No Conectado" });
-          }
+        const res = await fetch(`${CONFIG.API_BASE_URL}/telegram/status`, {
+          credentials: 'include',
+          headers: {
+            ...authHeaders(),
+          },
+        });
+        const data = await res.json();
+        if (data.connected) {
+          setTelegramStatus({ name: "Telegram Bot", status: "success", message: `Conectado (${data.phone_number || ''})` });
         } else {
-          setTelegramStatus({ name: "Telegram Bot", status: "error", message: "User ID no disponible" });
+          setTelegramStatus({ name: "Telegram Bot", status: "error", message: "No Conectado" });
         }
-
       } catch (e: any) {
         setTelegramStatus({ name: "Telegram Bot", status: "error", message: e.message });
       }
