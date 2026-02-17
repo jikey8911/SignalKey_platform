@@ -209,7 +209,7 @@ export default function TelegramConsole() {
         </div>
 
         {/* Estadísticas */}
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <Card className="p-4 border-l-4 border-l-gray-500">
             <div className="text-sm text-muted-foreground mb-1">Total Mensajes (Buffer)</div>
             <div className="text-2xl font-bold text-foreground">{stats.total}</div>
@@ -282,13 +282,14 @@ export default function TelegramConsole() {
 
         {/* Tabla de Mensajes */}
         <Card className="p-0 overflow-hidden border border-border">
-          <div className="bg-muted/50 p-4 border-b border-border grid grid-cols-12 gap-4 text-xs font-semibold text-muted-foreground sticky top-0">
+          <div className="overflow-x-auto">
+          <div className="bg-muted/50 p-4 border-b border-border grid grid-cols-12 gap-4 text-xs font-semibold text-muted-foreground sticky top-0 min-w-[900px]">
             <div className="col-span-1">Hora</div>
             <div className="col-span-2">Chat / Canal</div>
             <div className="col-span-7">Mensaje</div>
             <div className="col-span-2 text-right">Estado</div>
           </div>
-          <div className="divide-y divide-border max-h-[70vh] overflow-y-auto bg-background">
+          <div className="divide-y divide-border max-h-[70vh] overflow-y-auto bg-background min-w-[900px]">
             {filteredLogs.length === 0 ? (
               <div className="p-8 text-center text-muted-foreground col-span-12">
                 {logs.length === 0 ? "Esperando mensajes del socket..." : "No hay mensajes que coincidan con los filtros"}
@@ -297,7 +298,7 @@ export default function TelegramConsole() {
               filteredLogs.map((log) => (
                 <div
                   key={log._id || Math.random().toString()}
-                  className="p-4 grid grid-cols-12 gap-4 text-sm hover:bg-muted/30 transition-colors border-l-4"
+                  className="p-4 grid grid-cols-12 gap-4 text-sm hover:bg-muted/30 transition-colors border-l-4 min-w-[900px]"
                   style={{
                     borderLeftColor: log.status === 'signal_detected' ? '#2563eb' :
                       log.status === 'processed' ? '#16a34a' :
@@ -326,6 +327,7 @@ export default function TelegramConsole() {
                 </div>
               ))
             )}
+          </div>
           </div>
         </Card>
 

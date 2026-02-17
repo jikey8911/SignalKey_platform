@@ -238,7 +238,7 @@ export default function Signals() {
         </div>
 
         {/* Estadísticas */}
-        <div className="grid grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           <Card className="p-3 border-l-4 border-l-gray-500">
             <div className="text-xs text-muted-foreground mb-1">Total</div>
             <div className="text-xl font-bold text-foreground">{stats.total}</div>
@@ -336,7 +336,7 @@ export default function Signals() {
                   </Button>
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <div className="text-xs font-semibold text-muted-foreground mb-2">Tipo de Mercado</div>
                   <div className="flex gap-2 flex-wrap">
