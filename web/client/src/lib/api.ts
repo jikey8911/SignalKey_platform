@@ -4,6 +4,7 @@ import { CONFIG } from '@/config';
 export const API_BASE = CONFIG.API_BASE_URL;
 
 export const AUTH_TOKEN_KEY = 'signalkey.auth.token';
+export const AUTH_USER_KEY = 'signalkey.auth.user';
 
 const getAuthToken = () => localStorage.getItem(AUTH_TOKEN_KEY);
 
@@ -52,8 +53,21 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 export async function fetchUser() {
   try {
     const data = await fetchJson<{ user: any }>(`${API_BASE}/auth/me`);
-    return data.user;
+    if (data?.user) {
+      localStorage.setItem(AUTH_USER_KEY, JSON.stringify(data.user));
+      return data.user;
+    }
+    return null;
   } catch (e) {
+    // Fallback para evitar loop de login cuando /auth/me falla por cookies/cors
+    const raw = localStorage.getItem(AUTH_USER_KEY);
+    if (raw) {
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return null;
+      }
+    }
     return null;
   }
 }
@@ -61,6 +75,7 @@ export async function fetchUser() {
 export async function logout() {
   await fetch(`${API_BASE}/auth/logout`, { method: 'POST', credentials: 'include' });
   localStorage.removeItem(AUTH_TOKEN_KEY);
+  localStorage.removeItem(AUTH_USER_KEY);
 }
 
 // Trading

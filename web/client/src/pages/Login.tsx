@@ -13,7 +13,7 @@ import axios from "axios";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useQueryClient } from "@tanstack/react-query";
 import { CONFIG } from "@/config";
-import { AUTH_TOKEN_KEY } from "@/lib/api";
+import { AUTH_TOKEN_KEY, AUTH_USER_KEY } from "@/lib/api";
 
 const formSchema = z.object({
     username: z.string().min(3, "Username must be at least 3 characters"),
@@ -55,6 +55,9 @@ export default function Login() {
             console.log('Auth response:', response.data);
             if (response.data?.token) {
                 localStorage.setItem(AUTH_TOKEN_KEY, response.data.token);
+            }
+            if (response.data?.user) {
+                localStorage.setItem(AUTH_USER_KEY, JSON.stringify(response.data.user));
             }
             toast.success(activeTab === "login" ? "Login successful" : "Registration successful");
 
