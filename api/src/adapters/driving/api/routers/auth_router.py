@@ -42,6 +42,12 @@ def create_access_token(data: dict) -> str:
     return encoded_jwt
 
 
+def _is_secure_request(request: Request) -> bool:
+    """Detect if request is effectively HTTPS (behind proxy/CDN included)."""
+    xf_proto = (request.headers.get("x-forwarded-proto") or "").lower()
+    return request.url.scheme == "https" or xf_proto == "https" or os.getenv("RENDER") == "true"
+
+
 async def get_user_repository() -> UserRepository:
     """Dependency to get user repository"""
     db = await get_database()
@@ -52,6 +58,7 @@ async def get_user_repository() -> UserRepository:
 async def register(
     request: RegisterRequest,
     response: Response,
+    http_request: Request,
     user_repo: UserRepository = Depends(get_user_repository)
 ):
     """Register a new user"""
@@ -79,13 +86,13 @@ async def register(
         })
         
         # Set cookie
-        is_prod = os.getenv('NODE_ENV') == 'production'
+        is_secure = _is_secure_request(http_request)
         response.set_cookie(
             key="manus.sid",
             value=token,
             httponly=True,
-            secure=is_prod,
-            samesite="none" if is_prod else "lax",
+            secure=is_secure,
+            samesite="none" if is_secure else "lax",
             max_age=365 * 24 * 60 * 60,  # 1 year in seconds
             path="/"
         )
@@ -110,6 +117,7 @@ async def register(
 async def login(
     request: LoginRequest,
     response: Response,
+    http_request: Request,
     user_repo: UserRepository = Depends(get_user_repository)
 ):
     """Login user"""
@@ -132,13 +140,13 @@ async def login(
         })
         
         # Set cookie
-        is_prod = os.getenv('NODE_ENV') == 'production'
+        is_secure = _is_secure_request(http_request)
         response.set_cookie(
             key="manus.sid",
             value=token,
             httponly=True,
-            secure=is_prod,
-            samesite="none" if is_prod else "lax",
+            secure=is_secure,
+            samesite="none" if is_secure else "lax",
             max_age=365 * 24 * 60 * 60,
             path="/"
         )
@@ -189,12 +197,12 @@ async def login(
 @router.post("/logout")
 async def logout(response: Response, request: Request):
     """Logout user"""
-    is_prod = os.getenv('NODE_ENV') == 'production'
+    is_secure = _is_secure_request(request)
     response.delete_cookie(
         key="manus.sid",
         path="/",
-        secure=is_prod,
-        samesite="none" if is_prod else "lax"
+        secure=is_secure,
+        samesite="none" if is_secure else "lax"
     )
     return {"success": True}
 
