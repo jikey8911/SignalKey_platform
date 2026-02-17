@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import axios from "axios";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useQueryClient } from "@tanstack/react-query";
+import { CONFIG } from "@/config";
 
 const formSchema = z.object({
     username: z.string().min(3, "Username must be at least 3 characters"),
@@ -41,7 +42,9 @@ export default function Login() {
 
     async function onSubmit(values: z.infer<typeof formSchema>) {
         setIsLoading(true);
-        const endpoint = activeTab === "login" ? "/api/auth/login" : "/api/auth/register";
+        const endpoint = activeTab === "login"
+            ? `${CONFIG.API_BASE_URL}/auth/login`
+            : `${CONFIG.API_BASE_URL}/auth/register`;
 
         try {
             const response = await axios.post(endpoint, values, {
