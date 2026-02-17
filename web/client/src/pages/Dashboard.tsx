@@ -84,7 +84,7 @@ const MetaSelectorWidget = ({ user }: { user: any }) => {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className={`p-3 rounded-lg border text-center ${result.decision === 'BUY' ? 'bg-green-500/10 border-green-500/30 text-green-400' :
               result.decision === 'SELL' ? 'bg-red-500/10 border-red-500/30 text-red-400' :
                 'bg-slate-500/10 border-slate-500/30 text-slate-400'

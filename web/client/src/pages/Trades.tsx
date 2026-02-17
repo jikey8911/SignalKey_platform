@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { TradingViewChart } from '@/components/ui/TradingViewChart';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { fetchTelegramBots, fetchTelegramTradesByBot } from '@/lib/api';
+import { CONFIG } from '@/config';
 import { TrendingUp, TrendingDown, Filter, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/_core/hooks/useAuth';
 import { useSocket } from '@/_core/hooks/useSocket';
@@ -224,7 +225,7 @@ export default function Trades() {
         limit: '300'
       }).toString();
 
-      const res = await fetch(`/api/market/candles?${qs}`, { credentials: 'include' });
+      const res = await fetch(`${CONFIG.API_BASE_URL}/market/candles?${qs}`, { credentials: 'include' });
       const raw = await res.json().catch(() => ({}));
       const arr = Array.isArray(raw?.candles) ? raw.candles : (Array.isArray(raw) ? raw : []);
 

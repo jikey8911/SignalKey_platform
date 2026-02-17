@@ -12,6 +12,8 @@ import { toast } from "sonner";
 import axios from "axios";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { useQueryClient } from "@tanstack/react-query";
+import { CONFIG } from "@/config";
+import { AUTH_TOKEN_KEY, AUTH_USER_KEY } from "@/lib/api";
 
 const formSchema = z.object({
     username: z.string().min(3, "Username must be at least 3 characters"),
@@ -41,7 +43,9 @@ export default function Login() {
 
     async function onSubmit(values: z.infer<typeof formSchema>) {
         setIsLoading(true);
-        const endpoint = activeTab === "login" ? "/api/auth/login" : "/api/auth/register";
+        const endpoint = activeTab === "login"
+            ? `${CONFIG.API_BASE_URL}/auth/login`
+            : `${CONFIG.API_BASE_URL}/auth/register`;
 
         try {
             const response = await axios.post(endpoint, values, {
@@ -49,6 +53,12 @@ export default function Login() {
             });
 
             console.log('Auth response:', response.data);
+            if (response.data?.token) {
+                localStorage.setItem(AUTH_TOKEN_KEY, response.data.token);
+            }
+            if (response.data?.user) {
+                localStorage.setItem(AUTH_USER_KEY, JSON.stringify(response.data.user));
+            }
             toast.success(activeTab === "login" ? "Login successful" : "Registration successful");
 
             // Invalidate auth cache to force refetch
