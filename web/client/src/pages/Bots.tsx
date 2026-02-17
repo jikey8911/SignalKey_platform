@@ -1,11 +1,24 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useSocket } from '../_core/hooks/useSocket';
 import { TradingViewChart } from '../components/ui/TradingViewChart';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { ScrollArea } from '../components/ui/scroll-area';
-import { Activity, TrendingUp, Clock, RefreshCw, Zap, Wallet, Plus, Play, Square, Settings } from 'lucide-react';
+import {
+    Popover,
+    PopoverContent,
+    PopoverTrigger,
+} from '../components/ui/popover';
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogDescription,
+    DialogFooter,
+} from '../components/ui/dialog';
+import { Activity, TrendingUp, Clock, RefreshCw, Zap, Wallet, Plus, Play, Square, Settings, MoreHorizontal } from 'lucide-react';
 import { api } from '../lib/api';
 
 // --- Tipos de Datos ---
@@ -15,6 +28,8 @@ interface Bot {
     symbol: string;
     timeframe: string;
     status: string;
+    createdAt?: string;
+    updatedAt?: string;
     strategy_config?: { name: string };
     config?: any;
 }
@@ -46,12 +61,83 @@ export default function BotsPage() {
     const [signals, setSignals] = useState<Signal[]>([]);
     const [positions, setPositions] = useState<Position[]>([]);
     const [isLoadingChart, setIsLoadingChart] = useState(false);
-    const [latestSignals, setLatestSignals] = useState<any[]>([]); // Top general (todos los bots)
+    const [latestSignals, setLatestSignals] = useState<any[]>([]); // Top live: bots de estrategia/modelo
     const [recentBotSignals, setRecentBotSignals] = useState<any[]>([]); // Últimas señales del bot seleccionado
     const [lastLiveSignalId, setLastLiveSignalId] = useState<string>('');
+    const [liveNowMs, setLiveNowMs] = useState<number>(Date.now());
+    const TOP_SIGNAL_TTL_MS = 5000;
+    const [isActionsOpen, setIsActionsOpen] = useState(false);
+    const [isCloseDialogOpen, setIsCloseDialogOpen] = useState(false);
+    const [isManualActionLoading, setIsManualActionLoading] = useState(false);
 
     // Hook de WebSocket
     const { lastMessage, sendMessage, isConnected } = useSocket();
+
+    const sortedBots = useMemo(() => {
+        const toMs = (b: Bot) => {
+            const t = b.createdAt || b.updatedAt;
+            const ms = t ? new Date(t).getTime() : 0;
+            return Number.isFinite(ms) ? ms : 0;
+        };
+        return [...bots].sort((a, b) => {
+            const diff = toMs(b) - toMs(a); // más nuevo primero
+            if (diff !== 0) return diff;
+            return String(b.id || '').localeCompare(String(a.id || ''));
+        });
+    }, [bots]);
+
+    const botNameById = useMemo(() => {
+        const m: Record<string, string> = {};
+        for (const b of bots) {
+            const id = String((b as any).id || (b as any)._id || '');
+            if (id) m[id] = b.name || b.symbol || 'Bot';
+        }
+        return m;
+    }, [bots]);
+
+    const strategyBotIds = useMemo(() => {
+        return new Set(
+            bots
+                .map((b: any) => String(b?.id || b?._id || ''))
+                .filter(Boolean)
+        );
+    }, [bots]);
+
+    const normalizeTopSignal = (s: any) => {
+        const botId = String(s.botId || s.bot_id || s.botID || '');
+        const ts = s.timestamp || s.createdAt || Date.now();
+        return {
+            id: s.id || s._id || `${botId}-${ts}-${Math.random()}`,
+            botName: botNameById[botId] || s.botName || 'Bot',
+            symbol: s.symbol || 'N/D',
+            type: String(s.decision || s.type || s.signal || 'HOLD').toUpperCase(),
+            status: s.status || 'live',
+            timestamp: ts,
+            botId,
+            arrivedAt: Date.now(),
+        };
+    };
+
+    // ticker UI para animación/expiración de señales live
+    useEffect(() => {
+        const it = setInterval(() => setLiveNowMs(Date.now()), 500);
+        return () => clearInterval(it);
+    }, []);
+
+    // Barra superior: señales de estrategia duran 5s y luego desaparecen
+    useEffect(() => {
+        setLatestSignals(prev => prev.filter((s: any) => (liveNowMs - Number(s.arrivedAt || 0)) <= TOP_SIGNAL_TTL_MS));
+    }, [liveNowMs]);
+
+    const displayedLiveSignals = useMemo(() => {
+        const ttlMs = 5000;
+        return (recentBotSignals || [])
+            .filter((s: any) => {
+                const arrivedAt = Number(s.arrivedAt || s.timestamp || 0);
+                return liveNowMs - arrivedAt <= ttlMs;
+            })
+            .slice(0, 5);
+    }, [recentBotSignals, liveNowMs]);
 
     // 1. Cargar lista de bots al montar el componente
     useEffect(() => {
@@ -67,9 +153,42 @@ export default function BotsPage() {
               ? payload
               : (Array.isArray(payload?.bots) ? payload.bots : []);
             setBots(data);
-            // Seleccionar el primer bot si no hay selección actual y hay datos
+
+            // Cargar top live inicial SOLO de bots de estrategia/modelo (excluye telegram)
+            try {
+                const signalsRes = await api.get('/signals/', { params: { limit: 100 } });
+                const rawSignals = Array.isArray(signalsRes?.data) ? signalsRes.data : [];
+                const botIds = new Set(
+                    data
+                        .map((b: any) => String(b?.id || b?._id || ''))
+                        .filter(Boolean)
+                );
+
+                const globalTop = rawSignals
+                    .filter((s: any) => {
+                        const botId = String(s.botId || s.bot_id || s.botID || '');
+                        return !!botId && botIds.has(botId);
+                    })
+                    .sort((a: any, b: any) => Number(new Date(a.timestamp || a.createdAt || 0)) - Number(new Date(b.timestamp || b.createdAt || 0)))
+                    .slice(-5)
+                    .map((s: any) => ({
+                        ...normalizeTopSignal(s),
+                        arrivedAt: Date.now(),
+                    }));
+
+                setLatestSignals(globalTop);
+            } catch (e) {
+                console.warn('No se pudo cargar el top live de estrategia', e);
+            }
+
+            // Seleccionar el bot más nuevo si no hay selección actual
             if (data.length > 0 && !selectedBot) {
-                setSelectedBot(data[0]);
+                const newest = [...data].sort((a, b) => {
+                    const ta = new Date(a.createdAt || a.updatedAt || 0).getTime() || 0;
+                    const tb = new Date(b.createdAt || b.updatedAt || 0).getTime() || 0;
+                    return tb - ta;
+                })[0];
+                setSelectedBot(newest || data[0]);
             }
         } catch (error) {
             console.error("Error cargando bots:", error);
@@ -164,13 +283,18 @@ export default function BotsPage() {
 
                 // Señales recientes del bot (arranca con histórico + luego live)
                 const normalizedSignals = [...snapshotSignals]
-                    .map((s: any) => ({
-                        id: s.id || s._id,
-                        decision: s.decision || s.type || s.signal,
-                        symbol: s.symbol || selectedBot?.symbol,
-                        reasoning: s.reasoning || s.status || '',
-                        timestamp: s.timestamp || s.createdAt || Date.now(),
-                    }))
+                    .map((s: any, idx: number) => {
+                        const ts = Number(new Date((s.timestamp || s.createdAt || Date.now()) as any));
+                        return {
+                            id: s.id || s._id,
+                            decision: String(s.decision || s.type || s.signal || 'HOLD').toUpperCase(),
+                            symbol: s.symbol || selectedBot?.symbol,
+                            reasoning: s.reasoning || s.status || '',
+                            status: s.status || 'live',
+                            timestamp: s.timestamp || s.createdAt || Date.now(),
+                            arrivedAt: Number.isFinite(ts) ? ts : (Date.now() - idx * 250),
+                        };
+                    })
                     .sort((a: any, b: any) => Number(new Date(b.timestamp as any)) - Number(new Date(a.timestamp as any)))
                     .slice(0, 10);
                 setRecentBotSignals(normalizedSignals);
@@ -240,8 +364,20 @@ export default function BotsPage() {
         }
         else if (event === 'signal_alert' || event === 'new_signal' || event === 'signal_update') {
             const data = msg.data || msg;
-            // Actualizar señales del bot seleccionado
-            if (data.botId === selectedBot?.id) {
+
+            // Top bar global SOLO estrategia/modelo (botId debe existir en bots cargados)
+            const topBotId = String(data.botId || data.bot_id || data.botID || '');
+            if (topBotId && strategyBotIds.has(topBotId)) {
+                setLatestSignals(prev => {
+                    const row = normalizeTopSignal(data);
+                    // Cola visual: entra por derecha, sale por izquierda
+                    const queue = [...prev.filter((p: any) => String((p as any).id) !== String(row.id)), row];
+                    return queue.slice(-5);
+                });
+            }
+
+            // Panel #2: solo señales del bot seleccionado
+            if (String(data.botId || data.bot_id || '') === String(selectedBot?.id || '')) {
                 setSignals(prev => {
                     const existingIndex = prev.findIndex((s: any) => (s as any).id === data.id || (s as any)._id === data._id);
                     if (existingIndex > -1) {
@@ -253,32 +389,18 @@ export default function BotsPage() {
                     }
                 });
 
-                // Panel live de últimas 10 señales del bot seleccionado
                 setRecentBotSignals(prev => {
                     const row = {
                         id: data.id || data._id || `${Date.now()}-${Math.random()}`,
-                        decision: data.decision || data.type || data.signal,
+                        decision: String(data.decision || data.type || data.signal || 'HOLD').toUpperCase(),
                         symbol: data.symbol || selectedBot?.symbol,
                         reasoning: data.reasoning || data.status || '',
+                        status: data.status || 'live',
                         timestamp: data.timestamp || data.createdAt || Date.now(),
+                        arrivedAt: Date.now(),
                     };
                     setLastLiveSignalId(String(row.id));
-                    const dedup = [row, ...prev.filter((p: any) => String(p.id) !== String(row.id))];
-                    return dedup.slice(0, 10);
-                });
-            }
-            // Actualizar el panel de las últimas 5 señales (problema 2)
-            if (data.type === 'BUY' || data.type === 'SELL' || data.decision === 'BUY' || data.decision === 'SELL') {
-                setLatestSignals(prev => {
-                    const newSignal = {
-                        botName: bots.find(b => b.id === data.botId)?.name || 'Desconocido',
-                        symbol: data.symbol || selectedBot?.symbol || 'Desconocido',
-                        type: data.type || data.decision,
-                        status: data.status || 'esperando',
-                        timestamp: data.timestamp || data.createdAt || Date.now()
-                    };
-                    const updated = [newSignal, ...prev].slice(0, 5);
-                    return updated;
+                    return [row, ...prev.filter((p: any) => String(p.id) !== String(row.id))].slice(0, 10);
                 });
             }
         }
@@ -295,7 +417,7 @@ export default function BotsPage() {
             }
         }
 
-    }, [lastMessage, selectedBot]);
+    }, [lastMessage, selectedBot, strategyBotIds, botNameById]);
 
     const toMs = (t: any): number | null => {
         if (!t) return null;
@@ -349,6 +471,9 @@ export default function BotsPage() {
     const livePrice = Number((chartData && chartData.length > 0)
         ? (chartData[chartData.length - 1]?.close)
         : 0);
+    const livePriceText = Number.isFinite(livePrice) && livePrice > 0
+        ? livePrice.toFixed(8).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1')
+        : '-';
 
     const activePos: any = positions && positions.length > 0 ? positions[0] : null;
     const entryPrice = Number(activePos?.avgEntryPrice ?? activePos?.entryPrice ?? 0);
@@ -391,11 +516,40 @@ export default function BotsPage() {
         }
     };
 
+    const runManualAction = async (action: 'close' | 'increase' | 'reverse') => {
+        if (!selectedBot || isManualActionLoading) return;
+        try {
+            setIsManualActionLoading(true);
+            const payload: any = {
+                action,
+                price: Number.isFinite(livePrice) && livePrice > 0 ? livePrice : undefined,
+            };
+            await api.post(`/bots/${selectedBot.id}/manual-action`, payload);
+
+            // refrescar snapshot del bot seleccionado
+            await fetchBots();
+        } catch (e) {
+            console.error(`Error ejecutando acción manual ${action}`, e);
+            alert(`No se pudo ejecutar "${action}". Revisa logs/API.`);
+        } finally {
+            setIsManualActionLoading(false);
+        }
+    };
+
+    const handleVisualAction = async (action: 'close' | 'increase' | 'reverse') => {
+        setIsActionsOpen(false);
+        if (action === 'close') {
+            setIsCloseDialogOpen(true);
+            return;
+        }
+        await runManualAction(action);
+    };
+
     return (
         <div className="flex flex-col h-[calc(100vh-4rem)] w-full bg-slate-950 text-slate-200 overflow-hidden">
             <style>{`
                 @keyframes liveSignalSlideIn {
-                    0% { transform: translateX(42px); opacity: 0; }
+                    0% { transform: translateX(-42px); opacity: 0; }
                     100% { transform: translateX(0); opacity: 1; }
                 }
             `}</style>
@@ -403,17 +557,28 @@ export default function BotsPage() {
             {/* --- Barra superior: Últimas señales --- */}
             <div className="w-full p-4 border-b border-slate-800 bg-slate-900/60 shrink-0">
                 <h2 className="font-semibold flex items-center gap-2 text-sm mb-2">
-                    <Zap className="h-4 w-4 text-primary" /> Últimas 5 Señales
+                    <Zap className="h-4 w-4 text-primary" /> Últimas 5 Señales en Vivo (bots modelo)
                 </h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-2">
                     {latestSignals.length > 0 ? (
-                        latestSignals.map((signal, index) => (
-                            <Card key={index} className="bg-slate-800 border-slate-700 text-xs">
+                        latestSignals.map((signal, index) => {
+                            const age = liveNowMs - Number((signal as any).arrivedAt || 0);
+                            const isFading = age >= 4200;
+                            return (
+                            <Card key={index} className={`bg-slate-800 border-slate-700 text-xs transition-all duration-300 ${isFading ? 'opacity-35' : 'opacity-100'}`}>
                                 <CardContent className="p-2 flex flex-col gap-1">
                                     <div className="flex justify-between items-center">
                                         <span className="font-medium">{signal.botName}</span>
-                                        <Badge variant={signal.type === 'BUY' ? 'success' : 'destructive'}>
-                                            {signal.type}
+                                        <Badge
+                                            className={
+                                                String(signal.type).toUpperCase() === 'BUY'
+                                                    ? 'bg-green-500/20 text-green-300 border border-green-500/30'
+                                                    : String(signal.type).toUpperCase() === 'SELL'
+                                                        ? 'bg-red-500/20 text-red-300 border border-red-500/30'
+                                                        : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                            }
+                                        >
+                                            {String(signal.type).toUpperCase()}
                                         </Badge>
                                     </div>
                                     <div className="text-slate-400">{signal.symbol}</div>
@@ -423,7 +588,8 @@ export default function BotsPage() {
                                     </div>
                                 </CardContent>
                             </Card>
-                        ))
+                            );
+                        })
                     ) : (
                         <p className="text-slate-500 col-span-5">Esperando señales...</p>
                     )}
@@ -445,42 +611,51 @@ export default function BotsPage() {
                         </Button>
                     </div>
                 </div>
-                <ScrollArea className="flex-1 p-3">
-                    <div className="space-y-2">
-                        {Array.isArray(bots) && bots.map((bot) => (
+                <ScrollArea className="flex-1 p-3 h-0">
+                    <div className="space-y-2 pb-4">
+                        {Array.isArray(sortedBots) && sortedBots.map((bot) => (
                             <div
                                 key={bot.id}
                                 onClick={() => setSelectedBot(bot)}
                                 className={`group flex flex-col gap-2 p-3 rounded-xl border cursor-pointer transition-all duration-200 ${selectedBot?.id === bot.id
-                                    ? 'bg-primary/5 border-primary/50 shadow-sm'
-                                    : 'bg-card hover:bg-accent/50 border-border hover:border-primary/20'
+                                    ? 'bg-slate-800 border-primary/60 shadow-sm'
+                                    : 'bg-slate-900 border-slate-700 hover:bg-slate-800 hover:border-primary/30'
                                     }`}
                             >
                                 <div className="flex justify-between items-start">
-                                    <span className="font-semibold text-sm truncate pr-2">{bot.name}</span>
+                                    <span className="font-semibold text-sm truncate pr-2 text-slate-100">{bot.name}</span>
                                     <Badge
                                         variant={bot.status === 'running' ? 'default' : 'secondary'}
-                                        className={`text-[10px] uppercase tracking-wider px-1.5 h-5 border-0 ${bot.status === 'running' ? 'bg-green-500/15 text-green-600' : 'bg-muted text-muted-foreground'
+                                        className={`text-[10px] uppercase tracking-wider px-1.5 h-5 border-0 ${bot.status === 'running' ? 'bg-green-500/20 text-green-300' : 'bg-slate-700 text-slate-300'
                                             }`}
                                     >
                                         {bot.status}
                                     </Badge>
                                 </div>
 
-                                <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
-                                    <div className="flex items-center gap-1.5 bg-muted/30 p-1 rounded">
-                                        <TrendingUp className="h-3 w-3 opacity-70" />
-                                        <span className="font-mono">{bot.symbol}</span>
+                                <div className="grid grid-cols-2 gap-2 text-xs text-slate-300">
+                                    <div className="flex items-center gap-1.5 bg-slate-800 p-1 rounded">
+                                        <TrendingUp className="h-3 w-3 opacity-80" />
+                                        <span className="font-mono text-slate-200">{bot.symbol}</span>
                                     </div>
-                                    <div className="flex items-center gap-1.5 bg-muted/30 p-1 rounded">
-                                        <Clock className="h-3 w-3 opacity-70" />
-                                        <span className="font-mono">{bot.timeframe}</span>
+                                    <div className="flex items-center gap-1.5 bg-slate-800 p-1 rounded">
+                                        <Clock className="h-3 w-3 opacity-80" />
+                                        <span className="font-mono text-slate-200">{bot.timeframe}</span>
                                     </div>
+                                </div>
+
+                                <div className="flex items-center justify-between text-[11px] text-slate-400">
+                                    <span>
+                                        Creado: {bot.createdAt ? new Date(bot.createdAt).toLocaleString() : 'N/D'}
+                                    </span>
+                                    <span className="uppercase tracking-wide text-slate-300">
+                                        {bot.status === 'running' ? 'activo' : bot.status === 'paused' ? 'pausado' : bot.status}
+                                    </span>
                                 </div>
                             </div>
                         ))}
-                        {(!Array.isArray(bots) || bots.length === 0) && (
-                            <div className="text-center p-4 text-xs text-muted-foreground opacity-50">
+                        {(!Array.isArray(sortedBots) || sortedBots.length === 0) && (
+                            <div className="text-center p-4 text-xs text-slate-400 opacity-70">
                                 No se encontraron bots activos
                             </div>
                         )}
@@ -548,9 +723,9 @@ export default function BotsPage() {
                         <>
                             {/* Cards informativas rápidas */}
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                <Card className="shadow-sm"><CardContent className="p-3"><div className="text-xs text-muted-foreground">Operaciones</div><div className="text-lg font-semibold">{botTrades.length}</div></CardContent></Card>
+                                <Card className="shadow-sm"><CardContent className="p-3"><div className="text-xs text-muted-foreground">Operaciones / Lado</div><div className={`text-lg font-semibold font-mono ${positionSide === 'SHORT' ? 'text-red-500' : positionSide === 'LONG' ? 'text-green-500' : ''}`}>{`${botTrades.length} / ${positionSide}`}</div></CardContent></Card>
                                 <Card className="shadow-sm"><CardContent className="p-3"><div className="text-xs text-muted-foreground">Posición (currentQty)</div><div className="text-lg font-semibold font-mono">{activePos ? `${currentQty}` : '0'}</div></CardContent></Card>
-                                <Card className="shadow-sm"><CardContent className="p-3"><div className="text-xs text-muted-foreground">Lado</div><div className={`text-lg font-semibold ${positionSide === 'SHORT' ? 'text-red-500' : 'text-green-500'}`}>{positionSide}</div></CardContent></Card>
+                                <Card className="shadow-sm"><CardContent className="p-3"><div className="text-xs text-muted-foreground">Precio actual (live)</div><div className="text-lg font-semibold font-mono">{livePriceText}</div></CardContent></Card>
                                 <Card className="shadow-sm"><CardContent className="p-3"><div className="text-xs text-muted-foreground">Entry (avgEntryPrice)</div><div className="text-lg font-semibold font-mono">{entryPrice > 0 ? entryPrice : '-'}</div></CardContent></Card>
                                 <Card className="shadow-sm"><CardContent className="p-3"><div className="text-xs text-muted-foreground">PnL % (live)</div><div className={`text-lg font-semibold font-mono ${pnlPercent >= 0 ? 'text-green-500' : 'text-red-500'}`}>{activePos ? `${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%` : '-'}</div></CardContent></Card>
                                 <Card className="shadow-sm"><CardContent className="p-3"><div className="text-xs text-muted-foreground">Profit (live)</div><div className={`text-lg font-semibold font-mono ${profitValue >= 0 ? 'text-green-500' : 'text-red-500'}`}>{activePos ? `${profitValue >= 0 ? '+' : ''}${profitValue.toFixed(4)}` : '-'}</div></CardContent></Card>
@@ -559,35 +734,55 @@ export default function BotsPage() {
                             <Card className="shadow-sm md:col-span-3 border-primary/20 bg-gradient-to-r from-primary/5 to-transparent">
                                 <CardHeader className="py-3 px-5 border-b bg-muted/10">
                                     <CardTitle className="text-sm font-medium flex items-center gap-2">
-                                        <span className="inline-flex items-center gap-2 rounded-full bg-red-500/15 text-red-400 px-2.5 py-1 text-xs font-semibold tracking-wide">
-                                            <span className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
+                                        <span className={`inline-flex items-center gap-2 rounded-full px-2.5 py-1 text-xs font-semibold tracking-wide ${isConnected ? 'bg-green-500/15 text-green-400' : 'bg-red-500/15 text-red-400'}`}>
+                                            <span className={`h-2 w-2 rounded-full animate-pulse ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
                                             EN VIVO
                                         </span>
-                                        <Zap className="h-4 w-4 text-primary" /> Señales del bot (últimas 10)
+                                        <Zap className="h-4 w-4 text-primary" /> Señales del bot (últimas 5)
                                     </CardTitle>
                                 </CardHeader>
-                                <CardContent className="p-3">
-                                    <ScrollArea className="w-full whitespace-nowrap">
-                                        {recentBotSignals.length > 0 ? (
-                                            <div className="flex items-stretch gap-2 pb-1">
-                                                <div className="shrink-0 rounded-lg border border-primary/30 bg-primary/10 px-3 py-2 flex items-center">
-                                                    <span className="text-xs font-semibold tracking-wide text-primary">EN VIVO</span>
-                                                </div>
-                                                {recentBotSignals.map((s: any, idx: number) => {
-                                                    const isSell = String(s.decision || '').toUpperCase().includes('SELL') || String(s.decision || '').toUpperCase().includes('SHORT');
-                                                    const isNewest = String(s.id) === String(lastLiveSignalId);
-                                                    return (
-                                                        <div
-                                                            key={s.id || idx}
-                                                            className={`shrink-0 w-[290px] rounded-lg border p-3 flex items-center justify-between gap-3 transition-all ${isSell ? 'border-red-500/30 bg-red-500/5' : 'border-green-500/30 bg-green-500/5'} ${isNewest ? 'ring-2 ring-primary/50 shadow-lg' : ''}`}
-                                                            style={isNewest ? { animation: 'liveSignalSlideIn 420ms cubic-bezier(.22,.9,.2,1)' } : undefined}
-                                                        >
+                                <CardContent className="p-3 overflow-hidden">
+                                    {displayedLiveSignals.length > 0 ? (
+                                        <div className="grid grid-cols-1 md:grid-cols-[auto_repeat(5,minmax(0,1fr))] gap-2 items-stretch">
+                                            <div className={`rounded-lg border px-3 py-2 flex items-center justify-center ${isConnected ? 'border-green-500/30 bg-green-500/10' : 'border-red-500/30 bg-red-500/10'}`}>
+                                                <span className={`text-xs font-semibold tracking-wide ${isConnected ? 'text-green-400' : 'text-red-400'}`}>EN VIVO</span>
+                                            </div>
+                                            {displayedLiveSignals.map((s: any, idx: number) => {
+                                                const decision = String(s.decision || 'HOLD').toUpperCase();
+                                                const isSell = decision.includes('SELL') || decision.includes('SHORT');
+                                                const isBuy = decision.includes('BUY') || decision.includes('LONG');
+                                                const tone = isSell
+                                                    ? {
+                                                        box: 'border-red-500/30 bg-red-500/5',
+                                                        bar: 'bg-red-500',
+                                                        badge: 'bg-red-500/20 text-red-300 border border-red-500/30'
+                                                    }
+                                                    : isBuy
+                                                        ? {
+                                                            box: 'border-green-500/30 bg-green-500/5',
+                                                            bar: 'bg-green-500',
+                                                            badge: 'bg-green-500/20 text-green-300 border border-green-500/30'
+                                                        }
+                                                        : {
+                                                            box: 'border-amber-500/30 bg-amber-500/5',
+                                                            bar: 'bg-amber-500',
+                                                            badge: 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                                        };
+                                                const isNewest = String(s.id) === String(lastLiveSignalId);
+                                                const age = liveNowMs - Number(s.arrivedAt || s.timestamp || liveNowMs);
+                                                const isFading = age >= 4200;
+                                                return (
+                                                    <div
+                                                        key={s.id || idx}
+                                                        className={`min-w-0 rounded-lg border p-3 flex items-center justify-between gap-3 transition-all ${tone.box} ${isNewest ? 'ring-2 ring-primary/50 shadow-lg' : ''} ${isFading ? 'opacity-40' : 'opacity-100'}`}
+                                                        style={isNewest ? { animation: 'liveSignalSlideIn 420ms cubic-bezier(.22,.9,.2,1)' } : undefined}
+                                                    >
                                                             <div className="flex items-center gap-3 min-w-0">
-                                                                <div className={`h-10 w-1.5 rounded-full ${isSell ? 'bg-red-500' : 'bg-green-500'}`} />
+                                                                <div className={`h-10 w-1.5 rounded-full ${tone.bar}`} />
                                                                 <div className="min-w-0">
                                                                     <div className="flex items-center gap-2">
-                                                                        <Badge variant={isSell ? 'destructive' : 'default'} className="w-20 justify-center">
-                                                                            {String(s.decision || 'SIGNAL').toUpperCase()}
+                                                                        <Badge className={`w-20 justify-center ${tone.badge}`}>
+                                                                            {decision}
                                                                         </Badge>
                                                                         <span className="text-sm font-medium truncate">{s.symbol || selectedBot.symbol}</span>
                                                                     </div>
@@ -606,7 +801,6 @@ export default function BotsPage() {
                                                 Esperando señales en vivo para este bot...
                                             </div>
                                         )}
-                                    </ScrollArea>
                                 </CardContent>
                             </Card>
 
@@ -630,8 +824,50 @@ export default function BotsPage() {
                                         timeframe={selectedBot.timeframe}
                                         trades={botTrades}
                                     />
+
+                                    {/* menú movido al nivel raíz de la página para que sea realmente flotante */}
                                 </CardContent>
                             </Card>
+
+                            <Dialog open={isCloseDialogOpen} onOpenChange={setIsCloseDialogOpen}>
+                                <DialogContent className="sm:max-w-md bg-slate-950 border-slate-800 text-slate-100">
+                                    <DialogHeader>
+                                        <DialogTitle>¿Seguro de cerrar operación en "{positionSide}"?</DialogTitle>
+                                        <DialogDescription className="text-slate-400">
+                                            Esta acción es visual por ahora (sin ejecución real).
+                                        </DialogDescription>
+                                    </DialogHeader>
+
+                                    <div className="grid grid-cols-2 gap-3 py-2 text-sm">
+                                        <div className="rounded-md border border-slate-800 p-3 bg-slate-900/50">
+                                            <div className="text-xs text-slate-400">PnL %</div>
+                                            <div className={`text-base font-semibold ${pnlPercent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                {activePos ? `${pnlPercent >= 0 ? '+' : ''}${pnlPercent.toFixed(2)}%` : '-'}
+                                            </div>
+                                        </div>
+                                        <div className="rounded-md border border-slate-800 p-3 bg-slate-900/50">
+                                            <div className="text-xs text-slate-400">Profit (USDT)</div>
+                                            <div className={`text-base font-semibold ${profitValue >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                                {activePos ? `${profitValue >= 0 ? '+' : ''}${profitValue.toFixed(4)} USDT` : '-'}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <DialogFooter>
+                                        <Button variant="outline" onClick={() => setIsCloseDialogOpen(false)} disabled={isManualActionLoading}>Cancelar</Button>
+                                        <Button
+                                            variant="destructive"
+                                            disabled={isManualActionLoading}
+                                            onClick={async () => {
+                                                await runManualAction('close');
+                                                setIsCloseDialogOpen(false);
+                                            }}
+                                        >
+                                            {isManualActionLoading ? 'Ejecutando...' : 'Confirmar cierre'}
+                                        </Button>
+                                    </DialogFooter>
+                                </DialogContent>
+                            </Dialog>
 
                             {/* Últimas 5 operaciones del bot (desde trades) */}
                             <Card className="shadow-sm">
@@ -783,6 +1019,37 @@ export default function BotsPage() {
                     )}
                 </main>
             </div>
+
+            {/* Menú global flotante (viewport), visible en toda la pantalla de Bots */}
+            {selectedBot && (
+                <div className="fixed right-6 bottom-6 z-[100]">
+                    <Popover open={isActionsOpen} onOpenChange={setIsActionsOpen}>
+                        <PopoverTrigger asChild>
+                            <Button
+                                type="button"
+                                size="icon"
+                                className="h-11 w-11 rounded-full shadow-xl bg-slate-900/95 hover:bg-slate-800 border border-slate-700"
+                                title="Acciones de posición"
+                            >
+                                <MoreHorizontal className={`h-5 w-5 ${isManualActionLoading ? 'animate-pulse' : ''}`} />
+                            </Button>
+                        </PopoverTrigger>
+                        <PopoverContent align="end" className="w-52 p-2 bg-slate-900 border-slate-700 text-slate-100">
+                            <div className="flex flex-col gap-1">
+                                <Button variant="ghost" className="justify-start h-9" disabled={isManualActionLoading} onClick={() => handleVisualAction('close')}>
+                                    Cerrar operación
+                                </Button>
+                                <Button variant="ghost" className="justify-start h-9" disabled={isManualActionLoading} onClick={() => handleVisualAction('increase')}>
+                                    Aumentar
+                                </Button>
+                                <Button variant="ghost" className="justify-start h-9" disabled={isManualActionLoading} onClick={() => handleVisualAction('reverse')}>
+                                    Invertir
+                                </Button>
+                            </div>
+                        </PopoverContent>
+                    </Popover>
+                </div>
+            )}
             </div>
         </div>
     );

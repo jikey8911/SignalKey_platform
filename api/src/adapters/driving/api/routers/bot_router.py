@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from api.src.domain.entities.bot_instance import BotInstance
 from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
@@ -118,8 +118,17 @@ async def get_bot_signals(
 @router.get("/")
 async def list_user_bots(current_user: dict = Depends(get_current_user)): 
     user_id_obj = current_user["_id"]
-    
-    bots = await repo.get_all_by_user(user_id_obj) # Pass ObjectId
+    user_open_id = current_user.get("openId")
+
+    # Compatibilidad: bots históricos guardados con user_id como ObjectId o openId string
+    bots_cursor = repo.collection.find({
+        "$or": [
+            {"user_id": user_id_obj},
+            {"user_id": str(user_id_obj)},
+            {"user_id": user_open_id},
+        ]
+    })
+    bots = [repo._map_doc(doc) async for doc in bots_cursor]
     result = []
     
     for bot in bots:
@@ -242,6 +251,58 @@ class SignalWebhook(BaseModel):
     bot_id: str
     signal: int # 1: Long, 2: Short
     price: float
+
+class ManualBotActionSchema(BaseModel):
+    action: str = Field(..., description="close|increase|reverse")
+    price: Optional[float] = None
+    amount: Optional[float] = None
+
+@router.post("/{bot_id}/manual-action")
+async def execute_manual_action(
+    bot_id: str,
+    data: ManualBotActionSchema,
+    current_user: dict = Depends(get_current_user)
+):
+    allowed = {"close", "increase", "reverse"}
+    action = (data.action or '').strip().lower()
+    if action not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid action. Use close|increase|reverse")
+
+    user_id_obj = current_user["_id"]
+    bot = await repo.collection.find_one({"_id": ObjectId(bot_id)})
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found")
+
+    # ownership guard (compatibilidad con legacy user_id)
+    owner_ok = (
+        bot.get("user_id") == user_id_obj or
+        str(bot.get("user_id")) == str(user_id_obj) or
+        str(bot.get("user_id")) == str(current_user.get("openId"))
+    )
+    if not owner_ok:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    bot['id'] = str(bot['_id'])
+
+    result = await engine.execute_manual_action(
+        bot_instance=bot,
+        action=action,
+        price=data.price,
+        amount=data.amount,
+    )
+
+    if not result or not result.get('success'):
+        raise HTTPException(status_code=400, detail=result.get('reason', 'manual_action_failed'))
+
+    # Refresh payload mínimo para frontend
+    updated_bot = await repo.collection.find_one({"_id": ObjectId(bot_id)})
+    await socket_service.emit_to_user(str(user_id_obj), "bot_update", {
+        "id": bot_id,
+        "side": updated_bot.get("side"),
+        "position": updated_bot.get("position", {}),
+    })
+
+    return {"status": "ok", "action": action, "execution": result}
 
 @router.post("/webhook-signal")
 async def receive_external_signal(data: SignalWebhook):

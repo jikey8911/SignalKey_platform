@@ -185,9 +185,64 @@ async def run_backtest(
             
             user_config = config
         
+        # Resolver balance/inversión por defecto desde virtual_balances + app_config
+        cfg = await db.app_configs.find_one({"userId": user["_id"]}) or {}
+
+        market_norm = (market_type or "spot").lower()
+        vb_market = "cex" if market_norm in {"spot", "cex", "futures", "future", "swap"} else "dex"
+        vb_asset = "USDT" if vb_market == "cex" else "SOL"
+
+        # Compatibilidad: balances históricos pueden venir como CEX/DEX o cex/dex
+        market_candidates = list({vb_market, vb_market.upper(), vb_market.capitalize()})
+        asset_candidates = list({vb_asset, vb_asset.upper(), vb_asset.lower()})
+
+        vb_doc = await db.virtual_balances.find_one({
+            "userId": user["_id"],
+            "marketType": {"$in": market_candidates},
+            "asset": {"$in": asset_candidates}
+        })
+
+        # Fuente de verdad: balance virtual DB si existe; si no, usa el valor enviado por UI
+        resolved_initial_balance = float(vb_doc.get("amount", initial_balance)) if vb_doc else float(initial_balance)
+
+        # Guardrails: evitar simulaciones inválidas o absurdas
+        if resolved_initial_balance <= 0:
+            logger.warning(
+                f"Backtest received non-positive initial balance ({resolved_initial_balance}) for user={user_id}. Using fallback 10000.0"
+            )
+            resolved_initial_balance = 10000.0
+
+        # Evitar corridas con saldo gigante por dato corrupto/mala unidad
+        if resolved_initial_balance > 1_000_000:
+            logger.warning(
+                f"Backtest received suspiciously high initial balance ({resolved_initial_balance}) for user={user_id}. Clamping to 10000.0"
+            )
+            resolved_initial_balance = 10000.0
+
+        if trade_amount is None or trade_amount <= 0:
+            limits = cfg.get("investmentLimits") or {}
+            if vb_market == "cex":
+                trade_amount = float(limits.get("cexMaxAmount") or 0)
+            else:
+                trade_amount = float(limits.get("dexMaxAmount") or 0)
+            if trade_amount <= 0:
+                trade_amount = max(10.0, resolved_initial_balance * 0.2)
+
+        # Guardrail: evitar monto por entrada mayor al capital disponible
+        if trade_amount > resolved_initial_balance:
+            suggested = max(10.0, resolved_initial_balance * 0.2)
+            logger.warning(
+                f"Backtest trade_amount ({trade_amount}) > initial_balance ({resolved_initial_balance}) for user={user_id}. Using {suggested}."
+            )
+            trade_amount = suggested
+
+        logger.info(
+            f"🧪 BACKTEST RUN user={user_id} symbol={symbol} exchange={exchange_id} market={market_type} initial_balance={resolved_initial_balance} trade_amount={trade_amount} days={days} timeframe={timeframe}"
+        )
+
         # Importar y ejecutar el servicio de backtest
         from api.src.application.services.backtest_service import BacktestService
-        
+
         backtest_service = BacktestService(exchange_adapter=ccxt_service)
         results = await backtest_service.run_backtest(
             symbol=symbol,
@@ -200,10 +255,13 @@ async def run_backtest(
             user_id=user_id,
             exchange_id=exchange_id,
             model_id=model_id,
-            initial_balance=initial_balance,
+            initial_balance=resolved_initial_balance,
             trade_amount=trade_amount
         )
         
+        # Debug de trazabilidad para frontend/consola
+        results["resolved_initial_balance"] = resolved_initial_balance
+        results["resolved_trade_amount"] = trade_amount
         return results
         
     except HTTPException:
@@ -341,7 +399,8 @@ async def deploy_bot(
     try:
         # Verificar usuario
         user = current_user
-        user_id = user["openId"]
+        # Consistencia con /bots list: usar ObjectId interno
+        user_id = user["_id"]
         
         # Obtener configuración para determinar Modo
         config = await db.app_configs.find_one({"userId": user["_id"]}) or {}
@@ -353,7 +412,7 @@ async def deploy_bot(
         # Crear BotInstance
         new_bot = BotInstance(
             id=None,
-            user_id=user_id, # Usamos openId como identificador consistente en routers
+            user_id=user_id, # ObjectId interno para que aparezca en /bots
             name=f"{strategy} - {symbol} ({current_mode})",
             symbol=symbol,
             strategy_name=strategy,
@@ -370,7 +429,7 @@ async def deploy_bot(
         repo = MongoBotRepository()
         bot_id = await repo.save(new_bot)
         
-        logger.info(f"Bot deployed: {bot_id} (Mode: {current_mode}) for {user_id}")
+        logger.info(f"Bot deployed: {bot_id} (Mode: {current_mode}) for user_id={user_id} openId={user.get('openId')}")
         
         return {
             "status": "success", 

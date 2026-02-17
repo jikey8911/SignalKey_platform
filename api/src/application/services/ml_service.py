@@ -28,11 +28,12 @@ class MLService:
         self.model_manager = ModelManager()
 
     async def _fetch_training_data(
-        self, 
-        symbols: List[str], 
-        timeframe: str, 
+        self,
+        symbols: List[str],
+        timeframe: str,
         user_id: str = "default_user",
-        socket_callback = None
+        socket_callback = None,
+        days: int = 90,
     ) -> Dict[str, pd.DataFrame]:
         """
         Método centralizado para obtener datos históricos de entrenamiento.
@@ -48,15 +49,24 @@ class MLService:
             Dict con {symbol: DataFrame} de datos históricos
         """
         data_collection = {}
-        
+
+        # Approx candles per day by timeframe to keep consistent training horizon
+        tf = (timeframe or "1h").lower().strip()
+        tf_to_cpd = {
+            "1m": 1440, "3m": 480, "5m": 288, "15m": 96, "30m": 48,
+            "1h": 24, "2h": 12, "4h": 6, "6h": 4, "12h": 2, "1d": 1,
+        }
+        candles_per_day = tf_to_cpd.get(tf, 24)
+        target_limit = int(max(300, min(5000, days * candles_per_day)))
+
         for symbol in symbols:
             try:
-                # Usamos random_date=True para el entrenamiento y API pública
+                # Entrenamiento robusto: ventana aleatoria dentro de la historia.
                 df = await self.exchange.get_historical_data(
-                    symbol, 
-                    timeframe, 
-                    limit=2000, 
-                    use_random_date=True, 
+                    symbol,
+                    timeframe,
+                    limit=target_limit,
+                    use_random_date=True,
                     user_id=user_id
                 )
                 
@@ -146,7 +156,7 @@ class MLService:
 
         # 1. Obtención de Datasets (con fechas aleatorias para robustez)
         # Usar el método centralizado para obtener datos
-        data_collection = await self._fetch_training_data(symbols, timeframe, user_id, socket_callback)
+        data_collection = await self._fetch_training_data(symbols, timeframe, user_id, socket_callback, days=days)
 
         if not data_collection:
             await socket_callback("❌ Training failed: No data collected.", "error")

@@ -121,6 +121,11 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 payload = message.get("data") or {}
                 asyncio.create_task(run_batch_backtest_ws(user_id, payload))
 
+            elif action == "run_single_backtest":
+                # Single-symbol backtest in background (non-blocking HTTP API)
+                payload = message.get("data") or {}
+                asyncio.create_task(run_single_backtest_ws(user_id, payload))
+
     except WebSocketDisconnect:
         # Unsubscribe prices for this websocket
         await handle_prices_subscribe(websocket, user_id, [])
@@ -308,6 +313,98 @@ async def handle_prices_subscribe(websocket: WebSocket, user_id: str, items: lis
     else:
         _ws_price_topics.pop(ws_key, None)
 
+async def run_single_backtest_ws(user_id: str, data: Dict[str, Any]):
+    """Runs a single-symbol backtest in background and returns full details by WS."""
+    try:
+        symbol = (data.get("symbol") or "").strip()
+        exchange_id = (data.get("exchangeId") or data.get("exchange_id") or "okx").strip()
+        market_type = (data.get("marketType") or data.get("market_type") or "spot").strip()
+        timeframe = (data.get("timeframe") or "1h").strip()
+        days = int(data.get("days") or 7)
+        strategy = (data.get("strategy") or "auto").strip()
+        use_ai = bool(data.get("useAi", True))
+        model_id = data.get("modelId")
+
+        requested_initial_balance = float(data.get("initialBalance") or data.get("initial_balance") or 10000)
+        requested_trade_amount = data.get("tradeAmount") or data.get("trade_amount")
+        requested_trade_amount = float(requested_trade_amount) if requested_trade_amount not in (None, "") else None
+
+        if not symbol:
+            await socket_service.emit_to_user(user_id, "single_backtest_error", {"message": "Missing symbol"})
+            return
+
+        user_doc = await db.users.find_one({"openId": user_id})
+        cfg = await db.app_configs.find_one({"userId": user_doc.get("_id")}) if user_doc else None
+
+        market_norm = (market_type or "spot").lower()
+        vb_market = "cex" if market_norm in {"spot", "cex", "futures", "future", "swap"} else "dex"
+        vb_asset = "USDT" if vb_market == "cex" else "SOL"
+
+        market_candidates = list({vb_market, vb_market.upper(), vb_market.capitalize()})
+        asset_candidates = list({vb_asset, vb_asset.upper(), vb_asset.lower()})
+
+        vb_doc = None
+        if user_doc:
+            vb_doc = await db.virtual_balances.find_one({
+                "userId": user_doc.get("_id"),
+                "marketType": {"$in": market_candidates},
+                "asset": {"$in": asset_candidates},
+            })
+
+        resolved_initial_balance = float(vb_doc.get("amount", requested_initial_balance)) if vb_doc else float(requested_initial_balance)
+
+        if resolved_initial_balance <= 0:
+            resolved_initial_balance = 10000.0
+        if resolved_initial_balance > 1_000_000:
+            resolved_initial_balance = 10000.0
+
+        trade_amount = requested_trade_amount
+        if trade_amount is None or trade_amount <= 0:
+            limits = (cfg or {}).get("investmentLimits") or {}
+            if vb_market == "cex":
+                trade_amount = float(limits.get("cexMaxAmount") or 0)
+            else:
+                trade_amount = float(limits.get("dexMaxAmount") or 0)
+            if trade_amount <= 0:
+                trade_amount = max(10.0, resolved_initial_balance * 0.2)
+
+        if trade_amount > resolved_initial_balance:
+            trade_amount = max(10.0, resolved_initial_balance * 0.2)
+
+        await socket_service.emit_to_user(user_id, "single_backtest_start", {
+            "symbol": symbol,
+            "exchangeId": exchange_id,
+            "marketType": market_type,
+        })
+
+        from api.src.application.services.backtest_service import BacktestService
+        backtest_service = BacktestService(exchange_adapter=ccxt_service)
+
+        details = await backtest_service.run_backtest(
+            symbol=symbol,
+            days=days,
+            timeframe=timeframe,
+            market_type=market_type,
+            use_ai=use_ai,
+            user_config=None,
+            strategy=strategy,
+            user_id=user_id,
+            exchange_id=exchange_id,
+            model_id=model_id,
+            initial_balance=resolved_initial_balance,
+            trade_amount=trade_amount,
+        )
+
+        details["resolved_initial_balance"] = resolved_initial_balance
+        details["resolved_trade_amount"] = trade_amount
+
+        await socket_service.emit_to_user(user_id, "single_backtest_result", details)
+
+    except Exception as e:
+        logger.error(f"Single backtest error: {e}")
+        await socket_service.emit_to_user(user_id, "single_backtest_error", {"message": str(e)})
+
+
 async def run_batch_backtest_ws(user_id: str, data: Dict[str, Any]):
     """Runs a batch backtest and streams progress/results to the user via WS.
 
@@ -319,10 +416,55 @@ async def run_batch_backtest_ws(user_id: str, data: Dict[str, Any]):
         market_type = (data.get("marketType") or data.get("market_type") or "spot").strip()
         timeframe = (data.get("timeframe") or "1h").strip()
         days = int(data.get("days") or 7)
-        initial_balance = float(data.get("initialBalance") or data.get("initial_balance") or 10000)
-        trade_amount = data.get("tradeAmount") or data.get("trade_amount")
-        trade_amount = float(trade_amount) if trade_amount not in (None, "") else None
+        requested_initial_balance = float(data.get("initialBalance") or data.get("initial_balance") or 10000)
+        requested_trade_amount = data.get("tradeAmount") or data.get("trade_amount")
+        requested_trade_amount = float(requested_trade_amount) if requested_trade_amount not in (None, "") else None
         top_n = int(data.get("topN") or 10)
+
+        # Resolver balance/inversión de forma CONSISTENTE con /backtest/run
+        user_doc = await db.users.find_one({"openId": user_id})
+        cfg = await db.app_configs.find_one({"userId": user_doc.get("_id")}) if user_doc else None
+
+        market_norm = (market_type or "spot").lower()
+        vb_market = "cex" if market_norm in {"spot", "cex", "futures", "future", "swap"} else "dex"
+        vb_asset = "USDT" if vb_market == "cex" else "SOL"
+
+        market_candidates = list({vb_market, vb_market.upper(), vb_market.capitalize()})
+        asset_candidates = list({vb_asset, vb_asset.upper(), vb_asset.lower()})
+
+        vb_doc = None
+        if user_doc:
+            vb_doc = await db.virtual_balances.find_one({
+                "userId": user_doc.get("_id"),
+                "marketType": {"$in": market_candidates},
+                "asset": {"$in": asset_candidates},
+            })
+
+        initial_balance = float(vb_doc.get("amount", requested_initial_balance)) if vb_doc else float(requested_initial_balance)
+
+        if initial_balance <= 0:
+            logger.warning(f"Batch backtest non-positive balance {initial_balance} for user={user_id}. Using 10000")
+            initial_balance = 10000.0
+        if initial_balance > 1_000_000:
+            logger.warning(f"Batch backtest suspicious balance {initial_balance} for user={user_id}. Clamping to 10000")
+            initial_balance = 10000.0
+
+        trade_amount = requested_trade_amount
+        if trade_amount is None or trade_amount <= 0:
+            limits = (cfg or {}).get("investmentLimits") or {}
+            if vb_market == "cex":
+                trade_amount = float(limits.get("cexMaxAmount") or 0)
+            else:
+                trade_amount = float(limits.get("dexMaxAmount") or 0)
+            if trade_amount <= 0:
+                trade_amount = max(10.0, initial_balance * 0.2)
+
+        if trade_amount > initial_balance:
+            trade_amount = max(10.0, initial_balance * 0.2)
+
+        logger.info(
+            f"🧪 BATCH BACKTEST RUN user={user_id} exchange={exchange_id} market={market_type} initial_balance={initial_balance} trade_amount={trade_amount} days={days} timeframe={timeframe}"
+        )
 
         if not exchange_id:
             await socket_service.emit_to_user(user_id, "backtest_error", {"message": "Missing exchangeId"})
@@ -371,6 +513,8 @@ async def run_batch_backtest_ws(user_id: str, data: Dict[str, Any]):
                     "win_rate": float(details.get("win_rate") or 0),
                     "trades": int(details.get("total_trades") or 0),
                     "strategy": details.get("strategy_name") or details.get("winner", {}).get("strategy"),
+                    "resolved_initial_balance": initial_balance,
+                    "resolved_trade_amount": trade_amount,
                     "details": details,
                     "topN": top_n,
                 })

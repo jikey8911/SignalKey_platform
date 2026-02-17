@@ -20,6 +20,8 @@ export default function Training() {
 
     const [availableSymbols, setAvailableSymbols] = useState<string[]>([]);
     const [selectedSymbols, setSelectedSymbols] = useState<string[]>(['BTC/USDT', 'ETH/USDT']); // Defaults
+    const [symbolPairFilter, setSymbolPairFilter] = useState<string>('USDT');
+    const [randomCount, setRandomCount] = useState<number>(5);
 
     // Loading flags for each select
     const [loadingExchanges, setLoadingExchanges] = useState(false);
@@ -164,6 +166,21 @@ export default function Training() {
         }
     };
 
+    const handleRandomSymbols = () => {
+        const pool = availableSymbols
+            .filter(s => symbolPairFilter === 'ALL' ? true : s.endsWith(`/${symbolPairFilter}`));
+
+        if (pool.length === 0) {
+            toast.error('No hay símbolos disponibles para ese filtro');
+            return;
+        }
+
+        const count = Math.max(1, Math.min(randomCount || 1, pool.length));
+        const shuffled = [...pool].sort(() => Math.random() - 0.5);
+        setSelectedSymbols(shuffled.slice(0, count));
+        toast.success(`Seleccionados ${count} símbolos al azar`);
+    };
+
     const handleTrain = async () => {
         if (!user?.openId) {
             toast.error("User ID not found. Please relogin.");
@@ -297,18 +314,52 @@ export default function Training() {
                             </div>
 
                             {/* Available Symbols List */}
-                            <div className="pt-2">
-                                <label className="text-[10px] font-bold uppercase text-slate-500 mb-2 block">Agregar Símbolo</label>
-                                <div className="h-48 overflow-y-auto pr-2 grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
-                                    {availableSymbols.filter(s => !selectedSymbols.includes(s)).map(s => (
-                                        <button
-                                            key={s}
-                                            onClick={() => toggleSymbol(s)}
-                                            className="text-[9px] px-2 py-1 rounded bg-slate-800 hover:bg-blue-600 text-slate-300 hover:text-white transition-colors text-left truncate"
+                            <div className="pt-2 space-y-2">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                    <label className="text-[10px] font-bold uppercase text-slate-500 block">Agregar Símbolo</label>
+                                    <div className="flex items-center gap-2">
+                                        <select
+                                            value={symbolPairFilter}
+                                            onChange={(e) => setSymbolPairFilter(e.target.value)}
+                                            className="bg-slate-800 border-none rounded px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/5"
                                         >
-                                            + {s}
+                                            <option value="ALL">Todos los pares</option>
+                                            <option value="USDT">/USDT</option>
+                                            <option value="USDC">/USDC</option>
+                                            <option value="BTC">/BTC</option>
+                                            <option value="ETH">/ETH</option>
+                                        </select>
+                                        <input
+                                            type="number"
+                                            min={1}
+                                            value={randomCount}
+                                            onChange={(e) => setRandomCount(parseInt(e.target.value) || 1)}
+                                            className="w-16 bg-slate-800 border-none rounded px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/5"
+                                            title="Cantidad random"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={handleRandomSymbols}
+                                            className="text-[10px] px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white transition-colors"
+                                        >
+                                            Random
                                         </button>
-                                    ))}
+                                    </div>
+                                </div>
+                                <div className="h-48 overflow-y-auto pr-2 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                                    {availableSymbols
+                                        .filter(s => !selectedSymbols.includes(s))
+                                        .filter(s => symbolPairFilter === 'ALL' ? true : s.endsWith(`/${symbolPairFilter}`))
+                                        .map(s => (
+                                            <button
+                                                key={s}
+                                                onClick={() => toggleSymbol(s)}
+                                                title={s}
+                                                className="text-[10px] px-3 py-2 rounded bg-slate-800 hover:bg-blue-600 text-slate-300 hover:text-white transition-colors text-left"
+                                            >
+                                                + {s}
+                                            </button>
+                                        ))}
                                 </div>
                             </div>
                         </div>

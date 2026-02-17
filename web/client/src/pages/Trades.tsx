@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { TradingViewChart } from '@/components/ui/TradingViewChart';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { fetchTelegramBots, fetchTelegramTradesByBot } from '@/lib/api';
 import { TrendingUp, TrendingDown, Filter, RefreshCw } from 'lucide-react';
 import { useAuth } from '@/_core/hooks/useAuth';
@@ -45,6 +47,9 @@ export default function Trades() {
   const { lastMessage, sendMessage } = useSocket(user?.openId);
   const [expandedBotId, setExpandedBotId] = useState<string | null>(null);
   const detailsRef = useRef<HTMLTableRowElement | null>(null);
+  const [liveBot, setLiveBot] = useState<any | null>(null);
+  const [liveCandles, setLiveCandles] = useState<any[]>([]);
+  const [loadingLiveChart, setLoadingLiveChart] = useState(false);
 
   const { data: expandedItems, isLoading: isLoadingExpanded } = useQuery({
     queryKey: ['telegram_trades_items', user?.openId, expandedBotId],
@@ -95,17 +100,32 @@ export default function Trades() {
       const { exchangeId, marketType, symbol, price } = lastMessage.data || {};
       if (!symbol) return;
 
+      const normMarket = (m: any) => {
+        const x = String(m || '').toUpperCase();
+        if (x === 'CEX') return 'SPOT';
+        return x;
+      };
+      const normSymbol = (s: any) => String(s || '').trim().replace('#', '');
+
       queryClient.setQueryData(['telegram_trades', user?.openId], (oldData: any[] | undefined) => {
         if (!oldData) return oldData;
         return oldData.map((bot: any) => {
           const ex = (bot.exchangeId || bot.exchange_id || bot.config?.exchangeId || bot.config?.exchange_id || '').toString().toLowerCase();
-          const mt = (bot.marketType || bot.market_type || '').toString().toUpperCase();
+          const mt = normMarket(bot.marketType || bot.market_type || bot.config?.marketType || bot.config?.market_type || 'SPOT');
+          const sym = normSymbol(bot.symbol);
+
           if (
             ex === (exchangeId || '').toString().toLowerCase() &&
-            mt === (marketType || '').toString().toUpperCase() &&
-            bot.symbol === symbol
+            mt === normMarket(marketType) &&
+            sym === normSymbol(symbol)
           ) {
-            return { ...bot, currentPrice: price };
+            const px = Number(price);
+            if (!Number.isFinite(px) || px <= 0) return bot;
+            return {
+              ...bot,
+              currentPrice: px,
+              position: { ...(bot.position || {}), currentPrice: px }
+            };
           }
           return bot;
         });
@@ -186,6 +206,76 @@ export default function Trades() {
     const avgPnL = totalPnL / filteredBots.length;
     return { totalPnL, winRate, avgPnL };
   }, [filteredBots]);
+
+  const openLiveModal = async (bot: any) => {
+    setLiveBot(bot);
+    setLoadingLiveChart(true);
+    try {
+      const exchangeId = (bot.exchangeId || bot.exchange_id || bot.config?.exchangeId || bot.config?.exchange_id || 'okx');
+      const marketType = (bot.marketType || bot.market_type || 'spot').toString().toLowerCase();
+      const timeframe = (bot.timeframe || bot.config?.timeframe || '15m').toString();
+      const symbol = bot.symbol;
+
+      const qs = new URLSearchParams({
+        exchange_id: String(exchangeId),
+        market_type: String(marketType),
+        symbol: String(symbol),
+        timeframe: String(timeframe),
+        limit: '300'
+      }).toString();
+
+      const res = await fetch(`/api/market/candles?${qs}`, { credentials: 'include' });
+      const raw = await res.json().catch(() => ({}));
+      const arr = Array.isArray(raw?.candles) ? raw.candles : (Array.isArray(raw) ? raw : []);
+
+      const candles = arr.map((c: any) => ({
+        time: c.time ?? c.timestamp,
+        open: Number(c.open),
+        high: Number(c.high),
+        low: Number(c.low),
+        close: Number(c.close),
+      })).filter((c: any) => Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close));
+
+      setLiveCandles(candles);
+    } catch (e) {
+      console.error('Error loading live chart:', e);
+      setLiveCandles([]);
+    } finally {
+      setLoadingLiveChart(false);
+    }
+  };
+
+  const liveLevels = useMemo(() => {
+    if (!liveBot) return [] as { price: number; label: string; color?: string }[];
+
+    const levels: { price: number; label: string; color?: string }[] = [];
+    const entry = Number(liveBot.config?.entryPrice ?? liveBot.entryPrice ?? 0);
+    const entryExecuted = String(liveBot.status || '').toLowerCase() !== 'waiting_entry';
+    if (Number.isFinite(entry) && entry > 0) {
+      levels.push({
+        price: entry,
+        label: entryExecuted ? 'ENTRY (ejecutada)' : 'ENTRY',
+        color: entryExecuted ? '#9ca3af' : '#3b82f6' // gris si ejecutada, azul normal si no
+      });
+    }
+
+    const tps = (liveBot.config?.takeProfits || liveBot.takeProfits || []) as any[];
+    tps.forEach((tp: any, i: number) => {
+      const p = Number(tp?.targetPrice ?? tp?.price ?? 0);
+      if (Number.isFinite(p) && p > 0) {
+        levels.push({ price: p, label: `TP${tp?.level ?? i + 1}`, color: '#22c55e' });
+      }
+    });
+
+    const sl = Number(
+      liveBot.config?.stopLossPrice ?? liveBot.config?.stopLoss ?? liveBot.stopLossPrice ?? liveBot.stopLoss ?? 0
+    );
+    if (Number.isFinite(sl) && sl > 0) {
+      levels.push({ price: sl, label: 'SL', color: '#ef4444' });
+    }
+
+    return levels;
+  }, [liveBot]);
 
   return (
     <div className="p-6 space-y-6">
@@ -290,6 +380,7 @@ export default function Trades() {
                   <th className="px-6 py-3 text-left text-xs font-bold text-slate-400 uppercase tracking-wider">Modo</th>
                   <th className="px-6 py-3 text-left text-xs font-bold text-slate-400 uppercase tracking-wider">Estado</th>
                   <th className="px-6 py-3 text-left text-xs font-bold text-slate-400 uppercase tracking-wider">Actividad</th>
+                  <th className="px-6 py-3 text-left text-xs font-bold text-slate-400 uppercase tracking-wider">Live</th>
                   <th className="px-6 py-3 text-left text-xs font-bold text-slate-400 uppercase tracking-wider">Fecha</th>
                 </tr>
               </thead>
@@ -301,6 +392,38 @@ export default function Trades() {
                   const entryItem = items.find((x: any) => x.kind === 'entry');
                   const slItems = items.filter((x: any) => x.kind === 'sl');
                   const tpItems = items.filter((x: any) => x.kind === 'tp').sort((a: any, b: any) => (a.level ?? 0) - (b.level ?? 0));
+
+                  const currentPx = Number(bot.position?.currentPrice ?? bot.currentPrice ?? 0);
+                  const isPendingStatus = (status: any) => {
+                    const s = String(status || '').toLowerCase();
+                    if (!s) return true;
+                    return !['filled', 'executed', 'closed', 'triggered', 'done', 'hit'].includes(s);
+                  };
+                  const distancePct = (target: any) => {
+                    const t = Number(target ?? 0);
+                    if (!Number.isFinite(currentPx) || currentPx <= 0 || !Number.isFinite(t) || t <= 0) return null;
+                    return ((t - currentPx) / currentPx) * 100;
+                  };
+
+                  const entryPx = Number(entryItem?.targetPrice ?? bot.config?.entryPrice ?? bot.entryPrice ?? 0);
+                  const firstTpPx = Number(tpItems?.[0]?.targetPrice ?? 0);
+                  const slPx = Number(slItems?.[0]?.targetPrice ?? bot.config?.stopLossPrice ?? bot.stopLossPrice ?? 0);
+
+                  const distAbs = (a: number, b: number) => {
+                    if (!Number.isFinite(a) || !Number.isFinite(b) || a <= 0 || b <= 0) return null;
+                    return Math.abs((a - b) / b) * 100;
+                  };
+
+                  const dEntry = distAbs(entryPx, currentPx);
+                  const dTp = distAbs(firstTpPx, currentPx);
+                  const dSl = distAbs(slPx, currentPx);
+                  const waitingEntry = String(bot.status || '').toLowerCase() === 'waiting_entry';
+
+                  const liveTone = waitingEntry
+                    ? 'blue'
+                    : (dTp != null && dSl != null
+                        ? (dTp <= dSl ? 'green' : 'red')
+                        : 'neutral');
 
                   return (
                     <>
@@ -374,6 +497,16 @@ export default function Trades() {
                         );
                       })()}
                     </td>
+                    <td className="px-6 py-4 text-sm">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-blue-500/30 bg-blue-500/10 text-blue-300 hover:bg-blue-500/20"
+                        onClick={() => openLiveModal(bot)}
+                      >
+                        Live
+                      </Button>
+                    </td>
                     <td className="px-6 py-4 text-xs text-slate-500">
                         {new Date(bot.createdAt).toLocaleString()}
                     </td>
@@ -381,7 +514,7 @@ export default function Trades() {
 
                   {expanded && (
                     <tr ref={detailsRef} className="border-b border-slate-800 bg-slate-950/40">
-                      <td colSpan={12} className="px-6 py-4">
+                      <td colSpan={13} className="px-6 py-4">
                         <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-4">
                           <div className="flex items-center justify-between mb-3">
                             <div className="text-sm font-semibold text-slate-200">Detalles</div>
@@ -390,15 +523,32 @@ export default function Trades() {
                             </button>
                           </div>
 
+                          <div className="mb-3 flex items-center justify-between rounded-md border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs">
+                            <span className="text-slate-400">Precio actual</span>
+                            <span className={`font-mono font-semibold ${liveTone === 'green' ? 'text-green-400' : liveTone === 'red' ? 'text-red-400' : liveTone === 'blue' ? 'text-blue-400' : 'text-slate-300'}`}>
+                              ${Number(currentPx || 0).toFixed(6)}
+                            </span>
+                          </div>
+
                           {isLoadingExpanded ? (
                             <div className="text-sm text-slate-400">Cargando…</div>
                           ) : (
                             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
                               <div>
                                 <div className="text-xs text-slate-500 mb-1">Entrada</div>
-                                <div className="font-mono text-slate-200">
+                                <div className={`font-mono ${waitingEntry ? 'text-blue-300' : 'text-slate-200'}`}>
                                   ${Number(entryItem?.targetPrice ?? bot.config?.entryPrice ?? 0).toFixed(6)}
                                 </div>
+                                {(() => {
+                                  const st = entryItem?.status ?? bot.status;
+                                  const d = distancePct(entryItem?.targetPrice ?? bot.config?.entryPrice);
+                                  if (!isPendingStatus(st) || d == null) return null;
+                                  return (
+                                    <div className={`text-[11px] mt-1 ${Math.abs(d) < 0.2 ? 'text-amber-400' : 'text-slate-400'}`}>
+                                      Distancia: {d >= 0 ? '+' : ''}{d.toFixed(2)}%
+                                    </div>
+                                  );
+                                })()}
                               </div>
 
                               <div>
@@ -407,12 +557,21 @@ export default function Trades() {
                                   {slItems.length === 0 ? (
                                     <div className="text-slate-400">—</div>
                                   ) : (
-                                    slItems.map((sl: any, idx: number) => (
-                                      <div key={(sl.id || sl._id || `${sl.kind || 'sl'}-${sl.level || 0}-${sl.targetPrice}-${idx}`)} className="flex items-center justify-between gap-2">
-                                        <span className="font-mono text-slate-200">${Number(sl.targetPrice ?? 0).toFixed(6)}</span>
-                                        <span className="text-[10px] uppercase text-slate-400">{sl.status}</span>
-                                      </div>
-                                    ))
+                                    slItems.map((sl: any, idx: number) => {
+                                      const d = distancePct(sl.targetPrice);
+                                      const pending = isPendingStatus(sl.status);
+                                      return (
+                                        <div key={(sl.id || sl._id || `${sl.kind || 'sl'}-${sl.level || 0}-${sl.targetPrice}-${idx}`)} className="flex items-center justify-between gap-2">
+                                          <div>
+                                            <span className={`font-mono ${liveTone === 'red' ? 'text-red-300' : 'text-slate-200'}`}>${Number(sl.targetPrice ?? 0).toFixed(6)}</span>
+                                            {pending && d != null && (
+                                              <div className="text-[10px] text-slate-400">{d >= 0 ? '+' : ''}{d.toFixed(2)}%</div>
+                                            )}
+                                          </div>
+                                          <span className="text-[10px] uppercase text-slate-400">{sl.status}</span>
+                                        </div>
+                                      );
+                                    })
                                   )}
                                 </div>
                               </div>
@@ -423,13 +582,22 @@ export default function Trades() {
                                   {tpItems.length === 0 ? (
                                     <div className="text-slate-400">—</div>
                                   ) : (
-                                    tpItems.map((tp: any, idx: number) => (
-                                      <div key={(tp.id || tp._id || `${tp.kind || 'tp'}-${tp.level}-${tp.targetPrice}-${idx}`)} className="flex items-center justify-between gap-2">
-                                        <span className="text-xs text-slate-400">TP{tp.level}</span>
-                                        <span className="font-mono text-slate-200">${Number(tp.targetPrice ?? 0).toFixed(6)}</span>
-                                        <span className="text-[10px] uppercase text-slate-400">{tp.status}</span>
-                                      </div>
-                                    ))
+                                    tpItems.map((tp: any, idx: number) => {
+                                      const d = distancePct(tp.targetPrice);
+                                      const pending = isPendingStatus(tp.status);
+                                      return (
+                                        <div key={(tp.id || tp._id || `${tp.kind || 'tp'}-${tp.level}-${tp.targetPrice}-${idx}`)} className="flex items-center justify-between gap-2">
+                                          <span className="text-xs text-slate-400">TP{tp.level}</span>
+                                          <div>
+                                            <span className={`font-mono ${liveTone === 'green' ? 'text-green-300' : 'text-slate-200'}`}>${Number(tp.targetPrice ?? 0).toFixed(6)}</span>
+                                            {pending && d != null && (
+                                              <div className="text-[10px] text-slate-400">{d >= 0 ? '+' : ''}{d.toFixed(2)}%</div>
+                                            )}
+                                          </div>
+                                          <span className="text-[10px] uppercase text-slate-400">{tp.status}</span>
+                                        </div>
+                                      );
+                                    })
                                   )}
                                 </div>
                               </div>
@@ -454,6 +622,46 @@ export default function Trades() {
           </p>
         </Card>
       )}
+
+      <Dialog open={!!liveBot} onOpenChange={(open) => !open && setLiveBot(null)}>
+        <DialogContent className="max-w-5xl bg-slate-950 border-slate-800 text-slate-100">
+          <DialogHeader>
+            <DialogTitle>
+              Live · {liveBot?.symbol} · {liveBot?.side || '-'}
+            </DialogTitle>
+            <DialogDescription>
+              Gráfica y estadísticas en tiempo real del bot seleccionado.
+            </DialogDescription>
+          </DialogHeader>
+
+          {liveBot && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Card className="p-3 bg-slate-900 border-slate-800"><div className="text-xs text-slate-400">ROI</div><div className="text-lg font-bold">{Number(liveBot.roi ?? 0).toFixed(2)}%</div></Card>
+                <Card className="p-3 bg-slate-900 border-slate-800"><div className="text-xs text-slate-400">Inversión</div><div className="text-lg font-bold">${Number(liveBot.config?.investment ?? liveBot.investment ?? liveBot.amount ?? 0).toFixed(2)}</div></Card>
+                <Card className="p-3 bg-slate-900 border-slate-800"><div className="text-xs text-slate-400">Entrada</div><div className="text-lg font-bold">${Number(liveBot.config?.entryPrice ?? liveBot.entryPrice ?? 0).toFixed(4)}</div></Card>
+                <Card className="p-3 bg-slate-900 border-slate-800"><div className="text-xs text-slate-400">Actual</div><div className="text-lg font-bold">${Number(liveBot.position?.currentPrice ?? liveBot.currentPrice ?? 0).toFixed(4)}</div></Card>
+              </div>
+
+              <Card className="p-3 bg-slate-900 border-slate-800">
+                {loadingLiveChart ? (
+                  <div className="h-[420px] flex items-center justify-center text-slate-400">Cargando gráfica…</div>
+                ) : liveCandles.length > 0 ? (
+                  <TradingViewChart
+                    data={liveCandles}
+                    levels={liveLevels}
+                    symbol={liveBot.symbol}
+                    timeframe={(liveBot.timeframe || liveBot.config?.timeframe || '15m').toString()}
+                    height={420}
+                  />
+                ) : (
+                  <div className="h-[420px] flex items-center justify-center text-slate-500">Sin velas para mostrar</div>
+                )}
+              </Card>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

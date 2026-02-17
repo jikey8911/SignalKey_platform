@@ -37,6 +37,8 @@ interface TournamentResult {
   total_trades: number;
   win_rate: number;
   final_balance: number;
+  signals_non_zero?: number;
+  signal_source?: 'model' | 'strategy_fallback' | string;
 }
 
 interface BacktestResults {
@@ -113,9 +115,10 @@ export default function Backtest() {
   // Symbol Search
   const [symbolSearch, setSymbolSearch] = useState('');
 
-  // Keep legacy virtual balance if needed but prioritize inputs for simulation
+  // Balances/limits for simulation (source of truth)
   const [virtualBalance, setVirtualBalance] = useState<number>(10000);
   const [loadingBalance, setLoadingBalance] = useState(false);
+  const [investmentLimits, setInvestmentLimits] = useState<{ cexMaxAmount?: number; dexMaxAmount?: number }>({});
 
   // Fetch Exchanges
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
@@ -323,15 +326,53 @@ export default function Backtest() {
         close: c.close
       })) || [];
 
+      // Normalización robusta: soporta payload en 0..100 o 0..1.
+      const toFinite = (v: any) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : 0;
+      };
+
+      const initialBal = toFinite(details?.initial_balance ?? details?.resolved_initial_balance);
+      const finalBal = toFinite(details?.final_balance);
+      const impliedPct = initialBal > 0 && finalBal > 0
+        ? ((finalBal / initialBal) - 1) * 100
+        : null;
+
+      const normalizePct = (v: any, implied: number | null = null) => {
+        const n = toFinite(v);
+
+        // Si tenemos balances, usamos esa referencia para detectar escala.
+        if (implied !== null && Number.isFinite(implied)) {
+          if (Math.abs(n - implied) < 0.05) return n;          // ya viene en %
+          if (Math.abs((n * 100) - implied) < 0.05) return n * 100; // viene como ratio
+        }
+
+        // Fallback heurístico
+        if (Math.abs(n) > 0 && Math.abs(n) <= 1) return n * 100;
+        return n;
+      };
+
+      const pnlValue = normalizePct(
+        details?.profit_pct ?? details?.metrics?.profit_pct ?? data?.pnl ?? 0,
+        impliedPct
+      );
+      const wrValue = normalizePct(
+        details?.win_rate ?? details?.metrics?.win_rate ?? data?.win_rate ?? 0,
+        null
+      );
+      const tradesValue = Number(
+        details?.total_trades ?? details?.metrics?.total_trades ?? data?.trades ?? 0
+      );
+
       const result: BacktestResults = {
         symbol: data.symbol,
         timeframe: timeframe, // Usamos el estado local ya que es el mismo para todos
         days: days,
-        totalTrades: data.trades,
-        winRate: data.win_rate,
+        totalTrades: tradesValue,
+        winRate: wrValue,
         profitFactor: details.metrics?.profit_factor?.toString() || '0',
-        maxDrawdown: details.metrics?.max_drawdown?.toFixed(2) || '0',
-        totalReturn: data.pnl?.toFixed(2) || '0',
+        maxDrawdown: Number(details.metrics?.max_drawdown || 0).toFixed(2),
+        totalReturn: pnlValue.toFixed(2),
         sharpeRatio: details.metrics?.sharpe_ratio?.toString() || '0',
         candles: candles,
         trades: transformedTrades,
@@ -344,18 +385,33 @@ export default function Backtest() {
         final_balance: details.final_balance
       };
 
-      // Mantener SOLO top 10 (no acumular en memoria): ordenar por mayor profit y, en empate, mayor winRate.
+      // Top 10 por símbolo: mayor PnL y, en empate, mayor Win Rate.
       setScanResults(prev => {
-        const merged = [...prev, result];
-        merged.sort((a, b) => {
+        const bySymbol = new Map<string, BacktestResults>();
+
+        const compare = (a: BacktestResults, b: BacktestResults) => {
           const profitA = Number.parseFloat(a.totalReturn) || 0;
           const profitB = Number.parseFloat(b.totalReturn) || 0;
           if (profitB !== profitA) return profitB - profitA;
           const wrA = Number(a.winRate) || 0;
           const wrB = Number(b.winRate) || 0;
-          return wrB - wrA;
+          if (wrB !== wrA) return wrB - wrA;
+          const trA = Number(a.totalTrades) || 0;
+          const trB = Number(b.totalTrades) || 0;
+          return trB - trA;
+        };
+
+        [...prev, result].forEach((r) => {
+          const key = r.symbol;
+          const current = bySymbol.get(key);
+          if (!current || compare(r, current) < 0) {
+            bySymbol.set(key, r);
+          }
         });
-        return merged.slice(0, 10);
+
+        return Array.from(bySymbol.values())
+          .sort(compare)
+          .slice(0, 10);
       });
     };
 
@@ -373,6 +429,117 @@ export default function Backtest() {
       }
     };
 
+    const handleSingleBacktestStart = (data: any) => {
+      setIsRunning(true);
+      toast.info(`Backtest iniciado: ${data?.symbol || ''}`);
+    };
+
+    const handleSingleBacktestResult = (data: any) => {
+      try {
+        const normalizeTime = (t: any): number => {
+          if (typeof t === 'string') return new Date(t).getTime();
+          if (typeof t === 'number' && t < 20000000000) return t * 1000;
+          return t;
+        };
+
+        const toFinite = (v: any) => {
+          const n = Number(v);
+          return Number.isFinite(n) ? n : 0;
+        };
+
+        const initialBal = toFinite(data?.initial_balance);
+        const normalizePct = (v: any, implied: number | null = null) => {
+          const n = toFinite(v);
+          if (implied !== null && Number.isFinite(implied)) {
+            if (Math.abs(n - implied) < 0.05) return n;
+            if (Math.abs((n * 100) - implied) < 0.05) return n * 100;
+          }
+          if (Math.abs(n) > 0 && Math.abs(n) <= 1) return n * 100;
+          return n;
+        };
+
+        const transformedTrades: Trade[] = (data.trades || []).map((t: any) => ({
+          time: normalizeTime(t.time),
+          price: t.price,
+          side: t.type as 'BUY' | 'SELL',
+          profit: t.pnl,
+          amount: t.amount,
+          avg_price: t.avg_price,
+          label: t.label,
+          pnl_percent: t.pnl_percent
+        }));
+
+        transformedTrades.sort((a, b) => {
+          if (b.time !== a.time) return b.time - a.time;
+          const isCloseA = a.label?.includes('CLOSE') || false;
+          const isCloseB = b.label?.includes('CLOSE') || false;
+          if (isCloseA && !isCloseB) return 1;
+          if (!isCloseA && isCloseB) return -1;
+          return 0;
+        });
+
+        const candles: Candle[] = (data.chart_data || []).map((c: any) => ({
+          time: normalizeTime(c.time),
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close
+        }));
+
+        const normalizedTournament: TournamentResult[] = (data.tournament_results || []).map((r: any) => {
+          const finalB = toFinite(r.final_balance);
+          const implied = initialBal > 0 && finalB > 0 ? ((finalB / initialBal) - 1) * 100 : null;
+          return {
+            strategy: String(r.strategy || 'unknown'),
+            profit_pct: normalizePct(r.profit_pct, implied),
+            total_trades: Number(r.total_trades || 0),
+            win_rate: normalizePct(r.win_rate, null),
+            final_balance: finalB,
+            signals_non_zero: Number(r.signals_non_zero || 0),
+            signal_source: r.signal_source || 'model',
+          };
+        });
+
+        const overallFinalBal = toFinite(data?.final_balance);
+        const overallImplied = initialBal > 0 && overallFinalBal > 0 ? ((overallFinalBal / initialBal) - 1) * 100 : null;
+
+        const backtestResults: BacktestResults = {
+          symbol: data.symbol,
+          timeframe: data.timeframe,
+          days: data.days,
+          totalTrades: Number(data.metrics?.total_trades || 0),
+          winRate: normalizePct(data.metrics?.win_rate || 0, null),
+          profitFactor: (data.metrics?.profit_factor ?? 0).toString(),
+          maxDrawdown: Number(data.metrics?.max_drawdown || 0).toFixed(2),
+          totalReturn: normalizePct(data.metrics?.profit_pct || 0, overallImplied).toFixed(2),
+          sharpeRatio: (data.metrics?.sharpe_ratio ?? 0).toString(),
+          candles,
+          trades: transformedTrades,
+          botConfiguration: data.bot_configuration,
+          metrics: data.metrics,
+          tournamentResults: normalizedTournament,
+          winner: data.winner,
+          strategy_name: data.strategy_name,
+          initial_balance: Number(data.initial_balance || 0),
+          final_balance: Number(data.final_balance || 0)
+        };
+
+        setResults(backtestResults);
+        toast.success(`Backtest completado. Ganador: ${data.strategy_name || ''}`);
+      } catch (e: any) {
+        console.error('Error parsing single backtest result:', e);
+        toast.error(`Error parseando resultado: ${e.message}`);
+      } finally {
+        setIsRunning(false);
+      }
+    };
+
+    const handleSingleBacktestError = (data: any) => {
+      console.error('Single backtest error:', data);
+      toast.error(`Error en backtest: ${data?.message || 'desconocido'}`);
+      setIsRunning(false);
+    };
+
     const handleSymbolError = (data: any) => {
       console.warn(`Error en símbolo ${data.symbol}: ${data.error}`);
     }
@@ -384,6 +551,10 @@ export default function Backtest() {
     wsService.on('backtest_error', handleBacktestError);
     wsService.on('backtest_symbol_error', handleSymbolError);
 
+    wsService.on('single_backtest_start', handleSingleBacktestStart);
+    wsService.on('single_backtest_result', handleSingleBacktestResult);
+    wsService.on('single_backtest_error', handleSingleBacktestError);
+
     return () => {
       wsService.off('backtest_start', handleBacktestStart);
       wsService.off('backtest_progress', handleBacktestProgress);
@@ -391,6 +562,10 @@ export default function Backtest() {
       wsService.off('backtest_complete', handleBacktestComplete);
       wsService.off('backtest_error', handleBacktestError);
       wsService.off('backtest_symbol_error', handleSymbolError);
+
+      wsService.off('single_backtest_start', handleSingleBacktestStart);
+      wsService.off('single_backtest_result', handleSingleBacktestResult);
+      wsService.off('single_backtest_error', handleSingleBacktestError);
     };
   }, [timeframe, days]); // Dependencias para el contexto de result mapping
 
@@ -432,11 +607,13 @@ export default function Backtest() {
   useEffect(() => {
     if (!user?.openId) return;
 
-    fetch(`${CONFIG.API_BASE_URL}/config/`)
+    fetch(`${CONFIG.API_BASE_URL}/config/`, { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         const config = data.config;
         if (config) {
+          setInvestmentLimits(config.investmentLimits || {});
+
           let activeEx = config.activeExchange;
           if (!activeEx && config.exchanges && config.exchanges.length > 0) {
             const firstActive = config.exchanges.find((e: any) => e.isActive);
@@ -455,19 +632,27 @@ export default function Backtest() {
   // NOTE: Default selection is handled when exchanges are fetched (prefers OKX) and when user config loads.
 
 
-  // Fetch Virtual Balance
+  // Fetch Virtual Balance (según mercado seleccionado)
   useEffect(() => {
     const fetchBalance = async () => {
       if (!user?.openId) return;
 
       setLoadingBalance(true);
       try {
+        const mt = String(selectedMarket || 'spot').toLowerCase();
+        const isCex = ['spot', 'cex', 'futures', 'future', 'swap'].includes(mt);
+        const vbMarket = isCex ? 'CEX' : 'DEX';
+        const asset = isCex ? 'USDT' : 'SOL';
+
         const res = await fetch(
-          `${CONFIG.API_BASE_URL}/backtest/virtual_balance?market_type=CEX&asset=USDT`
+          `${CONFIG.API_BASE_URL}/backtest/virtual_balance?market_type=${vbMarket}&asset=${asset}`,
+          { credentials: 'include' }
         );
         if (res.ok) {
           const data = await res.json();
-          setVirtualBalance(data.balance || 10000);
+          const bal = Number(data.balance || (isCex ? 10000 : 10));
+          setVirtualBalance(bal);
+          setInitialBalance(bal); // no editable: espejo del virtual balance
         }
       } catch (e) {
         console.error('Error fetching virtual balance:', e);
@@ -479,7 +664,17 @@ export default function Backtest() {
     if (user?.openId) {
       fetchBalance();
     }
-  }, [user]);
+  }, [user?.openId, selectedMarket]);
+
+  // Inversión por entrada desde config (no editable en UI)
+  useEffect(() => {
+    const mt = String(selectedMarket || 'spot').toLowerCase();
+    const isCex = ['spot', 'cex', 'futures', 'future', 'swap'].includes(mt);
+    const amount = Number(isCex ? investmentLimits.cexMaxAmount : investmentLimits.dexMaxAmount);
+    if (Number.isFinite(amount) && amount > 0) {
+      setTradeAmount(amount);
+    }
+  }, [selectedMarket, investmentLimits]);
 
   const handleRunBacktest = async () => {
     if (!user?.openId) {
@@ -493,109 +688,22 @@ export default function Backtest() {
     }
 
     setIsRunning(true);
-    const toastId = toast.loading(`Ejecutando Backtest Tournament...`);
+    toast.loading('Ejecutando backtest en segundo plano...');
 
-    try {
-      // Llamar al endpoint real de backtesting
-      const response = await fetch(
-        `${CONFIG.API_BASE_URL}/backtest/run?` + new URLSearchParams({
-          symbol: selectedSymbol,
-          exchange_id: selectedExchange || 'binance',
-          days: days.toString(),
-          timeframe: timeframe,
-          market_type: selectedMarket,
-          initial_balance: initialBalance.toString(),
-          trade_amount: tradeAmount.toString()
-        }),
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          credentials: 'include'
-        }
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || 'Error al ejecutar backtesting');
-      }
-
-      const data = await response.json();
-
-      // Robust time normalization helper
-      const normalizeTime = (t: any): number => {
-        if (typeof t === 'string') return new Date(t).getTime();
-        // If less than 20000000000 (year 2603), it's likely seconds, convert to MS
-        if (typeof t === 'number' && t < 20000000000) return t * 1000;
-        return t; // Already MS
-      };
-
-      // Transformar datos del backend al formato del frontend
-      const transformedTrades: Trade[] = data.trades?.map((t: any) => ({
-        time: normalizeTime(t.time),
-        price: t.price,
-        side: t.type as 'BUY' | 'SELL',
-        profit: t.pnl,
-        amount: t.amount,
-        avg_price: t.avg_price,
-        label: t.label,
-        pnl_percent: t.pnl_percent
-      })) || [];
-
-      // Sort trades: Newest first (Descending) for Table
-      // Tie-breaker: OPEN/DCA events are "Newer" than CLOSE events in the same tick.
-      transformedTrades.sort((a, b) => {
-        if (b.time !== a.time) {
-          return b.time - a.time;
-        }
-        const isCloseA = a.label?.includes('CLOSE') || false;
-        const isCloseB = b.label?.includes('CLOSE') || false;
-        if (isCloseA && !isCloseB) return 1;
-        if (!isCloseA && isCloseB) return -1;
-        return 0;
-      });
-
-      const candles: Candle[] = data.chart_data?.map((c: any) => ({
-        time: normalizeTime(c.time),
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close
-      })) || [];
-
-      const backtestResults: BacktestResults = {
-        symbol: data.symbol || selectedSymbol,
+    wsService.send({
+      action: 'run_single_backtest',
+      data: {
+        symbol: selectedSymbol,
+        exchangeId: selectedExchange || 'okx',
+        marketType: selectedMarket,
         timeframe,
         days,
-        totalTrades: data.metrics?.total_trades || 0,
-        winRate: data.metrics?.win_rate || 0,
-        profitFactor: data.metrics?.profit_factor?.toString() || '0',
-        maxDrawdown: data.metrics?.max_drawdown?.toFixed(2) || '0',
-        totalReturn: data.metrics?.profit_pct?.toFixed(2) || '0',
-        sharpeRatio: data.metrics?.sharpe_ratio?.toString() || '0',
-        candles,
-        trades: transformedTrades,
-        botConfiguration: data.bot_configuration,
-        metrics: data.metrics,
-        tournamentResults: data.tournament_results,
-        winner: data.winner,
-        strategy_name: data.strategy_name,
-        initial_balance: data.initial_balance,
-        final_balance: data.final_balance
-      };
-
-      setResults(backtestResults);
-      toast.success(
-        `Tournament completado. Ganador: ${data.strategy_name}`,
-        { id: toastId }
-      );
-    } catch (error: any) {
-      console.error('Error en backtesting:', error);
-      toast.error(error.message || 'Error al ejecutar backtesting', { id: toastId });
-    } finally {
-      setIsRunning(false);
-    }
+        initialBalance: initialBalance,
+        tradeAmount: tradeAmount,
+        strategy: 'auto',
+        useAi: true,
+      }
+    });
   };
 
   const StatBox = ({ label, value, unit = '', valueColor = 'text-foreground' }: any) => (
@@ -823,24 +931,26 @@ export default function Backtest() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
               <div>
                 <label className="block text-sm font-semibold text-foreground mb-2">
-                  Balance Inicial (USDT)
+                  Balance Virtual (USDT)
                 </label>
                 <input
                   type="number"
                   value={initialBalance}
-                  onChange={(e) => setInitialBalance(parseFloat(e.target.value) || 0)}
-                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  readOnly
+                  disabled
+                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-800 text-white/90"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-foreground mb-2">
-                  Inversión por Entrada (DCA Step)
+                  Inversión por Entrada (Configuración global)
                 </label>
                 <input
                   type="number"
                   value={tradeAmount}
-                  onChange={(e) => setTradeAmount(parseFloat(e.target.value) || 0)}
-                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  readOnly
+                  disabled
+                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-800 text-white/90"
                 />
               </div>
             </div>
@@ -873,6 +983,8 @@ export default function Backtest() {
                           <th className="text-right py-2 px-4 text-muted-foreground font-semibold">PnL %</th>
                           <th className="text-right py-2 px-4 text-muted-foreground font-semibold">Win Rate</th>
                           <th className="text-right py-2 px-4 text-muted-foreground font-semibold">Operaciones</th>
+                          <th className="text-right py-2 px-4 text-muted-foreground font-semibold">Señales</th>
+                          <th className="text-right py-2 px-4 text-muted-foreground font-semibold">Fuente</th>
                           <th className="text-right py-2 px-4 text-muted-foreground font-semibold">Balance Final</th>
                           <th className="text-right py-2 px-4 text-muted-foreground font-semibold">Acciones</th>
                         </tr>
@@ -908,6 +1020,14 @@ export default function Backtest() {
                               </div>
                             </td>
                             <td className="py-3 px-4 text-right">{res.total_trades}</td>
+                            <td className="py-3 px-4 text-right">{res.signals_non_zero ?? 0}</td>
+                            <td className="py-3 px-4 text-right">
+                              {res.signal_source === 'strategy_fallback' ? (
+                                <Badge variant="outline" className="text-[10px] border-amber-500/40 text-amber-400">fallback</Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-400">model</Badge>
+                              )}
+                            </td>
                             <td className="py-3 px-4 text-right font-mono">${res.final_balance.toLocaleString()}</td>
                             <td className="py-3 px-4 text-right">
                               <Button
@@ -1011,9 +1131,11 @@ export default function Backtest() {
                               symbol: results.symbol,
                               strategy: results.strategy_name || '',
                               initial_balance: virtualBalance.toString(),
-                              timeframe: results.timeframe, // Enviar timeframe del resultado
-                              exchange_id: selectedExchange // Pass selected exchange
-                            }), { method: 'POST' });
+                              timeframe: results.timeframe // Enviar timeframe del resultado
+                            }), {
+                              method: 'POST',
+                              credentials: 'include'
+                            });
 
                             if (!res.ok) throw new Error("Fallo en la conexión");
                             toast.success(`¡Bot ${results.strategy_name} desplegado con éxito!`, { id: toastId });
@@ -1312,24 +1434,26 @@ export default function Backtest() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6 border-t border-border pt-4">
               <div>
                 <label className="block text-sm font-semibold text-foreground mb-2">
-                  Balance Inicial (USDT)
+                  Balance Virtual (USDT)
                 </label>
                 <input
                   type="number"
                   value={initialBalance}
-                  onChange={(e) => setInitialBalance(parseFloat(e.target.value) || 0)}
-                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  readOnly
+                  disabled
+                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-800 text-white/90"
                 />
               </div>
               <div>
                 <label className="block text-sm font-semibold text-foreground mb-2">
-                  Inversión por Entrada
+                  Inversión por Entrada (Configuración global)
                 </label>
                 <input
                   type="number"
                   value={tradeAmount}
-                  onChange={(e) => setTradeAmount(parseFloat(e.target.value) || 0)}
-                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-900 text-white focus:outline-none focus:ring-2 focus:ring-primary"
+                  readOnly
+                  disabled
+                  className="w-full px-4 py-2 border border-slate-700 rounded-lg bg-slate-800 text-white/90"
                 />
               </div>
             </div>
@@ -1539,9 +1663,11 @@ export default function Backtest() {
                               symbol: selectedResult.symbol,
                               strategy: selectedResult.strategy_name || '',
                               initial_balance: virtualBalance.toString(),
-                              timeframe: selectedResult.timeframe, // Enviar timeframe del modal
-                              exchange_id: selectedExchange // Pass selected exchange
-                            }), { method: 'POST' });
+                              timeframe: selectedResult.timeframe // Enviar timeframe del modal
+                            }), {
+                              method: 'POST',
+                              credentials: 'include'
+                            });
 
                             if (!res.ok) throw new Error("Fallo en la conexión");
                             toast.success(`¡Bot para ${selectedResult.symbol} desplegado!`, { id: toastId });

@@ -22,6 +22,7 @@ interface TradeMarker {
 interface ChartProps {
     data?: { time: string | number; open: number; high: number; low: number; close: number }[];
     trades?: TradeMarker[];
+    levels?: { price: number; label: string; color?: string }[];
     colors?: {
         backgroundColor?: string;
         lineColor?: string;
@@ -43,11 +44,12 @@ const toSeconds = (t: string | number): Time => {
     return t as Time;
 };
 
-export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, height = 400, symbol, timeframe }) => {
+export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, levels, colors, height = 400, symbol, timeframe }) => {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
     const seriesRef = useRef<any>(null);
     const markersPrimitiveRef = useRef<any>(null);
+    const priceLinesRef = useRef<any[]>([]);
 
     // Usamos directamente los datos pasados por props.
     const activeData = data || [];
@@ -73,14 +75,34 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
     const markers = useMemo(() => {
         if (!trades || trades.length === 0 || formattedData.length === 0) return [];
 
+        const candleTimes = formattedData.map(c => Number(c.time as any));
+
+        const findCandleBucket = (tradeTime: number) => {
+            // Queremos ubicar la operación en la vela correspondiente (<= tradeTime)
+            // y si no existe, usar la más cercana disponible.
+            let lo = 0;
+            let hi = candleTimes.length - 1;
+            let best = 0;
+
+            while (lo <= hi) {
+                const mid = (lo + hi) >> 1;
+                const t = candleTimes[mid];
+                if (t <= tradeTime) {
+                    best = mid;
+                    lo = mid + 1;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+
+            if (tradeTime < candleTimes[0]) return candleTimes[0];
+            return candleTimes[Math.max(0, Math.min(best, candleTimes.length - 1))];
+        };
+
         return trades
             .map(t => {
                 const tradeTime = toSeconds(t.time) as number;
-
-                // Usar el tiempo exacto de la señal para el marcador
-                // lightweight-charts puede posicionar marcadores en tiempos arbitrarios.
-                // No es necesario buscar una vela coincidente.
-                let validTime = tradeTime;
+                const validTime = findCandleBucket(tradeTime);
 
                 return {
                     time: validTime as Time,
@@ -167,7 +189,7 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
         } catch {}
     }, [priceFormatCfg, symbol, timeframe]);
 
-    const lastAppliedRef = useRef<{ len: number; lastTime: number } | null>(null);
+    const lastAppliedRef = useRef<{ len: number; firstTime: number; lastTime: number } | null>(null);
     const lastSymbolTfRef = useRef<string>('');
 
     // EFECTO 1.5: Actualizar Datos (Sin recrear gráfico)
@@ -177,7 +199,9 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
         const key = `${symbol || ''}:${timeframe || ''}`;
         const symbolChanged = lastSymbolTfRef.current !== key;
 
+        const first = formattedData[0];
         const last = formattedData[formattedData.length - 1];
+        const firstTime = Number(first.time as any);
         const lastTime = Number(last.time as any);
         const prev = lastAppliedRef.current;
 
@@ -190,14 +214,15 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
                 chartRef.current?.priceScale('right')?.applyOptions({ autoScale: true });
                 chartRef.current?.timeScale().fitContent();
             } catch {}
-            lastAppliedRef.current = { len: formattedData.length, lastTime };
+            lastAppliedRef.current = { len: formattedData.length, firstTime, lastTime };
             return;
         }
 
-        // First load or big jump: setData
-        if (!prev || formattedData.length < prev.len || formattedData.length - prev.len > 5) {
+        // First load / dataset cambiado (aunque sea mismo symbol/timeframe) / big jump: setData
+        const datasetChanged = !!prev && (prev.firstTime !== firstTime || prev.lastTime !== lastTime);
+        if (!prev || datasetChanged || formattedData.length < prev.len || formattedData.length - prev.len > 5) {
             seriesRef.current.setData(formattedData);
-            lastAppliedRef.current = { len: formattedData.length, lastTime };
+            lastAppliedRef.current = { len: formattedData.length, firstTime, lastTime };
             try {
                 chartRef.current?.priceScale('right')?.applyOptions({ autoScale: true });
                 chartRef.current?.timeScale().fitContent();
@@ -212,7 +237,7 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
             seriesRef.current.setData(formattedData);
         }
 
-        lastAppliedRef.current = { len: formattedData.length, lastTime };
+        lastAppliedRef.current = { len: formattedData.length, firstTime, lastTime };
     }, [formattedData, symbol, timeframe]);
 
     // EFECTO 2: Actualizar Marcadores Dinámicamente
@@ -225,6 +250,34 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, colors, h
             }
         }
     }, [markers]);
+
+    // EFECTO 2.5: Líneas de niveles (Entry/TP/SL)
+    useEffect(() => {
+        if (!seriesRef.current) return;
+
+        try {
+            // limpiar líneas anteriores
+            for (const pl of priceLinesRef.current) {
+                try { seriesRef.current.removePriceLine(pl); } catch {}
+            }
+            priceLinesRef.current = [];
+
+            const valid = (levels || []).filter(l => Number.isFinite(Number(l.price)) && Number(l.price) > 0);
+            for (const lvl of valid) {
+                const line = seriesRef.current.createPriceLine({
+                    price: Number(lvl.price),
+                    color: lvl.color || '#94a3b8',
+                    lineWidth: 1,
+                    lineStyle: 2,
+                    axisLabelVisible: true,
+                    title: lvl.label,
+                });
+                priceLinesRef.current.push(line);
+            }
+        } catch (e) {
+            console.warn('No se pudieron pintar líneas de niveles', e);
+        }
+    }, [levels, symbol, timeframe]);
 
     // EFECTO 3: Ajuste de Zoom (VisibleRange) y Auto-Fit al cambiar de Bot
     useEffect(() => {

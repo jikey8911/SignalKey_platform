@@ -211,10 +211,12 @@ class BacktestService:
                     self.logger.warning(f"⏩ Skipping {strat_name}: Missing features.")
                     continue
 
-                step_investment = initial_balance * 0.2
-                
+                # Cada estrategia arranca con balance fresco (virtual balance resuelto en router)
+                strategy_initial_balance = float(initial_balance)
+                step_investment = strategy_initial_balance * 0.2
+
                 if trade_amount and trade_amount > 0:
-                    step_investment = trade_amount
+                    step_investment = float(trade_amount)
                     self.logger.info(f"💰 Usando monto fijo por parámetro: ${step_investment}")
                 else:
                     try:
@@ -228,16 +230,32 @@ class BacktestService:
                     except Exception as e:
                         self.logger.warning(f"⚠️ No se pudo cargar configuración de usuario, usando default: {e}")
 
+                if step_investment > strategy_initial_balance:
+                    step_investment = max(10.0, strategy_initial_balance * 0.2)
+                    self.logger.warning(
+                        f"{strat_name}: step_investment ajustado a {step_investment} por ser mayor que el balance inicial {strategy_initial_balance}"
+                    )
+
                 model_features = features + ['in_position', 'current_pnl']
-                
+
                 valid_idx = df_processed[model_features].dropna().index
                 X = df_processed.loc[valid_idx, model_features]
                 df_processed.loc[valid_idx, 'ai_signal'] = model.predict(X)
                 df_processed['ai_signal'] = df_processed['ai_signal'].fillna(0)
 
+                # Fallback robusto: si el modelo devuelve TODO HOLD, usar señal técnica base
+                # para no entregar torneos vacíos (0 trades) cuando el .pkl está frío/desalineado.
+                non_zero_ai = int((df_processed['ai_signal'] != 0).sum())
+                signal_source = "model"
+                if non_zero_ai == 0 and 'signal' in df_processed.columns:
+                    self.logger.warning(f"{strat_name}: model returned all HOLD, falling back to strategy signal")
+                    df_processed['ai_signal'] = df_processed['signal'].fillna(0)
+                    non_zero_ai = int((df_processed['ai_signal'] != 0).sum())
+                    signal_source = "strategy_fallback"
+
                 simulation_result = self._simulate_with_reversal(
-                    df_processed, 
-                    initial_balance=initial_balance,
+                    df_processed,
+                    initial_balance=strategy_initial_balance,
                     trade_amount=step_investment,
                     tp=tp,
                     sl=sl
@@ -246,13 +264,20 @@ class BacktestService:
                 if not simulation_result:
                      continue
 
-                tournament_results.append({
+                strategy_row = {
                     "strategy": strat_name,
                     "profit_pct": simulation_result['profit_pct'],
                     "total_trades": simulation_result['total_trades'],
                     "win_rate": simulation_result['win_rate'],
-                    "final_balance": simulation_result['final_balance']
-                })
+                    "initial_balance": strategy_initial_balance,
+                    "final_balance": simulation_result['final_balance'],
+                    "signals_non_zero": non_zero_ai,
+                    "signal_source": signal_source,
+                }
+                tournament_results.append(strategy_row)
+                self.logger.info(
+                    f"📊 BACKTEST [{strat_name}] source={signal_source} signals={non_zero_ai} trades={strategy_row['total_trades']} pnl={strategy_row['profit_pct']}% balance={strategy_row['final_balance']}"
+                )
                 
                 if simulation_result['profit_pct'] > highest_pnl:
                     highest_pnl = simulation_result['profit_pct']
@@ -270,6 +295,9 @@ class BacktestService:
 
         tournament_results.sort(key=lambda x: x['profit_pct'], reverse=True)
         winner = tournament_results[0]
+        self.logger.info(
+            f"🏆 BACKTEST WINNER [{winner.get('strategy')}] pnl={winner.get('profit_pct')}% trades={winner.get('total_trades')} source={winner.get('signal_source')}"
+        )
         
         chart_data = []
         def sanitize(val):

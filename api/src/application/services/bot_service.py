@@ -27,6 +27,9 @@ class SignalBotService:
         self.stream_service.add_listener(self.handle_market_update)
         # Diccionario para trackear la última vela analizada por par:timeframe
         self._last_analyzed_per_bot: Dict[str, Any] = {}
+        # Tick runtime state
+        self._prev_price_per_stream: Dict[str, float] = {}
+        self._last_tick_exec_per_bot: Dict[str, float] = {}
 
     async def start(self):
         await self.initialize_active_bots_monitoring()
@@ -64,29 +67,29 @@ class SignalBotService:
         last_price = data.get("ticker", {}).get("last")
         exchange_id = data.get("exchange")
 
-        if not symbol or not last_price: return
+        if not symbol or not last_price:
+            return
 
-        # Filtrar bots que coincidan en SIMBOLO y EXCHANGE
+        # 1) Gestión de trades abiertos (PnL live / monitor)
         active_trades = await db.trades.find({
-            "symbol": symbol, 
+            "symbol": symbol,
             "status": {"$in": ["active", "open"]}
         }).to_list(length=None)
-        
+
         for trade in active_trades:
             bot_exchange = (trade.get("exchangeId") or "binance").lower()
             if bot_exchange == exchange_id:
                 await self._process_bot_tick(trade, current_price=last_price)
-                
-                # --- EMITR UPDATE POR TOPIC ---
+
                 from api.src.adapters.driven.notifications.socket_service import socket_service
-                
+
                 bot_id = str(trade.get("botId"))
                 entry_price = trade.get("entryPrice", 0)
                 side = trade.get("side", "BUY")
                 pnl = 0
                 if entry_price > 0:
                     pnl = ((last_price - entry_price) / entry_price) * 100 if side == "BUY" else ((entry_price - last_price) / entry_price) * 100
-                
+
                 await socket_service.emit_to_topic(f"bot:{bot_id}", "bot_update", {
                     "id": bot_id,
                     "symbol": symbol,
@@ -94,6 +97,60 @@ class SignalBotService:
                     "pnl": round(pnl, 2),
                     "timestamp": datetime.utcnow().isoformat()
                 })
+
+        # 2) Evaluación intravela por estrategia base (on_price_tick)
+        stream_key = f"{exchange_id}:{symbol}"
+        prev_price = float(self._prev_price_per_stream.get(stream_key) or 0)
+        self._prev_price_per_stream[stream_key] = float(last_price)
+
+        active_bots = await db.bot_instances.find({
+            "symbol": symbol,
+            "status": "active"
+        }).to_list(length=None)
+
+        for bot in active_bots:
+            try:
+                bot_exchange = (bot.get("exchangeId") or bot.get("exchange_id") or "binance").lower()
+                if bot_exchange != exchange_id:
+                    continue
+
+                bot_id = str(bot.get("_id"))
+                now_ts = datetime.utcnow().timestamp()
+                min_tick_sec = float((bot.get("config") or {}).get("tickMinIntervalSec", 5))
+                if now_ts - float(self._last_tick_exec_per_bot.get(bot_id, 0.0)) < min_tick_sec:
+                    continue
+
+                strategy_name = bot.get("strategy_name") or ""
+                market_type = str(bot.get("marketType") or bot.get("market_type") or "spot").lower()
+                StrategyClass = self.ml_service.trainer.load_strategy_class(strategy_name, market_type)
+                if not StrategyClass:
+                    continue
+
+                strategy = StrategyClass(bot.get("config") or {})
+                pos = bot.get("position") or {}
+                tick_signal = strategy.on_price_tick(
+                    float(last_price),
+                    current_position=pos,
+                    context={"prev_price": prev_price}
+                )
+
+                if tick_signal == 0:
+                    continue
+
+                bot_with_exchange = bot.copy()
+                bot_with_exchange["exchangeId"] = exchange_id
+
+                await self.engine.process_signal(bot_with_exchange, {
+                    "signal": int(tick_signal),
+                    "price": float(last_price),
+                    "confidence": 0.51,
+                    "reasoning": "tick:on_price_tick",
+                    "is_alert": True,
+                })
+
+                self._last_tick_exec_per_bot[bot_id] = now_ts
+            except Exception as e:
+                logger.debug(f"tick evaluation skipped for bot {bot.get('_id')}: {e}")
 
     async def _handle_candle_update(self, data: Dict[str, Any]):
         symbol = data["symbol"]

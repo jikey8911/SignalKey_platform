@@ -1,6 +1,7 @@
 import logging
 import asyncio
 from datetime import datetime
+from typing import Optional
 from bson import ObjectId
 from api.src.application.services.simulation_service import SimulationService
 from api.src.domain.strategies.base import BaseStrategy
@@ -375,6 +376,25 @@ class ExecutionEngine:
 
         await self._update_bot_db(bot['_id'], side, final_qty, final_price, realized_pnl)
 
+        # Reflejar posición OPEN en colección positions para consistencia de dashboard
+        try:
+            await self.db["positions"].update_one(
+                {"botId": ObjectId(bot['_id']), "status": "OPEN"},
+                {"$set": {
+                    "botId": ObjectId(bot['_id']),
+                    "userId": bot.get('user_id'),
+                    "symbol": symbol,
+                    "status": "OPEN",
+                    "side": side,
+                    "currentQty": float(final_qty),
+                    "avgEntryPrice": float(final_price),
+                    "updatedAt": datetime.utcnow(),
+                }, "$setOnInsert": {"createdAt": datetime.utcnow()}},
+                upsert=True
+            )
+        except Exception as e:
+            self.logger.warning(f"No se pudo sincronizar positions en ejecución real: {e}")
+
         return {
             "success": True, 
             "status": "executed", 
@@ -438,6 +458,7 @@ class ExecutionEngine:
             "amount": exec_result.get('amount'),
             "pnl": exec_result.get('pnl', 0),
             "mode": bot_instance.get('mode'),
+            "source": signal_data.get('source', 'auto_signal'),
             "timestamp": datetime.utcnow()
         }
         await self.db["trades"].insert_one(trade_doc)
@@ -462,6 +483,164 @@ class ExecutionEngine:
                 await tg.send_trade_alert(trade_doc)
         except Exception as e:
             self.logger.warning(f"Failed to send TG alert: {e}")
+
+    async def execute_manual_action(self, bot_instance, action: str, price: Optional[float] = None, amount: Optional[float] = None):
+        """
+        Ejecuta acciones manuales de gestión de posición sin detener el bot:
+        - close: cerrar posición actual y dejar qty=0
+        - increase: aumentar posición en la misma dirección
+        - reverse: flip (cerrar y abrir al lado contrario usando amount del bot o override)
+        """
+        if bot_instance.get('status') != 'active':
+            return {"success": False, "reason": "bot_not_active"}
+
+        position = bot_instance.get('position', {}) or {}
+        current_qty = float(position.get('qty', 0) or 0)
+        current_side = str(bot_instance.get('side') or 'BUY').upper()
+
+        if action == 'close' and current_qty <= 0:
+            return {"success": False, "reason": "no_open_position"}
+
+        if action in ['increase', 'reverse'] and current_qty <= 0:
+            return {"success": False, "reason": "no_open_position"}
+
+        # precio preferido desde frontend (live price del chart)
+        exec_price = float(price or 0)
+        if exec_price <= 0:
+            return {"success": False, "reason": "invalid_price"}
+
+        mode = bot_instance.get('mode', 'simulated')
+
+        if action == 'close':
+            if mode == 'simulated':
+                result = await self._execute_simulated_close(bot_instance, exec_price)
+            else:
+                result = await self._execute_real_close(bot_instance, exec_price)
+            if result.get('success'):
+                await self._persist_operation(bot_instance, {"signal": 2 if current_side == 'BUY' else 1, "price": exec_price, "source": "manual_action"}, result)
+            return result
+
+        if action == 'increase':
+            signal_side = current_side
+            trade_amount = float(amount or bot_instance.get('amount') or 0)
+            if trade_amount <= 0:
+                trade_amount = 100.0
+
+            if not await self._check_risk_and_balance(bot_instance, trade_amount, exec_price):
+                return {"success": False, "reason": "insufficient_balance_or_risk"}
+
+            if mode == 'simulated':
+                result = await self._execute_simulated(bot_instance, 'DCA', signal_side, exec_price, trade_amount)
+            else:
+                result = await self._execute_real(bot_instance, 'DCA', signal_side, exec_price, trade_amount)
+
+            if result.get('success'):
+                await self._persist_operation(bot_instance, {"signal": 1 if signal_side == 'BUY' else 2, "price": exec_price, "source": "manual_action"}, result)
+            return result
+
+        if action == 'reverse':
+            signal_side = 'SELL' if current_side == 'BUY' else 'BUY'
+            trade_amount = float(amount or bot_instance.get('amount') or 0)
+            if trade_amount <= 0:
+                trade_amount = 100.0
+
+            if not await self._check_risk_and_balance(bot_instance, trade_amount, exec_price):
+                return {"success": False, "reason": "insufficient_balance_or_risk"}
+
+            if mode == 'simulated':
+                result = await self._execute_simulated(bot_instance, 'FLIP', signal_side, exec_price, trade_amount)
+            else:
+                result = await self._execute_real(bot_instance, 'FLIP', signal_side, exec_price, trade_amount)
+
+            if result.get('success'):
+                await self._persist_operation(bot_instance, {"signal": 1 if signal_side == 'BUY' else 2, "price": exec_price, "source": "manual_action"}, result)
+            return result
+
+        return {"success": False, "reason": "unsupported_action"}
+
+    async def _execute_simulated_close(self, bot, price):
+        bot_id = bot.get('_id')
+        user_id = bot.get('user_id')
+        market_type = bot.get('marketType', 'CEX')
+        symbol = bot.get('symbol')
+        quote_currency = symbol.split('/')[1] if '/' in symbol else 'USDT'
+
+        positions_coll = self.db['positions']
+        position = await positions_coll.find_one({"botId": ObjectId(bot_id), "status": "OPEN"})
+        if not position:
+            return {"success": False, "reason": "no_open_position"}
+
+        qty = float(position.get('currentQty', 0) or 0)
+        avg = float(position.get('avgEntryPrice', 0) or 0)
+        side = str(position.get('side', bot.get('side', 'BUY'))).upper()
+        if qty <= 0 or avg <= 0:
+            return {"success": False, "reason": "invalid_position"}
+
+        pnl_value = (price - avg) * qty if side == 'BUY' else (avg - price) * qty
+        capital_returned = (qty * avg) + pnl_value
+        await update_virtual_balance(str(user_id), market_type, quote_currency, capital_returned, is_relative=True)
+
+        await positions_coll.update_one(
+            {"_id": position.get('_id')},
+            {"$set": {"status": "CLOSED", "closedAt": datetime.utcnow(), "finalPnl": pnl_value, "exitPrice": price}}
+        )
+
+        await self._update_bot_db(bot_id, side, 0.0, 0.0, pnl_value)
+
+        return {
+            "success": True,
+            "status": "closed",
+            "side": "SELL" if side == 'BUY' else 'BUY',
+            "price": price,
+            "amount": qty * price,
+            "pnl": pnl_value,
+            "is_simulated": True,
+        }
+
+    async def _execute_real_close(self, bot, price):
+        user_id = bot.get('user_id')
+        exchange_id = bot.get('exchangeId') or bot.get('exchange_id')
+        symbol = bot.get('symbol')
+        current_qty = float((bot.get('position') or {}).get('qty', 0) or 0)
+        current_side = str(bot.get('side') or 'BUY').upper()
+
+        if current_qty <= 0:
+            return {"success": False, "reason": "no_open_position"}
+
+        close_side = 'SELL' if current_side == 'BUY' else 'BUY'
+        close_res = await self.real_exchange.execute_trade(symbol, close_side, current_qty, user_id=str(user_id), exchange_id=exchange_id)
+        if not close_res.get('success'):
+            return {"success": False, "reason": close_res.get('message') or 'close_failed'}
+
+        close_px = close_res.get('details', {}).get('price') or price
+        realized_pnl = self._calculate_realized_pnl_value(bot, close_px)
+        await self._update_bot_db(bot['_id'], current_side, 0.0, 0.0, realized_pnl)
+
+        # Reflejar cierre también en colección positions (si existe abierta)
+        try:
+            await self.db["positions"].update_one(
+                {"botId": ObjectId(bot['_id']), "status": "OPEN"},
+                {"$set": {
+                    "status": "CLOSED",
+                    "closedAt": datetime.utcnow(),
+                    "exitPrice": close_px,
+                    "finalPnl": realized_pnl,
+                    "currentQty": 0.0,
+                    "updatedAt": datetime.utcnow(),
+                }}
+            )
+        except Exception as e:
+            self.logger.warning(f"No se pudo sincronizar positions en close real: {e}")
+
+        return {
+            "success": True,
+            "status": "closed",
+            "side": close_side,
+            "price": close_px,
+            "amount": current_qty * float(close_px),
+            "pnl": realized_pnl,
+            "exchange": exchange_id,
+        }
 
     async def _apply_profit_guard(self, bot_instance, signal, current_price):
         # ... (Mantener lógica existente) ...
