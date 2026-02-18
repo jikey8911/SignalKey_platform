@@ -220,18 +220,19 @@ async def handle_bot_subscription(websocket: WebSocket, bot_id: str):
     await socket_service.subscribe_to_topic(websocket, topic=f"bot:{bot_id}")
 
     # D) SUSCRIBIR A VELAS (histórico + live por timeframe del bot)
+    bot_market_type = str(bot_doc.get("marketType") or bot_doc.get("market_type") or "SPOT").upper()
+    if bot_market_type == "CEX":
+        bot_market_type = "SPOT"
+
     market_topic = f"candles:{exchange_id}:{symbol}:{timeframe}"
-    logger.info(f"Suscribiendo socket a stream de mercado: {market_topic}")
+    logger.info(f"Suscribiendo socket a stream de mercado: {market_topic} ({bot_market_type})")
     await socket_service.subscribe_to_topic(websocket, topic=market_topic)
     try:
-        await container.stream_service.subscribe_candles(exchange_id, symbol, timeframe)
+        await container.stream_service.subscribe_candles(exchange_id, symbol, timeframe, market_type=bot_market_type)
     except Exception as e:
         logger.warning(f"No se pudo suscribir velas en vivo para {symbol} {timeframe}: {e}")
 
     # E) SUSCRIBIR A TICKER EN VIVO PARA ESTE BOT
-    bot_market_type = str(bot_doc.get("marketType") or bot_doc.get("market_type") or "SPOT").upper()
-    if bot_market_type == "CEX":
-        bot_market_type = "SPOT"
     price_topic = f"price:{exchange_id}:{bot_market_type}:{symbol}"
     await socket_service.subscribe_to_topic(websocket, topic=price_topic)
     try:

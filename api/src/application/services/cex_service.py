@@ -34,8 +34,18 @@ class CEXService:
 
     async def fetch_balance(self, user_id: str, exchange_id: Optional[str] = None) -> Dict[str, Any]:
         try:
-            balances = await self.ccxt_provider.fetch_balance(user_id, exchange_id or "binance")
-            res = {"total": {}, "free": {}, "used": {}}
+            resolved_exchange = exchange_id
+            if not resolved_exchange:
+                cfg = await get_app_config(user_id)
+                exchanges = (cfg or {}).get("exchanges", [])
+                active = next((e for e in exchanges if e.get("isActive", True)), None)
+                if active and active.get("exchangeId"):
+                    resolved_exchange = active.get("exchangeId")
+
+            resolved_exchange = resolved_exchange or "okx"
+
+            balances = await self.ccxt_provider.fetch_balance(user_id, resolved_exchange)
+            res = {"total": {}, "free": {}, "used": {}, "exchangeId": resolved_exchange}
             for b in balances:
                 res["total"][b.asset] = b.total
                 res["free"][b.asset] = b.free

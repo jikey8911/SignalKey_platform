@@ -38,16 +38,17 @@ class BootManager:
                 symbol = bot_data.get('symbol')
                 exchange_id = (bot_data.get('exchange_id') or bot_data.get('exchangeId') or 'okx').lower()
                 timeframe = bot_data.get('timeframe', '15m')
+                market_type = str(bot_data.get('market_type') or bot_data.get('marketType') or 'spot').lower()
                 user_id = str(bot_data.get('user_id'))
 
                 logger.info(f"Reactivando streams para {bot_data['name']} en {exchange_id}")
 
                 # 1. Suscribir a precio real para el frontend
                 if self.stream_service:
-                    await self.stream_service.subscribe_ticker(exchange_id, symbol)
-                    
+                    await self.stream_service.subscribe_ticker(exchange_id, symbol, market_type=market_type)
+
                     # 2. Suscribir a velas para la lógica de la IA
-                    await self.stream_service.subscribe_candles(exchange_id, symbol, timeframe)
+                    await self.stream_service.subscribe_candles(exchange_id, symbol, timeframe, market_type=market_type)
                 
                 # 3. Lanzar bucle de monitoreo (que ahora responderá a eventos del stream_service)
                 # El monitor_loop ahora puede ser más ligero ya que el stream_service hace el trabajo pesado

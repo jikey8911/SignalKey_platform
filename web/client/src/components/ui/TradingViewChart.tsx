@@ -293,5 +293,10 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, levels, c
         }
     }, [symbol, timeframe, formattedData.length]);
 
-    return <div ref={chartContainerRef} className="w-full shadow-xl rounded-lg overflow-hidden border border-slate-800" />;
+    return (
+        <div className="w-full">
+            <div className="mb-2 text-[11px] text-slate-400 font-mono">Timezone: GMT (UTC)</div>
+            <div ref={chartContainerRef} className="w-full shadow-xl rounded-lg overflow-hidden border border-slate-800" />
+        </div>
+    );
 };

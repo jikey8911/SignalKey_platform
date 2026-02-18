@@ -131,7 +131,9 @@ class TelegramBotManager:
             # Iniciamos el bot para recibir mensajes siempre, independientemente de si está marcado como conectado
             configs = await db.app_configs.find({
                 "telegramApiId": {"$exists": True, "$ne": ""},
-                "telegramApiHash": {"$exists": True, "$ne": ""}
+                "telegramApiHash": {"$exists": True, "$ne": ""},
+                "telegramSessionString": {"$exists": True, "$ne": ""},
+                "telegramIsConnected": True,
             }).to_list(length=100)
             
             logger.info(f"Found {len(configs)} users with Telegram configured")

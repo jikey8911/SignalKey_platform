@@ -28,13 +28,13 @@ class MarketStreamService:
         
         return self.latest_data.get(task_key, {"last": 0.0})
 
-    async def subscribe_candles(self, exchange_id: str, symbol: str, timeframe: str):
-        task_key = f"ohlcv:{exchange_id}:{symbol}:{timeframe}"
+    async def subscribe_candles(self, exchange_id: str, symbol: str, timeframe: str, market_type: str = None):
+        task_key = f"ohlcv:{exchange_id}:{market_type or 'spot'}:{symbol}:{timeframe}"
         if task_key in self.active_tasks:
             return
 
         self.active_tasks[task_key] = asyncio.create_task(
-            self._ohlcv_loop(exchange_id, symbol, timeframe)
+            self._ohlcv_loop(exchange_id, symbol, timeframe, market_type)
         )
         logger.info(f"🕯️ Suscripción Velas activada: {task_key}")
 
@@ -65,8 +65,8 @@ class MarketStreamService:
                 "ticker": ticker
             })
 
-    async def _ohlcv_loop(self, exchange_id: str, symbol: str, timeframe: str):
-        async for ohlcv_list in ccxt_service.watch_ohlcv(exchange_id, symbol, timeframe):
+    async def _ohlcv_loop(self, exchange_id: str, symbol: str, timeframe: str, market_type: str = None):
+        async for ohlcv_list in ccxt_service.watch_ohlcv(exchange_id, symbol, timeframe, market_type=market_type):
             if not ohlcv_list: continue
             
             # Solo nos interesa la última vela (la que está cambiando o acaba de cerrar)
@@ -82,6 +82,7 @@ class MarketStreamService:
             
             await self._notify("candle_update", {
                 "exchange": exchange_id,
+                "marketType": market_type or "spot",
                 "symbol": symbol,
                 "timeframe": timeframe,
                 "candle": candle_data

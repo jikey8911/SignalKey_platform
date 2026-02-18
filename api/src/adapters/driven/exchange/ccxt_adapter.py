@@ -70,28 +70,39 @@ class CcxtAdapter:
                 if user_id:
                     try:
                         # Importación diferida para evitar ciclos
-                        from api.src.adapters.driven.persistence.mongodb import get_app_config
+                        from api.src.adapters.driven.persistence.mongodb import get_app_config, db
                         user_config = await get_app_config(user_id)
-                        
+
+                        exchange_conf = None
                         if user_config and "exchanges" in user_config:
-                            # Buscar configuración para este exchange específico
-                            exchange_conf = next((e for e in user_config["exchanges"] 
-                                                if e.get("exchangeId") == eid and e.get("isActive", True)), None)
-                            
-                            if exchange_conf:
-                                if exchange_conf.get('apiKey'):
-                                    config['apiKey'] = exchange_conf.get('apiKey')
-                                if exchange_conf.get('secret'):
-                                    config['secret'] = exchange_conf.get('secret')
-                                if exchange_conf.get('password'):
-                                    config['password'] = exchange_conf.get('password')
-                                if exchange_conf.get('uid'):
-                                    config['uid'] = exchange_conf.get('uid')
-                                
-                                # Ajustar tipo de mercado si está configurado
-                                if exchange_conf.get('marketType'):
-                                    config['options']['defaultType'] = exchange_conf.get('marketType')
-                                    
+                            # Buscar configuración para este exchange específico en app_configs
+                            exchange_conf = next((e for e in user_config["exchanges"]
+                                                  if e.get("exchangeId") == eid and e.get("isActive", True)), None)
+
+                        # Fallback robusto: leer de user_exchanges (fuente primaria)
+                        if not exchange_conf:
+                            user_doc = await db.users.find_one({"openId": user_id})
+                            if user_doc:
+                                ux = await db.user_exchanges.find_one({"userId": user_doc.get("_id")})
+                                ex_list = (ux or {}).get("exchanges", [])
+                                exchange_conf = next((e for e in ex_list
+                                                      if str(e.get("exchangeId", "")).lower() == eid and e.get("isActive", True)), None)
+
+                        if exchange_conf:
+                            if exchange_conf.get('apiKey'):
+                                config['apiKey'] = exchange_conf.get('apiKey')
+                            if exchange_conf.get('secret'):
+                                config['secret'] = exchange_conf.get('secret')
+                            if exchange_conf.get('password'):
+                                config['password'] = exchange_conf.get('password')
+                            if exchange_conf.get('uid'):
+                                config['uid'] = exchange_conf.get('uid')
+
+                            # Ajustar tipo de mercado si está configurado (normalizar)
+                            mkt = exchange_conf.get('marketType')
+                            if mkt:
+                                config['options']['defaultType'] = self._normalize_default_type(eid, mkt)
+
                     except Exception as e:
                         logger.warning(f"No se pudieron cargar credenciales para {user_id} en {eid}: {e}")
 

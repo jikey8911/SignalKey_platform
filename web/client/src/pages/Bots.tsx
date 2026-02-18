@@ -646,7 +646,7 @@ export default function BotsPage() {
 
                                 <div className="flex items-center justify-between text-[11px] text-slate-400">
                                     <span>
-                                        Creado: {bot.createdAt ? new Date(bot.createdAt).toLocaleString() : 'N/D'}
+                                        Creado: {bot.createdAt ? new Date(bot.createdAt).toLocaleString('es-CO', { timeZone: 'America/Bogota' }) : 'N/D'}
                                     </span>
                                     <span className="uppercase tracking-wide text-slate-300">
                                         {bot.status === 'running' ? 'activo' : bot.status === 'paused' ? 'pausado' : bot.status}
@@ -887,7 +887,7 @@ export default function BotsPage() {
                                                                 {op.side}
                                                             </Badge>
                                                             <span className="font-mono text-xs text-muted-foreground">
-                                                                {new Date(op.originalTime || op.time).toLocaleString()}
+                                                                {new Date(op.originalTime || op.time).toLocaleString('es-CO', { timeZone: 'America/Bogota' })}
                                                             </span>
                                                         </div>
                                                         <div className="font-mono font-medium">{op.price}</div>
@@ -972,7 +972,7 @@ export default function BotsPage() {
                                                                                 {isBuy ? 'Compra Detectada' : 'Venta Detectada'}
                                                                             </span>
                                                                             <span className="text-xs text-muted-foreground font-mono">
-                                                                                {new Date(sig.createdAt || sig.timestamp || Date.now()).toLocaleString()}
+                                                                                {new Date(sig.createdAt || sig.timestamp || Date.now()).toLocaleString('es-CO', { timeZone: 'America/Bogota' })}
                                                                             </span>
                                                                         </div>
                                                                     </div>

@@ -46,15 +46,18 @@ class SignalBotService:
             symbol = bot["symbol"]
             tf = bot.get("timeframe", "15m")
             
+            market_type = str(bot.get("market_type") or bot.get("marketType") or "spot").lower()
+
             await self.buffer_service.initialize_buffer(ex_id, symbol, tf, limit=100)
-            await self.stream_service.subscribe_candles(ex_id, symbol, tf)
-            await self.stream_service.subscribe_ticker(ex_id, symbol)
+            await self.stream_service.subscribe_candles(ex_id, symbol, tf, market_type=market_type)
+            await self.stream_service.subscribe_ticker(ex_id, symbol, market_type=market_type)
 
         # 2. Trades activos (Salidas)
         active_trades = await db.trades.find({"status": {"$in": ["active", "open"]}}).to_list(length=1000)
         for trade in active_trades:
             ex_id = (trade.get("exchangeId") or "binance").lower()
-            await self.stream_service.subscribe_ticker(ex_id, trade["symbol"])
+            market_type = str(trade.get("marketType") or trade.get("market_type") or "spot").lower()
+            await self.stream_service.subscribe_ticker(ex_id, trade["symbol"], market_type=market_type)
 
     async def handle_market_update(self, event_type: str, data: Dict[str, Any]):
         if event_type == "ticker_update":

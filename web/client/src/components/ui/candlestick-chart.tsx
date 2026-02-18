@@ -193,7 +193,7 @@ export const CandlestickChart = ({ candles, signals = [], height = 300, width = 
            <div className="font-bold border-b border-white/5 pb-1 mb-1">SIGNAL DETAILS</div>
            <div>Type: {selectedSignal.decision || selectedSignal.type || selectedSignal.side}</div>
            <div>Price: ${selectedSignal.price?.toFixed(2)}</div>
-           <div>Time: {new Date(selectedSignal.createdAt).toLocaleString()}</div>
+           <div>Time: {new Date(selectedSignal.createdAt).toLocaleString('es-CO', { timeZone: 'America/Bogota' })}</div>
            <button className="mt-1 text-blue-400 hover:text-blue-300" onClick={() => setSelectedSignal(null)}>Close</button>
         </div>
       )}
