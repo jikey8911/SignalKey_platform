@@ -124,10 +124,29 @@ async def save_trade(trade_data: Dict[str, Any]):
     return await db.trades.insert_one(trade_data)
 
 async def update_virtual_balance(user_id: Any, market_type: str, asset: str, amount: float, is_relative: bool = False):
-    """
-    Updates virtual balance for a user.
+    """Updates virtual balance for a user.
+
+    Normaliza market_type para evitar documentos duplicados por capitalización ("cex" vs "CEX").
+
     user_id: Can be ObjectId, openId string, or ObjectId string.
     """
+    # Normalize market_type (canonical: CEX/DEX)
+    mt = str(market_type or "CEX").strip()
+    u_mt = mt.upper()
+    if u_mt in {"CEX", "SPOT", "CE", "SPOT_CEX"}:
+        market_type = "CEX"
+    elif u_mt in {"DEX"}:
+        market_type = "DEX"
+    elif u_mt in {"FUTURE", "FUTURES", "SWAP", "PERP", "PERPETUAL"}:
+        market_type = "CEX"
+    else:
+        # common lowercase
+        l = mt.lower()
+        if l in {"cex", "spot"}:
+            market_type = "CEX"
+        elif l == "dex":
+            market_type = "DEX"
+
     user = None
     if isinstance(user_id, ObjectId):
         user = await db.users.find_one({"_id": user_id})
