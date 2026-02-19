@@ -31,6 +31,10 @@ signal_repo = MongoDBSignalRepository(db)
 # Track per-websocket active price topics so we can diff subscriptions.
 _ws_price_topics: Dict[int, Set[str]] = {}
 
+# Track bot subscriptions meta per websocket so we can cleanly unsubscribe candles/price topics.
+# _ws_bot_meta[id(websocket)][bot_id] = {exchange_id, symbol, timeframe, market_type}
+_ws_bot_meta: Dict[int, Dict[str, Dict[str, Any]]] = {}
+
 # Throttle ticker emits per topic to <= 1 update / 2 seconds.
 _last_price_emit: Dict[str, float] = {}
 _THROTTLE_SECONDS = 2.0
@@ -164,37 +168,80 @@ async def handle_bot_subscription(websocket: WebSocket, bot_id: str):
     trade_query = {"$or": [{"botId": bot_id_str}, {"botId": bot_doc.get("_id")}]}
     trades_docs = await db["trades"].find(trade_query).sort("createdAt", -1).limit(400).to_list(length=400)
 
-    # Obtener velas históricas para el símbolo/timeframe del bot
-    candles = []
+    # Obtener velas históricas: preferir bot_feature_states.windowCandles (features precomputadas)
+    # Fallback: CCXT histórico si no existe estado (p.ej. bot recién creado sin bootstrap).
+    candles: list = []
+    feature_candles: list = []
+
     try:
-        market_type = (bot_doc.get("marketType") or bot_doc.get("market_type") or "spot")
-        df = await ccxt_service.get_historical_data(
-            symbol=symbol,
-            timeframe=timeframe,
-            limit=120,  # >=40 velas, dejamos margen para contexto visual
-            exchange_id=exchange_id,
-            market_type=market_type,
-        )
-        if df is not None and not df.empty:
-            candles = [
-                {
-                    "time": int(ts.timestamp()),
-                    "open": float(row["open"]),
-                    "high": float(row["high"]),
-                    "low": float(row["low"]),
-                    "close": float(row["close"]),
-                    "volume": float(row["volume"]),
-                }
-                for ts, row in df.iterrows()
-            ]
+        state = await db["bot_feature_states"].find_one({"botId": bot_doc.get("_id")})
+        if state and state.get("windowCandles"):
+            feature_candles = state.get("windowCandles") or []
+
+            # Map al formato de lightweight-charts: time en segundos
+            for c in feature_candles:
+                try:
+                    ts = c.get("timestamp")
+                    # ts viene iso string (UTC) en bot_feature_states
+                    dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+                    candles.append({
+                        "time": int(dt.timestamp()),
+                        "open": float(c.get("open", 0) or 0),
+                        "high": float(c.get("high", 0) or 0),
+                        "low": float(c.get("low", 0) or 0),
+                        "close": float(c.get("close", 0) or 0),
+                        "volume": float(c.get("volume", 0) or 0),
+                    })
+                except Exception:
+                    continue
+
+        if not candles:
+            market_type = (bot_doc.get("marketType") or bot_doc.get("market_type") or "spot")
+            df = await ccxt_service.get_historical_data(
+                symbol=symbol,
+                timeframe=timeframe,
+                limit=120,
+                exchange_id=exchange_id,
+                market_type=market_type,
+            )
+            if df is not None and not df.empty:
+                candles = [
+                    {
+                        "time": int(ts.timestamp()),
+                        "open": float(row["open"]),
+                        "high": float(row["high"]),
+                        "low": float(row["low"]),
+                        "close": float(row["close"]),
+                        "volume": float(row["volume"]),
+                    }
+                    for ts, row in df.iterrows()
+                ]
+
     except Exception as e:
         logger.warning(f"No se pudo cargar histórico para snapshot {exchange_id}:{symbol}:{timeframe}: {e}")
 
-    # Obtener posición activa
+    # Obtener posición activa (colección canónica para dashboard)
     active_position = await db["positions"].find_one({
         "botId": bot_doc["_id"],
         "status": "OPEN"
     })
+
+    # Normalizar forma de posición para Cards del frontend.
+    # (Bots.tsx lee: avgEntryPrice/entryPrice, currentQty/amount, side/direction)
+    positions_payload = []
+    if active_position:
+        ap = _serialize_mongo(active_position)
+        positions_payload = [{
+            **ap,
+            "symbol": ap.get("symbol") or symbol,
+            "side": ap.get("side") or ap.get("direction") or ap.get("positionSide") or ap.get("posSide") or "LONG",
+            "avgEntryPrice": ap.get("avgEntryPrice") or ap.get("entryPrice") or ap.get("entry") or 0,
+            "entryPrice": ap.get("avgEntryPrice") or ap.get("entryPrice") or ap.get("entry") or 0,
+            "currentQty": ap.get("currentQty") or ap.get("amount") or ap.get("qty") or 0,
+            "amount": ap.get("currentQty") or ap.get("amount") or ap.get("qty") or 0,
+            # opcional: ROI/PnL si existe
+            "roi": ap.get("roi") or ap.get("pnl") or 0,
+        }]
 
     snapshot_data = {
         "type": "bot_snapshot",
@@ -207,10 +254,15 @@ async def handle_bot_subscription(websocket: WebSocket, bot_id: str):
             "exchange_id": exchange_id,
             "status": bot_doc.get("status")
         },
-        "positions": [_serialize_mongo(active_position)] if active_position else [],
+        # Raw doc por si UI lo quiere mostrar/depurar
+        "active_position": _serialize_mongo(active_position) if active_position else None,
+        # Array normalizado usado por cards
+        "positions": positions_payload,
         "signals": [s.to_dict() for s in signals],
         "trades": _serialize_mongo(trades_docs),
         "candles": candles,
+        # Extra: candles con features (para overlays/diagnóstico). La UI puede ignorarlo si no lo usa.
+        "featureCandles": feature_candles,
     }
     
     # B) ENVIAR SNAPSHOT (avoid datetime serialization issues)
@@ -220,32 +272,61 @@ async def handle_bot_subscription(websocket: WebSocket, bot_id: str):
     await socket_service.subscribe_to_topic(websocket, topic=f"bot:{bot_id}")
 
     # D) SUSCRIBIR A VELAS (histórico + live por timeframe del bot)
-    bot_market_type = str(bot_doc.get("marketType") or bot_doc.get("market_type") or "SPOT").upper()
-    if bot_market_type == "CEX":
-        bot_market_type = "SPOT"
+    bot_market_type = str(bot_doc.get("marketType") or bot_doc.get("market_type") or "spot")
 
     market_topic = f"candles:{exchange_id}:{symbol}:{timeframe}"
     logger.info(f"Suscribiendo socket a stream de mercado: {market_topic} ({bot_market_type})")
     await socket_service.subscribe_to_topic(websocket, topic=market_topic)
     try:
+        # Esto NO crea una suscripción duplicada: MarketStreamService ya normaliza market_type y es idempotente.
         await container.stream_service.subscribe_candles(exchange_id, symbol, timeframe, market_type=bot_market_type)
     except Exception as e:
         logger.warning(f"No se pudo suscribir velas en vivo para {symbol} {timeframe}: {e}")
 
     # E) SUSCRIBIR A TICKER EN VIVO PARA ESTE BOT
-    price_topic = f"price:{exchange_id}:{bot_market_type}:{symbol}"
+    price_topic = f"price:{exchange_id}:{str(bot_market_type).upper() if bot_market_type else 'SPOT'}:{symbol}"
     await socket_service.subscribe_to_topic(websocket, topic=price_topic)
     try:
         await container.stream_service.subscribe_ticker(exchange_id, symbol, market_type=bot_market_type)
     except Exception as e:
         logger.warning(f"No se pudo suscribir ticker en vivo para {symbol}: {e}")
 
+    # Guardar meta para poder desuscribir limpio al cambiar de bot.
+    ws_key = id(websocket)
+    if ws_key not in _ws_bot_meta:
+        _ws_bot_meta[ws_key] = {}
+    _ws_bot_meta[ws_key][bot_id_str] = {
+        "exchange_id": exchange_id,
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "market_type": bot_market_type,
+        "market_topic": market_topic,
+        "price_topic": price_topic,
+    }
+
 async def handle_bot_unsubscription(websocket: WebSocket, bot_id: str):
     logger.info(f"Cliente desuscribiéndose del bot {bot_id}")
     await socket_service.unsubscribe_from_topic(websocket, topic=f"bot:{bot_id}")
-    # Nota: También deberíamos desuscribir de las velas, pero esto requiere 
-    # saber qué velas estaba viendo este bot.
-    # Por ahora simplificado.
+
+    # Desuscribir también de candles/price para evitar mezclar streams al cambiar de bot.
+    ws_key = id(websocket)
+    meta = (_ws_bot_meta.get(ws_key) or {}).pop(bot_id, None)
+
+    if meta:
+        try:
+            if meta.get("market_topic"):
+                await socket_service.unsubscribe_from_topic(websocket, topic=meta["market_topic"])
+        except Exception:
+            pass
+        try:
+            if meta.get("price_topic"):
+                await socket_service.unsubscribe_from_topic(websocket, topic=meta["price_topic"])
+        except Exception:
+            pass
+
+    # Cleanup container
+    if ws_key in _ws_bot_meta and not _ws_bot_meta[ws_key]:
+        _ws_bot_meta.pop(ws_key, None)
 
 
 async def handle_prices_subscribe(websocket: WebSocket, user_id: str, items: list[dict]):
@@ -463,7 +544,8 @@ async def run_batch_backtest_ws(user_id: str, data: Dict[str, Any]):
         if trade_amount > initial_balance:
             trade_amount = max(10.0, initial_balance * 0.2)
 
-        logger.info(
+        # Muy verboso en ambientes con muchos usuarios/backtests; bajar a DEBUG
+        logger.debug(
             f"🧪 BATCH BACKTEST RUN user={user_id} exchange={exchange_id} market={market_type} initial_balance={initial_balance} trade_amount={trade_amount} days={days} timeframe={timeframe}"
         )
 

@@ -5,9 +5,11 @@ from api.src.domain.entities.bot_instance import BotInstance
 from api.src.adapters.driven.persistence.mongodb_bot_repository import MongoBotRepository
 from api.src.adapters.driven.persistence.mongodb import db, get_app_config 
 from api.src.infrastructure.security.auth_deps import get_current_user
+from api.src.application.services.bot_feature_state_service import BotFeatureStateService
 
 router = APIRouter(prefix="/bots", tags=["Bot Management sp2"])
 repo = MongoBotRepository()
+feature_state_service = BotFeatureStateService()
 
 from api.src.domain.models.schemas import BotInstanceSchema
 
@@ -90,14 +92,36 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
     )
 
     bot_id = await repo.save(bot_entity)
-    
+
+    # 4. Inicializar snapshot de features de estrategia para este bot
+    feature_init = {"ok": False, "reason": "not_attempted"}
+    try:
+        feature_init = await feature_state_service.initialize_for_bot(
+            bot_id=bot_id,
+            user_id=user_id_obj,
+            user_open_id=current_user.get("openId"),
+            symbol=new_bot_data.symbol,
+            timeframe=new_bot_data.timeframe,
+            market_type=new_bot_data.market_type,
+            exchange_id=(new_bot_data.exchange_id or "okx"),
+            strategy_name=new_bot_data.strategy_name,
+            candles_limit=200,
+        )
+    except Exception as e:
+        feature_init = {"ok": False, "reason": f"feature_init_error:{e}"}
+
     # Emitir evento de creación
     await socket_service.emit_to_user(str(user_id_obj), "bot_created", {
         "id": bot_id,
         **new_bot_data.dict(by_alias=True, exclude={'id'})
     })
-    
-    return {"id": bot_id, "status": "created", "amount": final_amount}
+
+    return {
+        "id": bot_id,
+        "status": "created",
+        "amount": final_amount,
+        "feature_state": feature_init,
+    }
 
 def get_signal_repository():
     from api.src.adapters.driven.persistence.mongodb_signal_repository import MongoDBSignalRepository

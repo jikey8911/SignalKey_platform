@@ -130,6 +130,51 @@ class BotInstanceSchema(BaseModel):
     class Config:
         populate_by_name = True
 
+
+class BotFeatureStateSchema(BaseModel):
+    """Persisted feature snapshot/state per bot strategy."""
+
+    id: Optional[Any] = Field(alias="_id", default=None)
+    botId: Any
+    userId: Any
+    userOpenId: Optional[str] = None
+    strategyName: str
+    symbol: str
+    exchangeId: str
+    timeframe: str
+    marketType: str = "spot"
+    features: List[str] = Field(default_factory=list)
+    latestFeatures: Dict[str, Optional[float]] = Field(default_factory=dict)
+    # windowCandles: [{timestamp,open,high,low,close,volume,features:{...}}]
+    windowCandles: List[Dict[str, Any]] = Field(default_factory=list)
+    lastCandleTimestamp: Optional[str] = None
+    featureRows: int = 0
+    initializedAt: datetime = Field(default_factory=datetime.utcnow)
+    createdAt: Optional[datetime] = None
+    updatedAt: Optional[datetime] = None
+
+    class Config:
+        populate_by_name = True
+
+
+class BotFeatureHistorySchema(BaseModel):
+    id: Optional[Any] = Field(alias="_id", default=None)
+    botId: Any
+    userId: Any
+    strategyName: str
+    symbol: str
+    exchangeId: str
+    timeframe: str
+    marketType: str = "spot"
+    candleTs: str
+    candle: Dict[str, Any] = Field(default_factory=dict)
+    features: Dict[str, Optional[float]] = Field(default_factory=dict)
+    createdAt: Optional[datetime] = None
+    updatedAt: Optional[datetime] = None
+
+    class Config:
+        populate_by_name = True
+
 # --- NUEVOS SCHEMAS PARA OPTIMIZACIÓN Y AGENTES IA ---
 
 class AIAgent(BaseModel):

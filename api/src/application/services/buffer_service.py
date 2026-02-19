@@ -31,15 +31,28 @@ class DataBufferService:
         
         self._initialized = True
 
-    def get_buffer_key(self, exchange_id: str, symbol: str, timeframe: str) -> str:
-        return f"{exchange_id}_{symbol}_{timeframe}"
+    def _norm_market_type(self, market_type: str | None) -> str:
+        mt = str(market_type or "spot").strip().lower()
+        if mt in {"cex", "spot"}:
+            return "spot"
+        if mt in {"future", "futures"}:
+            return "future"
+        if mt in {"swap", "perp", "perpetual"}:
+            return "swap"
+        if mt in {"dex"}:
+            return "dex"
+        return mt
 
-    async def initialize_buffer(self, exchange_id: str, symbol: str, timeframe: str = '15m', limit: int = 100):
+    def get_buffer_key(self, exchange_id: str, symbol: str, timeframe: str, market_type: str | None = None) -> str:
+        mt = self._norm_market_type(market_type)
+        return f"{exchange_id}_{mt}_{symbol}_{timeframe}"
+
+    async def initialize_buffer(self, exchange_id: str, symbol: str, timeframe: str = '15m', limit: int = 100, market_type: str | None = None):
         """
         WARM-UP: Descarga datos históricos REST para iniciar el buffer con datos.
         Evita el problema de 'Cold Start' donde la IA no tiene RSI/EMA inicial.
         """
-        key = self.get_buffer_key(exchange_id, symbol, timeframe)
+        key = self.get_buffer_key(exchange_id, symbol, timeframe, market_type=market_type)
         
         async with self.lock:
             # Si ya tiene datos, no sobreescribir (o verificar frescura)
@@ -75,13 +88,13 @@ class DataBufferService:
             # Ticker update: {'exchange': 'okx', 'symbol': 'BTC/USDT', 'ticker': {...}}
              await self.update_with_ticker(data)
 
-    async def update_with_candle(self, exchange_id: str, symbol: str, timeframe: str, candle_data: Dict):
+    async def update_with_candle(self, exchange_id: str, symbol: str, timeframe: str, candle_data: Dict, market_type: str | None = None):
         """
         Actualiza el buffer con una vela confirmada (Closed Candle).
         Se llama desde el BotService cuando detecta 'candle_update'.
         Garantiza que el buffer tenga la vela cerrada lista para la IA.
         """
-        key = self.get_buffer_key(exchange_id, symbol, timeframe)
+        key = self.get_buffer_key(exchange_id, symbol, timeframe, market_type=market_type)
 
         # candle_data expected: {'timestamp': ms, 'open': float, 'high': float, 'low': float, 'close': float, 'volume': float}
         ts = candle_data.get('timestamp')
@@ -146,7 +159,8 @@ class DataBufferService:
         
         async with self.lock:
             for key, df in self.buffers.items():
-                if key.startswith(f"{exchange_id}_{symbol}_"):
+                # update all timeframes *and markets* for this exchange+symbol
+                if key.startswith(f"{exchange_id}_") and (f"_{symbol}_" in key):
                     # Logic: 
                     # 1. Check if current time belongs to the last candle
                     # 2. If yes, update Close, High, Low
@@ -170,6 +184,6 @@ class DataBufferService:
                     # Update Volume? Ticker volume is 24h usually, not candle volume. 
                     # Ignoring volume update from ticker for now.
 
-    def get_latest_data(self, exchange_id: str, symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
-        key = self.get_buffer_key(exchange_id, symbol, timeframe)
+    def get_latest_data(self, exchange_id: str, symbol: str, timeframe: str, market_type: str | None = None) -> Optional[pd.DataFrame]:
+        key = self.get_buffer_key(exchange_id, symbol, timeframe, market_type=market_type)
         return self.buffers.get(key)
