@@ -15,16 +15,43 @@ class MongoDBSignalRepository(ISignalRepository):
         if signal.parameters:
             params_dict = signal.parameters.to_dict() if hasattr(signal.parameters, 'to_dict') else signal.parameters
 
+        def _enum_val(x):
+            return x.value if hasattr(x, "value") else x
+
+        def _norm_market_type(mt):
+            if mt is None:
+                return None
+            if hasattr(mt, "value"):
+                return str(mt.value)
+            s = str(mt).strip()
+            if not s:
+                return None
+            u = s.upper()
+            if u in {"CEX", "SPOT"}:
+                return "SPOT"
+            if u in {"FUTURE", "FUTURES", "SWAP", "PERP", "PERPETUAL"}:
+                return "FUTURES"
+            if u == "DEX":
+                return "DEX"
+            l = s.lower()
+            if l in {"spot", "cex"}:
+                return "SPOT"
+            if l in {"futures", "future", "swap", "perp", "perpetual"}:
+                return "FUTURES"
+            if l == "dex":
+                return "DEX"
+            return u
+
         signal_dict = {
             "userId": ObjectId(signal.userId) if isinstance(signal.userId, str) and len(signal.userId) == 24 else signal.userId,
             "source": signal.source,
             "rawText": signal.rawText,
-            "status": signal.status.value,
+            "status": _enum_val(signal.status),
             "createdAt": signal.createdAt,
             # Campos analizados
             "symbol": signal.symbol,
-            "marketType": signal.marketType.value if signal.marketType else None,
-            "decision": signal.decision.value if signal.decision else None,
+            "marketType": _norm_market_type(getattr(signal, "marketType", None)),
+            "decision": _enum_val(signal.decision) if signal.decision is not None else None,
             "confidence": signal.confidence,
             "reasoning": signal.reasoning,
             "riskScore": signal.riskScore,

@@ -55,7 +55,15 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
     if final_amount <= 0:
          final_amount = 100.0 # Default fallback
 
-    # 2. Crear instancia usando Schema para validación estricta
+    # 2. Resolver modo efectivo: si el usuario está en demoMode, no permitir bots reales.
+    effective_mode = data.mode
+    try:
+        if app_config and app_config.get('demoMode', True):
+            effective_mode = 'simulated'
+    except Exception:
+        pass
+
+    # 3. Crear instancia usando Schema para validación estricta
     try:
         new_bot_data = BotInstanceSchema(
             user_id=user_id_obj, # Pass ObjectId directly
@@ -65,7 +73,7 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
             strategy_name=data.strategy_name,
             timeframe=data.timeframe,
             market_type=data.market_type,
-            mode=data.mode,
+            mode=effective_mode,
             status=data.status,
             exchange_id=data.exchange_id or "okx"
         )
@@ -92,6 +100,50 @@ async def create_new_bot(data: CreateBotSchema, current_user: dict = Depends(get
     )
 
     bot_id = await repo.save(bot_entity)
+
+    # 3.5 Sub-wallet (solo simulado): asignar % del balance virtual global al bot
+    try:
+        policy = (app_config or {}).get('botWalletPolicy') or {}
+        if effective_mode == 'simulated' and policy.get('enabled', False):
+            pct = float(policy.get('perBotAllocationPct', 0) or 0)
+            min_usdt = float(policy.get('minAllocationUSDT', 0) or 0)
+            max_usdt = float(policy.get('maxAllocationUSDT', 0) or 0)
+
+            # balance global (USDT) en CEX
+            vb = await db['virtual_balances'].find_one({
+                'userId': user_id_obj,
+                'marketType': {'$in': ['CEX', 'cex']},
+                'asset': 'USDT'
+            })
+            global_usdt = float((vb or {}).get('amount', 0) or 0)
+
+            allocated = (global_usdt * pct / 100.0) if pct > 0 else 0.0
+            if min_usdt > 0:
+                allocated = max(allocated, min_usdt)
+            if max_usdt > 0:
+                allocated = min(allocated, max_usdt)
+
+            # No permitir negativo ni exceder balance
+            allocated = max(0.0, allocated)
+            if allocated > global_usdt:
+                allocated = global_usdt
+
+            # Descontar del global y setear wallet en el bot
+            if allocated > 0:
+                from api.src.adapters.driven.persistence.mongodb import update_virtual_balance
+                await update_virtual_balance(user_id_obj, 'CEX', 'USDT', -allocated, is_relative=True)
+
+                await db['bot_instances'].update_one(
+                    {'_id': ObjectId(bot_id)},
+                    {'$set': {
+                        'walletAllocated': allocated,
+                        'walletAvailable': allocated,
+                        'walletRealizedPnl': 0.0,
+                        'walletCurrency': 'USDT',
+                    }}
+                )
+    except Exception:
+        pass
 
     # 4. Inicializar snapshot de features de estrategia para este bot
     feature_init = {"ok": False, "reason": "not_attempted"}

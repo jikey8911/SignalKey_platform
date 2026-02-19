@@ -77,39 +77,70 @@ class MarketStreamService:
     async def _ticker_loop(self, exchange_id: str, symbol: str, market_type: str = None):
         mt = self._norm_market_type(market_type)
         task_key = f"ticker:{exchange_id}:{mt}:{symbol}"
-        async for ticker in ccxt_service.watch_ticker(exchange_id, symbol, market_type=mt):
-            self.latest_data[task_key] = ticker
-            await self._notify("ticker_update", {
-                "exchange": exchange_id,
-                "marketType": mt,
-                "symbol": symbol,
-                "ticker": ticker
-            })
+
+        # Resiliencia: OKX/CCXT puede tumbar WS por ping/pong. Reintentar con backoff.
+        backoff = 1.0
+        while True:
+            try:
+                async for ticker in ccxt_service.watch_ticker(exchange_id, symbol, market_type=mt):
+                    self.latest_data[task_key] = ticker
+                    await self._notify("ticker_update", {
+                        "exchange": exchange_id,
+                        "marketType": mt,
+                        "symbol": symbol,
+                        "ticker": ticker,
+                    })
+                    backoff = 1.0
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Error WS Ticker ({exchange_id}:{symbol}:{mt}): {e}")
+                try:
+                    await ccxt_service.close_exchange(exchange_id, market_type=mt)
+                except Exception:
+                    pass
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
 
     async def _ohlcv_loop(self, exchange_id: str, symbol: str, timeframe: str, market_type: str = None):
         mt = self._norm_market_type(market_type)
-        async for ohlcv_list in ccxt_service.watch_ohlcv(exchange_id, symbol, timeframe, market_type=mt):
-            if not ohlcv_list:
-                continue
 
-            # Solo nos interesa la última vela (la que está cambiando o acaba de cerrar)
-            last_ohlcv = ohlcv_list[-1]
-            candle_data = {
-                "timestamp": last_ohlcv[0],
-                "open": last_ohlcv[1],
-                "high": last_ohlcv[2],
-                "low": last_ohlcv[3],
-                "close": last_ohlcv[4],
-                "volume": last_ohlcv[5],
-            }
+        backoff = 1.0
+        while True:
+            try:
+                async for ohlcv_list in ccxt_service.watch_ohlcv(exchange_id, symbol, timeframe, market_type=mt):
+                    if not ohlcv_list:
+                        continue
 
-            await self._notify("candle_update", {
-                "exchange": exchange_id,
-                "marketType": mt,
-                "symbol": symbol,
-                "timeframe": timeframe,
-                "candle": candle_data,
-            })
+                    # Solo nos interesa la última vela (la que está cambiando o acaba de cerrar)
+                    last_ohlcv = ohlcv_list[-1]
+                    candle_data = {
+                        "timestamp": last_ohlcv[0],
+                        "open": last_ohlcv[1],
+                        "high": last_ohlcv[2],
+                        "low": last_ohlcv[3],
+                        "close": last_ohlcv[4],
+                        "volume": last_ohlcv[5],
+                    }
+
+                    await self._notify("candle_update", {
+                        "exchange": exchange_id,
+                        "marketType": mt,
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "candle": candle_data,
+                    })
+                    backoff = 1.0
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Error WS OHLCV ({exchange_id}:{symbol}:{timeframe}:{mt}): {e}")
+                try:
+                    await ccxt_service.close_exchange(exchange_id, market_type=mt)
+                except Exception:
+                    pass
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, 30.0)
 
     async def _trades_loop(self, exchange_id: str, symbol: str):
         task_key_pref = f"ticker:{exchange_id}:{symbol}" # Reusamos la misma key de precio para que sea transparente

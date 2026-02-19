@@ -406,6 +406,16 @@ class CcxtAdapter:
         syms = await self.get_symbols(exchange_id, market_type)
         return [{"symbol": s, "price": 0, "priceChange": 0, "priceChangePercent": 0, "volume": 0} for s in syms]
 
+    async def close_exchange(self, exchange_id: str, market_type: str | None = None):
+        """Close a single cached exchange instance (best-effort)."""
+        try:
+            key = self._get_exchange_key(exchange_id, market_type=market_type)
+            ex = self.exchanges.pop(key, None)
+            if ex:
+                await ex.close()
+        except Exception:
+            pass
+
     async def close_all(self):
         for exchange in self.exchanges.values():
             await exchange.close()

@@ -121,12 +121,12 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
                 await websocket.send_json({"type": "PONG"})
 
             elif action == "run_batch_backtest":
-                # Batch backtest for Semi-Auto tab (server resolves active symbols).
+                # [STABLE/BLOCKED] Flow: BACKTEST WS
                 payload = message.get("data") or {}
                 asyncio.create_task(run_batch_backtest_ws(user_id, payload))
 
             elif action == "run_single_backtest":
-                # Single-symbol backtest in background (non-blocking HTTP API)
+                # [STABLE/BLOCKED] Flow: BACKTEST WS
                 payload = message.get("data") or {}
                 asyncio.create_task(run_single_backtest_ws(user_id, payload))
 

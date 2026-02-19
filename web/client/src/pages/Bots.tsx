@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useSocket } from '../_core/hooks/useSocket';
 import { TradingViewChart } from '../components/ui/TradingViewChart';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -197,11 +197,16 @@ export default function BotsPage() {
     };
 
     // 2. Manejo de Suscripción (Cada vez que cambia el bot seleccionado)
+    // Importante: si hay 2 bots con mismo symbol/exchange pero distinto timeframe, hay que desuscribir SIEMPRE
+    // el bot previo para que no se mezclen velas/señales live.
+    const prevBotIdRef = useRef<string | null>(null);
+
     useEffect(() => {
-        if (!selectedBot) return;
+        if (!selectedBot || !isConnected) return;
 
         let cancelled = false;
-        const activeBotId = selectedBot.id;
+        const activeBotId = String((selectedBot as any).id || (selectedBot as any)._id || '');
+        if (!activeBotId) return;
 
         // Resetear estados visuales al cambiar bot
         setIsLoadingChart(true);
@@ -210,58 +215,30 @@ export default function BotsPage() {
         setPositions([]);
         setRecentBotSignals([]);
 
-        // A) Cargar histórico de velas (>=40) y trades del bot por HTTP como bootstrap
+        // A) Bootstrap HTTP (fallback): solo trades. Velas vienen del WS snapshot.
         (async () => {
             try {
-                const ex = (selectedBot as any).exchangeId || (selectedBot as any).exchange_id || 'binance';
-                const mt = (selectedBot as any).marketType || (selectedBot as any).market_type || 'spot';
-
-                const [candlesRes, tradesRes] = await Promise.all([
-                    api.get('/market/candles', {
-                        params: {
-                            symbol: selectedBot.symbol,
-                            timeframe: selectedBot.timeframe,
-                            exchange_id: ex,
-                            market_type: mt,
-                            limit: 120,
-                        }
-                    }),
-                    api.get(`/trades/bot/${activeBotId}`, { params: { limit: 300 } })
-                ]);
-
+                const tradesRes = await api.get(`/trades/bot/${activeBotId}`, { params: { limit: 300 } });
                 if (cancelled) return;
-
-                const candles = Array.isArray(candlesRes?.data) ? candlesRes.data : [];
                 const trades = Array.isArray(tradesRes?.data) ? tradesRes.data : [];
-
-                if (candles.length > 0) setChartData(candles);
                 if (trades.length > 0) setSignals(trades as any);
             } catch (e) {
-                if (!cancelled) console.warn('Bootstrap histórico/trades falló, se usará snapshot WS', e);
-            } finally {
-                if (!cancelled) setIsLoadingChart(false);
+                if (!cancelled) console.warn('Bootstrap trades falló, se usará snapshot WS', e);
             }
         })();
 
-        // B) Suscribirse al Bot específico vía WebSocket
-        if (isConnected) {
-            sendMessage({
-                action: "SUBSCRIBE_BOT",
-                bot_id: activeBotId
-            });
+        // B) Desuscribir anterior (si cambia) y suscribir actual
+        const prev = prevBotIdRef.current;
+        if (prev && prev !== activeBotId) {
+            sendMessage({ action: 'UNSUBSCRIBE_BOT', bot_id: prev });
         }
+        sendMessage({ action: 'SUBSCRIBE_BOT', bot_id: activeBotId });
+        prevBotIdRef.current = activeBotId;
 
-        // C) Limpieza: evitar race conditions al cambiar rápido de bot
         return () => {
             cancelled = true;
-            if (isConnected) {
-                sendMessage({
-                    action: "UNSUBSCRIBE_BOT",
-                    bot_id: activeBotId
-                });
-            }
         };
-    }, [selectedBot, isConnected]);
+    }, [selectedBot, isConnected, sendMessage]);
 
     // 3. Procesar Mensajes de WebSocket
     useEffect(() => {

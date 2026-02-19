@@ -55,9 +55,23 @@ export const TradingViewChart: React.FC<ChartProps> = ({ data, trades, levels, c
     const activeData = data || [];
 
     const formattedData = useMemo(() => {
-        return [...activeData]
+        const sorted = [...activeData]
             .map(d => ({ ...d, time: toSeconds(d.time) }))
             .sort((a, b) => (a.time as number) - (b.time as number)) as CandlestickData<Time>[];
+
+        // lightweight-charts exige `time` estrictamente ascendente (sin duplicados)
+        // Si llegan duplicadas (mismo bucket), nos quedamos con la última.
+        const dedup: CandlestickData<Time>[] = [];
+        for (const c of sorted) {
+            const t = Number(c.time as any);
+            const last = dedup.length ? Number(dedup[dedup.length - 1].time as any) : null;
+            if (last !== null && t === last) {
+                dedup[dedup.length - 1] = c;
+            } else {
+                dedup.push(c);
+            }
+        }
+        return dedup;
     }, [activeData]);
 
     const priceFormatCfg = useMemo(() => {

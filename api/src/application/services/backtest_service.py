@@ -8,6 +8,10 @@ from api.src.domain.services.strategy_trainer import StrategyTrainer
 from api.src.domain.services.exchange_port import IExchangePort
 from api.src.domain.strategies.base import BaseStrategy
 
+# === STABLE / BLOCKED ===
+# Flow: BACKTEST (WS + Service)
+# Cambios aquí requieren: run_single_backtest_ws + run_batch_backtest_ws smoke test
+# ========================
 class BacktestService:
     """
     Servicio de Backtest de la Capa de Aplicación (sp4).

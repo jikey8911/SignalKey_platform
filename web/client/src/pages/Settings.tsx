@@ -61,6 +61,12 @@ export default function Settings() {
       slPercent: number;
       sellPercentPerTP: number;
     };
+    botWalletPolicy: {
+      enabled: boolean;
+      perBotAllocationPct: number;
+      minAllocationUSDT: number;
+      maxAllocationUSDT: number;
+    };
   }>({
     demoMode: true,
     isAutoEnabled: true,
@@ -101,6 +107,12 @@ export default function Settings() {
       tpPercent: 2.0,
       slPercent: 1.5,
       sellPercentPerTP: 33.3
+    },
+    botWalletPolicy: {
+      enabled: true,
+      perBotAllocationPct: 10,
+      minAllocationUSDT: 25,
+      maxAllocationUSDT: 1000,
     }
   });
 
@@ -153,6 +165,12 @@ export default function Settings() {
                 tpPercent: config.botStrategy?.tpPercent ?? 2.0,
                 slPercent: config.botStrategy?.slPercent ?? 1.5,
                 sellPercentPerTP: config.botStrategy?.sellPercentPerTP ?? 33.3
+              },
+              botWalletPolicy: {
+                enabled: config.botWalletPolicy?.enabled ?? true,
+                perBotAllocationPct: config.botWalletPolicy?.perBotAllocationPct ?? 10,
+                minAllocationUSDT: config.botWalletPolicy?.minAllocationUSDT ?? 25,
+                maxAllocationUSDT: config.botWalletPolicy?.maxAllocationUSDT ?? 1000,
               }
             });
           }
@@ -630,6 +648,78 @@ export default function Settings() {
       <Card className="p-6 mt-6">
         <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">🤖 Configuración de Bots de Señales</h3>
         <div className="space-y-4">
+
+          {/* Sub-wallet por bot (simulado) */}
+          <div className="p-4 rounded-lg border border-border bg-background/40">
+            <div className="flex items-center justify-between gap-4 mb-3">
+              <div>
+                <div className="text-sm font-semibold">Sub-wallet por bot (simulado)</div>
+                <div className="text-[11px] text-muted-foreground">
+                  Reserva un porcentaje del balance virtual global para cada bot al crearlo.
+                </div>
+              </div>
+              <label className="flex items-center gap-2 text-xs">
+                <input
+                  type="checkbox"
+                  checked={formData.botWalletPolicy.enabled}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    botWalletPolicy: { ...formData.botWalletPolicy, enabled: e.target.checked }
+                  })}
+                />
+                Activar
+              </label>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-2">% por bot</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="100"
+                  value={formData.botWalletPolicy.perBotAllocationPct}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    botWalletPolicy: { ...formData.botWalletPolicy, perBotAllocationPct: parseFloat(e.target.value) || 0 }
+                  })}
+                  className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+                <p className="text-[10px] text-muted-foreground mt-1">Porcentaje del balance virtual global asignado a cada bot nuevo</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-2">Mínimo (USDT)</label>
+                <input
+                  type="number"
+                  step="1"
+                  min="0"
+                  value={formData.botWalletPolicy.minAllocationUSDT}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    botWalletPolicy: { ...formData.botWalletPolicy, minAllocationUSDT: parseFloat(e.target.value) || 0 }
+                  })}
+                  className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-foreground mb-2">Máximo (USDT)</label>
+                <input
+                  type="number"
+                  step="1"
+                  min="0"
+                  value={formData.botWalletPolicy.maxAllocationUSDT}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    botWalletPolicy: { ...formData.botWalletPolicy, maxAllocationUSDT: parseFloat(e.target.value) || 0 }
+                  })}
+                  className="w-full px-3 py-1.5 border border-border rounded bg-background text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                />
+              </div>
+            </div>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-semibold text-foreground mb-2">

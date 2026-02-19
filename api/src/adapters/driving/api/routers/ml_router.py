@@ -40,8 +40,12 @@ class PredictRequest(BaseModel):
 @router.post("/train")
 async def train_all_strategies_endpoint(request: BatchTrainRequest, background_tasks: BackgroundTasks):
     """
-    Entrena TODOS los modelos de estrategia (RandomForest) utilizando los símbolos provistos.
-    Nueva arquitectura agnóstica.
+    [STABLE / BLOCKED]
+    Flow: TRAINING (global models)
+
+    ⚠️ NO MODIFICAR SIN REVISIÓN.
+    - Cambios aquí suelen romper entrenamiento para todas las estrategias.
+    - Pendiente: control de roles (admin) + selección de exchange desde env.
     """
     try:
         logging.info(f"🚀 Endpoint /train called. Request User ID: {request.user_id}")

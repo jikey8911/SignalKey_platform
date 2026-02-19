@@ -39,6 +39,7 @@ class ConfigUpdate(BaseModel):
     investmentLimits: Optional[Dict[str, float]] = None
     virtualBalances: Optional[Dict[str, float]] = None
     botStrategy: Optional[Dict[str, Any]] = None
+    botWalletPolicy: Optional[Dict[str, Any]] = None
     # Exchanges (CEX) config (full replace on save)
     exchanges: Optional[List[ExchangeConfig]] = None
 

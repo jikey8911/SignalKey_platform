@@ -32,6 +32,20 @@ class ExecutionEngine:
 
         # 1. Variables y Contexto
         mode = bot_instance.get('mode', 'simulated')
+
+        # DemoMode override (safety): si el usuario está en demo, jamás ejecutar real.
+        try:
+            uid = bot_instance.get('user_id')
+            uid_obj = ObjectId(uid) if (uid and not isinstance(uid, ObjectId) and len(str(uid)) == 24) else uid
+            if uid_obj:
+                cfg = await self.db["app_configs"].find_one({"userId": uid_obj})
+                if cfg and cfg.get("demoMode", True):
+                    if mode != 'simulated':
+                        self.logger.warning(f"🛑 DemoMode activo: forzando mode=simulated para bot {bot_instance.get('_id')}")
+                    mode = 'simulated'
+        except Exception:
+            # Si no podemos leer config, ser conservadores: no forzar, pero tampoco romper.
+            pass
         symbol = bot_instance['symbol']
         price = signal_data['price']
         signal = signal_data['signal']
@@ -159,16 +173,19 @@ class ExecutionEngine:
             return False # Fail-safe: No operar con dinero real si falla el check
 
     async def _execute_simulated(self, bot, action, side, price, amount):
-        """
-        Ejecuta en papel y actualiza el 'Libro Mayor' virtual.
+        """Ejecuta en papel.
+
+        Si el bot tiene sub-wallet (walletAvailable), se debita/abona ahí.
+        Si no, usa el ledger legacy en virtual_balances.
         """
         qty_executed = amount / price
-        user_id = bot.get('user_id') # ObjectId
+        user_id = bot.get('user_id')  # ObjectId
         market_type = bot.get("marketType", "CEX")
         quote_currency = bot['symbol'].split('/')[1] if '/' in bot['symbol'] else 'USDT'
-        
-        # 1. Movimiento de Caja (Virtual)
-        # Si abrimos posición, restamos USDT del saldo disponible
+
+        wallet_enabled = bot.get('walletAvailable') is not None
+
+        # 1. Movimiento de Caja
 
         # NOTE: update_virtual_balance helper usually takes user_id as string/openId to find user.
         # But we refactored to pass ObjectId to engine.
@@ -183,13 +200,16 @@ class ExecutionEngine:
         # OR we pass ObjectId string and update mongodb.py to check _id too.
         # For now, let's pass str(user_id) and ensure mongodb.py handles it.
 
-        if action in ["OPEN", "DCA"]:
-            await update_virtual_balance(str(user_id), market_type, quote_currency, -amount, is_relative=True)
-            
-        elif action == "FLIP":
-            # En FLIP (cerrar y abrir inverso), restamos el costo de la NUEVA posición.
-            # El retorno de la posición cerrada se maneja en _update_simulation_position_db al cerrarla.
-            await update_virtual_balance(str(user_id), market_type, quote_currency, -amount, is_relative=True)
+        if action in ["OPEN", "DCA", "FLIP"]:
+            if wallet_enabled:
+                # Debitar del sub-wallet del bot
+                await self.db['bot_instances'].update_one(
+                    {'_id': bot['_id']},
+                    {'$inc': {'walletAvailable': -float(amount)}}
+                )
+                bot['walletAvailable'] = float(bot.get('walletAvailable') or 0) - float(amount)
+            else:
+                await update_virtual_balance(str(user_id), market_type, quote_currency, -amount, is_relative=True)
 
         # 2. Actualizar Inventario de Posiciones
         final_qty, final_avg_price, current_roi = await self._update_simulation_position_db(
@@ -265,8 +285,14 @@ class ExecutionEngine:
             
             # Devolver capital al balance virtual (Principal + Ganancia/Pérdida)
             capital_returned = (prev_qty * prev_avg) + flip_pnl
-            await update_virtual_balance(str(user_id), market_type, quote_currency, capital_returned, is_relative=True)
-            self.logger.info(f"💵 [SIM FLIP] Retorno al balance: {capital_returned:.2f} (PnL: {flip_pnl:.2f})")
+            if bot_instance.get('walletAvailable') is not None:
+                await self.db['bot_instances'].update_one(
+                    {'_id': bot_instance['_id']},
+                    {'$inc': {'walletAvailable': float(capital_returned), 'walletRealizedPnl': float(flip_pnl)}}
+                )
+            else:
+                await update_virtual_balance(str(user_id), market_type, quote_currency, capital_returned, is_relative=True)
+            self.logger.info(f"💵 [SIM FLIP] Retorno: {capital_returned:.2f} ({quote_currency}) (PnL: {flip_pnl:.2f})")
 
             # Cerrar documento antiguo
             await positions_coll.update_one(
@@ -307,7 +333,13 @@ class ExecutionEngine:
                 
             # Devolver parte proporcional al balance
             capital_returned = (qty_to_close * prev_avg) + trade_pnl
-            await update_virtual_balance(str(user_id), market_type, quote_currency, capital_returned, is_relative=True)
+            if bot_instance.get('walletAvailable') is not None:
+                await self.db['bot_instances'].update_one(
+                    {'_id': bot_instance['_id']},
+                    {'$inc': {'walletAvailable': float(capital_returned), 'walletRealizedPnl': float(trade_pnl)}}
+                )
+            else:
+                await update_virtual_balance(str(user_id), market_type, quote_currency, capital_returned, is_relative=True)
 
             position["realizedPnl"] += trade_pnl
             position["currentQty"] = max(0, prev_qty - qty_to_close)

@@ -9,6 +9,12 @@ from api.src.domain.services.strategy_trainer import StrategyTrainer
 from api.src.domain.services.exchange_port import ExchangePort
 from api.src.domain.strategies.base import BaseStrategy
 
+# === STABLE / BLOCKED ===
+# Flow: TRAINING (global models) + PREDICT
+# - training: train_all_strategies, _fetch_training_data
+# - predict: predict
+# Cambios aquí requieren: re-run training + smoke test predict
+# ========================
 class MLService:
     """
     Orquestador de Machine Learning de la Capa de Aplicación (sp4).
