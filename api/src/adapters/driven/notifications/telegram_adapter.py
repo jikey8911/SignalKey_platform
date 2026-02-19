@@ -25,8 +25,8 @@ class TelegramAdapter:
                 - pnl: (opcional) ganancia/pérdida
                 - is_simulated: (opcional) bool para indicar si es simulación
         """
-        if not self.bot or not self.bot.client:
-            logger.warning(f"⚠️ Cannot send alert: Bot client not connected for user {self.user_id}")
+        if not self.bot:
+            logger.warning(f"⚠️ Cannot send alert: Bot instance not set for user {self.user_id}")
             return
 
         try:
@@ -53,8 +53,12 @@ class TelegramAdapter:
             
             # Enviar mensaje a "Saved Messages" del propio usuario (me) o a un chat configurado
             # Por defecto enviamos a 'me' (Mensajes Guardados) para alertas personales
-            await self.bot.client.send_message('me', msg, parse_mode='markdown')
-            logger.info(f"✅ Trade alert sent for {trade_data['symbol']}")
+            success = await self.bot.send_message('me', msg, parse_mode='markdown')
+
+            if success:
+                logger.info(f"✅ Trade alert sent for {trade_data['symbol']}")
+            else:
+                logger.warning(f"⚠️ Failed to send trade alert for {trade_data['symbol']}")
             
         except Exception as e:
             logger.error(f"❌ Error sending Telegram alert: {e}")
