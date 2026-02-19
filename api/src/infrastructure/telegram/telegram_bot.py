@@ -342,18 +342,32 @@ class TelegramUserBot:
             return False, ""
 
 
-    async def send_trade_alert(self, message: str):
+    async def send_message(self, target: str, message: str, parse_mode: str = 'markdown') -> bool:
         """
-        Tarea 6.2: Enviar alerta de trading a través del bot.
+        Envía un mensaje genérico a través del bot.
+
+        Args:
+            target: Destinatario (ej. 'me', chat_id)
+            message: Contenido del mensaje
+            parse_mode: Modo de parseo ('markdown', 'html', etc.)
+
+        Returns:
+            bool: True si se envió correctamente, False en caso contrario.
         """
-        if not self.client or not self.client.is_connected():
-            logger.warning("Telegram client not connected. Cannot send alert.")
-            return
+        if not self.client:
+            logger.warning(f"Cannot send message to {target}: Client not initialized for user {self.user_id}")
+            return False
+
+        if not self.client.is_connected():
+            logger.warning(f"Cannot send message to {target}: Client not connected for user {self.user_id}")
+            # Opcional: Intentar reconectar aquí si fuera seguro
+            return False
 
         try:
-            # Enviar a "Saved Messages" (me)
-            await self.client.send_message('me', f"🚀 **SignalKey Alert**\n{message}")
-            logger.info(f"Trade alert sent to user {self.user_id}")
+            await self.client.send_message(target, message, parse_mode=parse_mode)
+            logger.debug(f"Message sent to {target} for user {self.user_id}")
+            return True
         except Exception as e:
-            logger.error(f"Error sending trade alert for {self.user_id}: {e}")
+            logger.error(f"Error sending message to {target} for user {self.user_id}: {e}")
+            return False
 
