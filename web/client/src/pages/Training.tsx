@@ -29,12 +29,32 @@ export default function Training() {
     const [loadingSymbols, setLoadingSymbols] = useState(false);
 
     const [loading, setLoading] = useState(false);
+    const [isTrainingGlobal, setIsTrainingGlobal] = useState(false);
     const [models, setModels] = useState<string[]>([]);
     const [logs, setLogs] = useState<string[]>([]);
 
     // Socket integration
     const { lastMessage } = useSocketContext();
     const scrollRef = useRef<HTMLDivElement>(null);
+
+    // 0. Check Global Training Status
+    useEffect(() => {
+        const checkStatus = async () => {
+            try {
+                const res = await fetch(`${CONFIG.API_BASE_URL}/ml/status`);
+                if (res.ok) {
+                    const data = await res.json();
+                    setIsTrainingGlobal(data.is_training);
+                }
+            } catch (e) {
+                console.error("Status check failed", e);
+            }
+        };
+        checkStatus();
+        // Polling de seguridad cada 5s por si falla el socket
+        const interval = setInterval(checkStatus, 5000);
+        return () => clearInterval(interval);
+    }, []);
 
     useEffect(() => {
         if (lastMessage) {
@@ -43,6 +63,13 @@ export default function Training() {
                 if (data.event === 'training_log') {
                     const msg = data.data.message;
                     setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+                }
+                if (data.event === 'training_status') {
+                    setIsTrainingGlobal(data.data.is_training);
+                    if (!data.data.is_training) {
+                        setLoading(false);
+                        toast.success("Entrenamiento finalizado.");
+                    }
                 }
             } catch (e) {
                 // Ignore parse errors for non-json
@@ -195,7 +222,7 @@ export default function Training() {
         setLoading(true);
         setLogs([]); // Clear previous logs
         toast.info("Iniciando secuencia de entrenamiento...");
-        console.log("🚀 [Training] Triggered by user:", user.openId);
+        console.log("🚀 [Training] Starting sequence for:", user.openId);
 
         try {
             const url = `${CONFIG.API_BASE_URL}/ml/train-strategies`;
@@ -364,9 +391,11 @@ export default function Training() {
                             </div>
                         </div>
 
-                        <Button className="w-full py-6 bg-blue-600 hover:bg-blue-700 text-white font-bold uppercase tracking-widest rounded-2xl" onClick={handleTrain} disabled={loading}>
-                            {loading ? <RotateCcw className="w-4 h-4 animate-spin mr-2" /> : <Play className="w-4 h-4 mr-2" />}
-                            Entrenar Modelos de Estrategia
+                        <Button className="w-full py-6 bg-blue-600 hover:bg-blue-700 text-white font-bold uppercase tracking-widest rounded-2xl disabled:opacity-50 disabled:cursor-not-allowed" 
+                                onClick={handleTrain} 
+                                disabled={loading || isTrainingGlobal}>
+                            {(loading || isTrainingGlobal) ? <RotateCcw className="w-4 h-4 animate-spin mr-2" /> : <Play className="w-4 h-4 mr-2" />}
+                            {(loading || isTrainingGlobal) ? "Entrenamiento en Curso..." : "Entrenar Modelos de Estrategia"}
                         </Button>
 
                         {/* Live Logs Console */}

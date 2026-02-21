@@ -15,6 +15,7 @@ import DashboardLayout from "@/components/DashboardLayout";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { SocketProvider } from "@/contexts/SocketContext";
 import { TradingProvider } from "@/contexts/TradingContext";
+import { BacktestProvider } from "@/contexts/BacktestContext";
 import ErrorBoundary from "@/components/ErrorBoundary";
 
 function Router() {
@@ -59,10 +60,12 @@ function App() {
     <ErrorBoundary>
       <ThemeProvider>
         <SocketProvider>
-          <TradingProvider>
-            <Router />
-            <Toaster position="top-right" />
-          </TradingProvider>
+          <BacktestProvider>
+            <TradingProvider>
+              <Router />
+              <Toaster position="top-right" />
+            </TradingProvider>
+          </BacktestProvider>
         </SocketProvider>
       </ThemeProvider>
     </ErrorBoundary>

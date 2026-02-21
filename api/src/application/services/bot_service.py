@@ -49,6 +49,207 @@ class SignalBotService:
     async def stop(self):
         await self.stream_service.stop()
 
+    async def close_bot(self, bot_id: str, user_id, user_open_id: str = None) -> dict:
+        """
+        Cierra un bot de trading:
+        1. Cierra cualquier posición abierta (simulado: libera capital + PnL)
+        2. Libera walletAllocated al balance global
+        3. Actualiza estado a 'closed'
+        4. Envía notificación a Telegram (si configurado)
+        """
+        from bson import ObjectId
+        from api.src.adapters.driven.notifications.socket_service import socket_service
+        from api.src.infrastructure.telegram.telegram_bot_manager import bot_manager
+        
+        bot_id_obj = ObjectId(bot_id) if isinstance(bot_id, str) else bot_id
+        
+        # 1. Buscar bot
+        bot = await self.db["bot_instances"].find_one({"_id": bot_id_obj})
+        if not bot:
+            return {"success": False, "reason": "Bot not found"}
+        
+        # Verificar ownership
+        owner_ok = (
+            bot.get("user_id") == user_id or
+            str(bot.get("user_id")) == str(user_id) or
+            str(bot.get("user_id")) == str(user_id)
+        )
+        if not owner_ok:
+            return {"success": False, "reason": "Not authorized"}
+        
+        # 2. Cerrar posición abierta si existe
+        position = await self.db["positions"].find_one({
+            "botId": bot_id_obj,
+            "status": "OPEN"
+        })
+        
+        pnl_realized = 0.0
+        if position:
+            pnl_realized = await self._close_position(bot, position)
+        
+        # 3. Liberar wallet al balance global (solo simulado)
+        wallet_released = 0.0
+        if bot.get("mode") == "simulated" and bot.get("walletAllocated", 0) > 0:
+            wallet_released = await self._release_wallet(bot, bot_id_obj, pnl_realized)
+        
+        # 4. Actualizar estado a 'closed'
+        await self.db["bot_instances"].update_one(
+            {"_id": bot_id_obj},
+            {"$set": {
+                "status": "closed",
+                "closedAt": datetime.utcnow(),
+                "side": None,
+                "position": {"qty": 0, "avg_price": 0}
+            }}
+        )
+        
+        # 5. Emitir evento Socket.IO
+        await socket_service.emit_to_user(str(user_id), "bot_closed", {
+            "id": bot_id,
+            "status": "closed",
+            "walletReleased": wallet_released,
+            "pnlRealized": pnl_realized
+        })
+        
+        logger.info(f"✅ Bot {bot_id} cerrado. Wallet liberada: ${wallet_released:.2f}, PnL: ${pnl_realized:.2f}")
+
+        # 6. Enviar notificación a Telegram
+        if user_open_id:
+            try:
+                telegram_bot = bot_manager.get_user_bot(user_open_id)
+                if telegram_bot:
+                    icon = "🟢" if pnl_realized >= 0 else "🔴"
+                    msg = (
+                        f"🤖 *BOT CERRADO* {icon}\n"
+                        f"------------------------\n"
+                        f"📌 Nombre: `{bot.get('name', 'Bot')}`\n"
+                        f"💎 Par: `{bot.get('symbol')}`\n"
+                        f"💰 Wallet Liberada: `${wallet_released:.2f}`\n"
+                        f"📈 PnL Realizado: `${pnl_realized:.2f}`\n"
+                        f"⏱️ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC"
+                    )
+                    await telegram_bot.send_message("me", msg)
+                    logger.info(f"📩 Notificación Telegram enviada a {user_open_id}")
+            except Exception as e:
+                logger.warning(f"⚠️ No se pudo enviar notificación Telegram: {e}")
+        
+        return {
+            "success": True,
+            "bot_id": bot_id,
+            "walletReleased": wallet_released,
+            "pnlRealized": pnl_realized,
+            "status": "closed"
+        }
+
+    async def _close_position(self, bot: dict, position: dict) -> float:
+        """
+        Cierra una posición abierta y devuelve el PnL realizado.
+        """
+        from bson import ObjectId
+        from api.src.application.services.execution_engine import ExecutionEngine
+        from api.src.adapters.driven.exchange.ccxt_adapter import ccxt_service
+        
+        bot_id = position["botId"]
+        symbol = bot["symbol"]
+        mode = bot.get("mode", "simulated")
+        market_type = bot.get("marketType", "CEX")
+        quote_currency = symbol.split("/")[1] if "/" in symbol else "USDT"
+        
+        # Obtener precio actual
+        current_price = position.get("exitPrice", 0)
+        if current_price <= 0:
+            # Intentar obtener precio de mercado
+            try:
+                exchange_id = bot.get("exchangeId") or bot.get("exchange_id") or "okx"
+                ticker = await ccxt_service.fetch_ticker(symbol, exchange_id=exchange_id)
+                current_price = float(ticker.get("last", position.get("avgEntryPrice", 0)))
+            except Exception:
+                current_price = float(position.get("avgEntryPrice", 0))
+        
+        # Calcular PnL
+        qty = float(position.get("currentQty", 0))
+        avg_entry = float(position.get("avgEntryPrice", 0))
+        side = position.get("side", "BUY")
+        
+        if side == "BUY":
+            pnl = (current_price - avg_entry) * qty
+        else:
+            pnl = (avg_entry - current_price) * qty
+        
+        # Calcular capital a retornar
+        capital_returned = (qty * avg_entry) + pnl
+        
+        # 1. Cerrar posición en DB
+        await self.db["positions"].update_one(
+            {"_id": position["_id"]},
+            {"$set": {
+                "status": "CLOSED",
+                "closedAt": datetime.utcnow(),
+                "exitPrice": current_price,
+                "finalPnl": pnl,
+                "realizedPnl": pnl
+            }}
+        )
+        
+        # 2. Retornar capital al wallet del bot o balance global
+        if bot.get("walletAvailable") is not None:
+            # Bot tiene sub-wallet: abonar ahí
+            await self.db["bot_instances"].update_one(
+                {"_id": bot_id},
+                {"$inc": {
+                    "walletAvailable": float(capital_returned),
+                    "walletRealizedPnl": float(pnl)
+                }}
+            )
+        else:
+            # Legacy: abonar al balance virtual global
+            user_id = bot.get("user_id")
+            await update_virtual_balance(str(user_id), market_type, quote_currency, capital_returned, is_relative=True)
+        
+        logger.info(f"🔒 Posición cerrada: {symbol} | PnL: ${pnl:.2f} | Capital retornado: ${capital_returned:.2f}")
+        
+        return float(pnl)
+
+    async def _release_wallet(self, bot: dict, bot_id_obj, pnl_realized: float) -> float:
+        """
+        Libera la wallet asignada del bot al balance global.
+        Devuelve el monto liberado.
+        """
+        from bson import ObjectId
+        
+        wallet_allocated = float(bot.get("walletAllocated", 0))
+        wallet_available = float(bot.get("walletAvailable", 0))
+        wallet_realized_pnl = float(bot.get("walletRealizedPnl", 0))
+        
+        # Total a liberar: walletAvailable + walletRealizedPnl
+        # (walletAllocated es el monto original reservado, pero walletAvailable ya incluye cambios)
+        total_to_release = wallet_available
+        
+        if total_to_release <= 0:
+            return 0.0
+        
+        market_type = bot.get("marketType", "CEX")
+        quote_currency = bot.get("walletCurrency", "USDT")
+        user_id = bot.get("user_id")
+        
+        # 1. Liberar al balance virtual global
+        await update_virtual_balance(str(user_id), market_type, quote_currency, total_to_release, is_relative=True)
+        
+        # 2. Resetear wallet del bot
+        await self.db["bot_instances"].update_one(
+            {"_id": bot_id_obj},
+            {"$set": {
+                "walletAllocated": 0.0,
+                "walletAvailable": 0.0,
+                "walletRealizedPnl": 0.0,
+                "walletCurrency": None
+            }}
+        )
+        
+        logger.info(f"💰 Wallet liberada: ${total_to_release:.2f} → balance global ({market_type}/{quote_currency})")
+        
+        return total_to_release
+
     async def initialize_active_bots_monitoring(self):
         # 1. Estrategias (Entradas)
         active_instances = await db.bot_instances.find({"status": "active"}).to_list(length=1000)

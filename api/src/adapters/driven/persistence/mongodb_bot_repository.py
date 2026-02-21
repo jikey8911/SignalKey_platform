@@ -17,6 +17,12 @@ class MongoBotRepository:
     async def save(self, bot: BotInstance) -> str:
         doc = bot.to_dict()
         if "id" in doc: del doc["id"]
+        
+        # GUARDRAIL FINAL: Rechazar bots con amount <= 0 (seguridad financiera)
+        amount = doc.get("amount")
+        if amount is None or amount <= 0:
+            raise ValueError(f"BotInstance.amount must be > 0, got {amount}. Bot creation blocked.")
+        
         result = await self.collection.insert_one(doc)
         return str(result.inserted_id)
 

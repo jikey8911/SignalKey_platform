@@ -52,7 +52,11 @@ class ExecutionEngine:
         is_alert = signal_data.get('is_alert', False)
         
         amount = bot_instance.get('amount', 0)
-        if amount <= 0: amount = 100.0 
+        
+        # GUARDRAIL: Bloquear ejecución si bot tiene amount <= 0 (error de configuración)
+        if amount <= 0:
+            self.logger.error(f"🛑 BLOCKED: Bot {bot_instance.get('_id')} has amount={amount}. Execution rejected.")
+            return {"status": "blocked", "reason": "invalid_bot_amount"}
 
         # 2. Validación de Saldo (Router Híbrido)
         # Aquí es donde decidimos si mirar la DB o el Exchange

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from api.src.adapters.driven.persistence.mongodb import db, get_app_config
 from api.src.infrastructure.security.auth_deps import get_current_user
 from api.src.domain.models.schemas import AIAgent
+from api.src.application.services.ai_service import AIService
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -13,6 +14,11 @@ class AgentUpdate(BaseModel):
     apiKey: Optional[str] = None
     isActive: Optional[bool] = None
     isPrimary: Optional[bool] = None
+
+class InvestmentRequest(BaseModel):
+    symbol: str
+    risk_level: str = "medium"
+    market_type: str = "spot"
 
 @router.get("/agents", response_model=List[AIAgent])
 async def get_agents(current_user: dict = Depends(get_current_user)):
@@ -156,5 +162,28 @@ async def update_agent(
 
         return {"success": True, "message": f"Agent {provider} updated"}
 
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/recommend_investment")
+async def recommend_investment(
+    request: InvestmentRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Calcula una recomendación de inversión basada en balance y riesgo.
+    """
+    try:
+        user_id_obj = current_user["_id"]
+        
+        # Instanciar servicio (stateless)
+        ai_service = AIService()
+        
+        return await ai_service.get_investment_recommendation(
+            user_id=user_id_obj,
+            symbol=request.symbol,
+            risk_level=request.risk_level,
+            market_type=request.market_type
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

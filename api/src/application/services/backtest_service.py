@@ -131,13 +131,15 @@ class BacktestService:
         initial_balance: float = 10000.0,
         trade_amount: Optional[float] = None,
         tp: float = 0.03,
-        sl: float = 0.9
+        sl: float = 0.9,
+        verbose: bool = True
     ) -> Dict[str, Any]:
         """
         Ejecuta un Backtest Tournament: evalúa todas las estrategias y devuelve 
         los resultados detallados de la mejor posicionada.
         """
-        self.logger.info(f"🚀 Iniciando Backtest Tournament: {symbol} | {days}d | {timeframe}")
+        if verbose:
+            self.logger.info(f"🚀 Iniciando Backtest Tournament: {symbol} | {days}d | {timeframe}")
         
         # 1. Obtener datos históricos
         try:
@@ -183,7 +185,8 @@ class BacktestService:
         # 3. Ejecutar simulación para cada estrategia
         for strat_name in strategies_to_test:
             try:
-                self.logger.info(f"🧪 Testing strategy: {strat_name} ({market_type})")
+                if verbose:
+                    self.logger.info(f"🧪 Testing strategy: {strat_name} ({market_type})")
                 
                 # Cargar modelo segmentado (o fallback a root)
                 model_dir_specific = os.path.join(self.models_dir, market_type.lower()).replace('\\', '/')
@@ -193,9 +196,9 @@ class BacktestService:
                     model_path_root = os.path.normpath(os.path.join(self.models_dir, f"{strat_name}.pkl"))
                     if os.path.exists(model_path_root):
                         model_path = model_path_root
-                        self.logger.info(f"Using root model for {strat_name}")
+                        if verbose: self.logger.info(f"Using root model for {strat_name}")
                     else:
-                        self.logger.warning(f"⏩ Skipping {strat_name}: No .pkl model found in {model_dir_specific} or root.")
+                        if verbose: self.logger.warning(f"⏩ Skipping {strat_name}: No .pkl model found in {model_dir_specific} or root.")
                         continue
                 
                 model = joblib.load(model_path)
@@ -203,7 +206,7 @@ class BacktestService:
                 # Carga dinámica de la clase de estrategia
                 StrategyClass = self.trainer.load_strategy_class(strat_name, market_type)
                 if not StrategyClass:
-                     self.logger.warning(f"⏩ Skipping {strat_name}: Could not load strategy class.")
+                     if verbose: self.logger.warning(f"⏩ Skipping {strat_name}: Could not load strategy class.")
                      continue
 
                 strategy_obj = StrategyClass()
@@ -212,7 +215,7 @@ class BacktestService:
                 df_processed = self.prepare_data_for_model(df.copy(), strategy_obj)
                 
                 if df_processed.empty or not all(c in df_processed.columns for c in features):
-                    self.logger.warning(f"⏩ Skipping {strat_name}: Missing features.")
+                    if verbose: self.logger.warning(f"⏩ Skipping {strat_name}: Missing features.")
                     continue
 
                 # Cada estrategia arranca con balance fresco (virtual balance resuelto en router)
@@ -221,7 +224,7 @@ class BacktestService:
 
                 if trade_amount and trade_amount > 0:
                     step_investment = float(trade_amount)
-                    self.logger.info(f"💰 Usando monto fijo por parámetro: ${step_investment}")
+                    if verbose: self.logger.info(f"💰 Usando monto fijo por parámetro: ${step_investment}")
                 else:
                     try:
                         from api.src.adapters.driven.persistence.mongodb import get_app_config
@@ -230,15 +233,16 @@ class BacktestService:
                             cex_limit = user_config['investmentLimits'].get('cexMaxAmount')
                             if cex_limit and isinstance(cex_limit, (int, float)) and cex_limit > 0:
                                 step_investment = float(cex_limit)
-                                self.logger.info(f"💰 Usando monto de inversión configurado en DB: ${step_investment}")
+                                if verbose: self.logger.info(f"💰 Usando monto de inversión configurado en DB: ${step_investment}")
                     except Exception as e:
-                        self.logger.warning(f"⚠️ No se pudo cargar configuración de usuario, usando default: {e}")
+                        if verbose: self.logger.warning(f"⚠️ No se pudo cargar configuración de usuario, usando default: {e}")
 
                 if step_investment > strategy_initial_balance:
                     step_investment = max(10.0, strategy_initial_balance * 0.2)
-                    self.logger.warning(
-                        f"{strat_name}: step_investment ajustado a {step_investment} por ser mayor que el balance inicial {strategy_initial_balance}"
-                    )
+                    if verbose:
+                        self.logger.warning(
+                            f"{strat_name}: step_investment ajustado a {step_investment} por ser mayor que el balance inicial {strategy_initial_balance}"
+                        )
 
                 model_features = features + ['in_position', 'current_pnl']
 
@@ -247,12 +251,11 @@ class BacktestService:
                 df_processed.loc[valid_idx, 'ai_signal'] = model.predict(X)
                 df_processed['ai_signal'] = df_processed['ai_signal'].fillna(0)
 
-                # Fallback robusto: si el modelo devuelve TODO HOLD, usar señal técnica base
-                # para no entregar torneos vacíos (0 trades) cuando el .pkl está frío/desalineado.
+                # Fallback robusto
                 non_zero_ai = int((df_processed['ai_signal'] != 0).sum())
                 signal_source = "model"
                 if non_zero_ai == 0 and 'signal' in df_processed.columns:
-                    self.logger.warning(f"{strat_name}: model returned all HOLD, falling back to strategy signal")
+                    if verbose: self.logger.warning(f"{strat_name}: model returned all HOLD, falling back to strategy signal")
                     df_processed['ai_signal'] = df_processed['signal'].fillna(0)
                     non_zero_ai = int((df_processed['ai_signal'] != 0).sum())
                     signal_source = "strategy_fallback"
@@ -279,9 +282,10 @@ class BacktestService:
                     "signal_source": signal_source,
                 }
                 tournament_results.append(strategy_row)
-                self.logger.info(
-                    f"📊 BACKTEST [{strat_name}] source={signal_source} signals={non_zero_ai} trades={strategy_row['total_trades']} pnl={strategy_row['profit_pct']}% balance={strategy_row['final_balance']}"
-                )
+                if verbose:
+                    self.logger.info(
+                        f"📊 BACKTEST [{strat_name}] source={signal_source} signals={non_zero_ai} trades={strategy_row['total_trades']} pnl={strategy_row['profit_pct']}% balance={strategy_row['final_balance']}"
+                    )
                 
                 if simulation_result['profit_pct'] > highest_pnl:
                     highest_pnl = simulation_result['profit_pct']
@@ -292,7 +296,9 @@ class BacktestService:
                     }
 
             except Exception as e:
-                self.logger.error(f"Error testing {strat_name}: {e}")
+                # Solo loguear error si es verbose, o si es algo muy grave.
+                # Para batch, mejor silenciar errores individuales de estrategias.
+                if verbose: self.logger.error(f"Error testing {strat_name}: {e}")
 
         if not tournament_results:
             raise ValueError(f"No se pudo completar el backtest para ninguna estrategia en {exchange_id}.")

@@ -39,6 +39,9 @@ _ws_bot_meta: Dict[int, Dict[str, Dict[str, Any]]] = {}
 _last_price_emit: Dict[str, float] = {}
 _THROTTLE_SECONDS = 2.0
 
+# Global tracker for active batch tasks per user to allow cancellation
+_active_batch_tasks: Dict[str, asyncio.Task] = {}
+
 async def _stream_listener(event_type: str, payload: Dict[str, Any]):
     """Listen to MarketStreamService events and fan-out to subscribed sockets."""
     if event_type != "ticker_update":
@@ -122,8 +125,24 @@ async def websocket_endpoint(websocket: WebSocket, user_id: str):
 
             elif action == "run_batch_backtest":
                 # [STABLE/BLOCKED] Flow: BACKTEST WS
+                # Stop previous if running
+                if user_id in _active_batch_tasks:
+                    logger.info(f"Cancelando tarea previa de batch para {user_id}")
+                    _active_batch_tasks[user_id].cancel()
+                
                 payload = message.get("data") or {}
-                asyncio.create_task(run_batch_backtest_ws(user_id, payload))
+                # Create and track task
+                task = asyncio.create_task(run_batch_backtest_ws(user_id, payload))
+                _active_batch_tasks[user_id] = task
+                # Cleanup callback when done (to avoid leak)
+                task.add_done_callback(lambda t: _active_batch_tasks.pop(user_id, None))
+
+            elif action == "stop_batch_backtest":
+                if user_id in _active_batch_tasks:
+                    logger.info(f"🛑 Batch backtest detenido manualmente para user={user_id}")
+                    _active_batch_tasks[user_id].cancel()
+                    _active_batch_tasks.pop(user_id, None)
+                    await socket_service.emit_to_user(user_id, "backtest_error", {"message": "Escaneo detenido por el usuario", "Critical": True})
 
             elif action == "run_single_backtest":
                 # [STABLE/BLOCKED] Flow: BACKTEST WS
@@ -565,51 +584,74 @@ async def run_batch_backtest_ws(user_id: str, data: Dict[str, Any]):
 
         backtest_service = BacktestService(exchange_adapter=ccxt_service)
 
-        for idx, symbol in enumerate(symbols, start=1):
-            try:
-                percent = int((idx / max(total, 1)) * 100)
-                await socket_service.emit_to_user(user_id, "backtest_progress", {
-                    "current": idx,
-                    "total": total,
-                    "percent": percent,
-                    "symbol": symbol
-                })
+        # OPTIMIZACIÓN: Ejecución concurrente con Semaphore (Batch Paralelo)
+        concurrency = 10
+        semaphore = asyncio.Semaphore(concurrency)
+        completed_count = 0
+        
+        async def process_symbol(sym):
+            nonlocal completed_count
+            async with semaphore:
+                try:
+                    details = await backtest_service.run_backtest(
+                        symbol=sym,
+                        days=days,
+                        timeframe=timeframe,
+                        market_type=market_type,
+                        use_ai=True,
+                        user_config=None,
+                        strategy="auto",
+                        user_id=user_id,
+                        exchange_id=exchange_id,
+                        initial_balance=initial_balance,
+                        trade_amount=trade_amount,
+                        verbose=False
+                    )
 
-                details = await backtest_service.run_backtest(
-                    symbol=symbol,
-                    days=days,
-                    timeframe=timeframe,
-                    market_type=market_type,
-                    use_ai=True,
-                    user_config=None,
-                    strategy="auto",
-                    user_id=user_id,
-                    exchange_id=exchange_id,
-                    initial_balance=initial_balance,
-                    trade_amount=trade_amount,
-                )
+                    # WS payload shape expected by the web mapper in Backtest.tsx
+                    await socket_service.emit_to_user(user_id, "backtest_result", {
+                        "symbol": sym,
+                        "pnl": float(details.get("profit_pct") or 0),
+                        "win_rate": float(details.get("win_rate") or 0),
+                        "trades": int(details.get("total_trades") or 0),
+                        "strategy": details.get("strategy_name") or details.get("winner", {}).get("strategy"),
+                        "resolved_initial_balance": initial_balance,
+                        "resolved_trade_amount": trade_amount,
+                        "details": details,
+                        "topN": top_n,
+                    })
 
-                # WS payload shape expected by the web mapper in Backtest.tsx
-                await socket_service.emit_to_user(user_id, "backtest_result", {
-                    "symbol": symbol,
-                    "pnl": float(details.get("profit_pct") or 0),
-                    "win_rate": float(details.get("win_rate") or 0),
-                    "trades": int(details.get("total_trades") or 0),
-                    "strategy": details.get("strategy_name") or details.get("winner", {}).get("strategy"),
-                    "resolved_initial_balance": initial_balance,
-                    "resolved_trade_amount": trade_amount,
-                    "details": details,
-                    "topN": top_n,
-                })
+                except Exception as e:
+                    # SILENCIO: Bajar nivel de log para errores individuales de batch
+                    logger.debug(f"Batch backtest symbol error {sym}: {e}")
+                    await socket_service.emit_to_user(user_id, "backtest_symbol_error", {
+                        "symbol": sym,
+                        "error": str(e)
+                    })
+                finally:
+                    completed_count += 1
+                    percent = int((completed_count / max(total, 1)) * 100)
+                    
+                    # THROTTLING: Reducir ruido de WS. Emitir cada 5 items o al completar
+                    if completed_count % 5 == 0 or completed_count == total:
+                        await socket_service.emit_to_user(user_id, "backtest_progress", {
+                            "current": completed_count,
+                            "total": total,
+                            "percent": percent,
+                            "symbol": sym
+                        })
 
-            except Exception as e:
-                logger.error(f"Batch backtest symbol error {symbol}: {e}")
-                await socket_service.emit_to_user(user_id, "backtest_symbol_error", {
-                    "symbol": symbol,
-                    "error": str(e)
-                })
+        # Lanzar tareas en paralelo
+        tasks = [process_symbol(s) for s in symbols]
+        await asyncio.gather(*tasks)
 
+        logger.info(f"✅ BATCH COMPLETADO | Total analizados: {total} | Exchange: {exchange_id} | Market: {market_type}")
         await socket_service.emit_to_user(user_id, "backtest_complete", {"total": total})
+
+    except asyncio.CancelledError:
+        logger.info(f"🛑 Batch backtest cancelado limpiamente para user={user_id}")
+        # Opcional: avisar front si no fue él quien canceló (pero aquí fue él)
+        raise
 
     except Exception as e:
         logger.error(f"Batch backtest critical error: {e}")

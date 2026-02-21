@@ -37,6 +37,13 @@ class PredictRequest(BaseModel):
     market: str = "spot"
     candles: list[dict] # [ {'timestamp':..., 'open':..., 'close':...}, ... ]
 
+@router.get("/status")
+async def get_training_status():
+    """Retorna si el sistema está entrenando actualmente (Global Lock)."""
+    # Usamos una instancia ligera solo para leer la propiedad global
+    service = MLService(exchange_adapter=None) 
+    return {"is_training": service.is_training}
+
 @router.post("/train")
 async def train_all_strategies_endpoint(request: BatchTrainRequest, background_tasks: BackgroundTasks):
     """

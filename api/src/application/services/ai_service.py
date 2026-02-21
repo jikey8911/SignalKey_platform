@@ -49,6 +49,81 @@ class AIService:
             ))
         return results
 
+    async def get_investment_recommendation(
+        self,
+        user_id: str,
+        symbol: str,
+        risk_level: str = "medium",
+        market_type: str = "spot"
+    ) -> Dict[str, Any]:
+        """
+        Calcula una recomendación de inversión basada en balance y riesgo.
+        """
+        from api.src.adapters.driven.persistence.mongodb import db, get_app_config
+        
+        # 1. Obtener configuración y políticas
+        app_config = await get_app_config(user_id)
+        wallet_policy = app_config.get("botWalletPolicy", {})
+        
+        # Límites globales
+        min_alloc = float(wallet_policy.get("minAllocationUSDT", 10.0))
+        max_alloc = float(wallet_policy.get("maxAllocationUSDT", 1000.0))
+        global_pct = float(wallet_policy.get("perBotAllocationPct", 5.0))
+        
+        # 2. Obtener balance disponible (Simulado por defecto para seguridad)
+        # TODO: Soportar balance real si market_type != simulated
+        balance_doc = await db.virtual_balances.find_one({
+            "userId": user_id, # user_id is passed as ObjectId or string depending on caller
+            "asset": "USDT",
+            "marketType": "CEX" # Asumimos CEX/Spot por ahora
+        })
+        
+        balance_available = float(balance_doc.get("amount", 0.0)) if balance_doc else 0.0
+        
+        # 3. Calcular base según riesgo
+        risk_factors = {
+            "low": 0.02,    # 2% del balance
+            "medium": 0.05, # 5% del balance
+            "high": 0.10,   # 10% del balance
+            "degen": 0.20   # 20% (solo para valientes)
+        }
+        
+        factor = risk_factors.get(risk_level.lower(), 0.05)
+        
+        # Si hay policy global definida, usarla como base (medium)
+        if global_pct > 0:
+            base_pct = global_pct / 100.0
+            # Ajustar según riesgo relativo a la política
+            if risk_level == "low": factor = base_pct * 0.5
+            elif risk_level == "high": factor = base_pct * 2.0
+            else: factor = base_pct
+
+        raw_amount = balance_available * factor
+        
+        # 4. Aplicar límites (Clamp)
+        final_amount = max(min_alloc, min(raw_amount, max_alloc))
+        
+        # Guardrail final: No puede exceder el balance disponible
+        final_amount = min(final_amount, balance_available)
+        
+        # 5. Generar razonamiento
+        reasoning = (
+            f"Based on your {risk_level} risk profile and available balance (${balance_available:.2f}), "
+            f"we recommend allocating ${final_amount:.2f}. "
+            f"This represents {((final_amount/balance_available)*100):.1f}% of your total capital, "
+            f"keeping you within safe limits (Min: ${min_alloc}, Max: ${max_alloc})."
+        )
+        
+        return {
+            "symbol": symbol,
+            "recommended_amount": round(final_amount, 2),
+            "min_amount": min_alloc,
+            "max_safe_amount": round(min(balance_available * 0.2, max_alloc), 2),
+            "balance_used_pct": round((final_amount / balance_available) * 100, 2) if balance_available > 0 else 0,
+            "risk_level": risk_level,
+            "reasoning": reasoning
+        }
+
     async def optimize_strategy_code(
         self,
         source_code: str,
@@ -60,7 +135,6 @@ class AIService:
         """
         Genera una versión optimizada de una estrategia de trading.
         """
-
         prompt = f"""
         ACT AS: Senior Quantitative Developer & Python Expert.
 

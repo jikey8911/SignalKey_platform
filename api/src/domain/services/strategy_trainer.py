@@ -5,6 +5,7 @@ import joblib
 import logging
 from typing import Dict, List, Optional
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, precision_score, recall_score
 
 # Configure logger
 logger = logging.getLogger("StrategyTrainer")
@@ -16,10 +17,16 @@ class StrategyTrainer:
     Motor de entrenamiento que carga estrategias dinámicamente y genera 
     modelos capaces de operar en cualquier símbolo (Agnósticos).
     """
-    def __init__(self, strategies_dir: str = "api/src/domain/strategies", models_dir: str = "api/data/models"):
-        # Adjust paths to be relative to project root if needed
-        # Assuming running from project root e:\antigravity\signaalKei_platform
-        self.strategies_dir = strategies_dir
+    def __init__(self, strategies_dir: str = None, models_dir: str = "api/data/models"):
+        # Auto-resolve path relative to this file if not provided
+        # Current file is in api/src/domain/services/strategy_trainer.py
+        # Strategies are in api/src/domain/strategies/
+        if not strategies_dir:
+            domain_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self.strategies_dir = os.path.join(domain_dir, "strategies")
+        else:
+            self.strategies_dir = strategies_dir
+            
         self.models_dir = models_dir
         self._class_cache = {} # Cache para evitar recargas constantes
         os.makedirs(self.models_dir, exist_ok=True)
@@ -169,6 +176,15 @@ class StrategyTrainer:
             
             model = RandomForestClassifier(n_estimators=150, max_depth=10, random_state=42)
             model.fit(X, y)
+
+            # --- METRICS CALCULATION ---
+            y_pred = model.predict(X)
+            acc = accuracy_score(y, y_pred)
+            prec = precision_score(y, y_pred, average='weighted', zero_division=0)
+            
+            metrics_msg = f"📊 {strategy_name} Results: Accuracy={acc:.2%} | Precision={prec:.2%} | Samples={len(X)}"
+            logger.info(metrics_msg)
+            if emit_callback: await emit_callback(metrics_msg, "info")
 
             # Persistencia segmentada por mercado
             market_dir = os.path.join(self.models_dir, market_type.lower()).replace('\\', '/')

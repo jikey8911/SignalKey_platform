@@ -10,58 +10,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Progress } from '@/components/ui/progress';
 import { CONFIG } from '@/config';
 import { TradingViewChart } from '@/components/ui/TradingViewChart';
-import { wsService } from '@/lib/websocket'; // Importar servicio WS
+import { wsService } from '@/lib/websocket';
+import { useBacktestContext, BacktestResults, Trade, Candle, TournamentResult } from '@/contexts/BacktestContext';
 
-interface Candle {
-  time: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-}
-
-interface Trade {
-  time: number;
-  price: number;
-  side: 'BUY' | 'SELL';
-  profit?: number;
-  amount?: number;
-  avg_price?: number;
-  label?: string;
-  pnl_percent?: number;
-}
-
-interface TournamentResult {
-  strategy: string;
-  profit_pct: number;
-  total_trades: number;
-  win_rate: number;
-  final_balance: number;
-  signals_non_zero?: number;
-  signal_source?: 'model' | 'strategy_fallback' | string;
-}
-
-interface BacktestResults {
-  symbol: string;
-  timeframe: string;
-  days: number;
-  totalTrades: number;
-  winRate: number;
-  profitFactor: string;
-  maxDrawdown: string;
-  totalReturn: string;
-  sharpeRatio: string;
-  candles: Candle[];
-  trades: Trade[];
-  botConfiguration?: any;
-  metrics?: any;
-  tournamentResults?: TournamentResult[];
-  winner?: TournamentResult;
-  strategy_name?: string;
-  initial_balance?: number;
-  final_balance?: number;
-}
-
+// Exchange/Symbol interfaces remain local as they are config-related
 interface Exchange {
   exchangeId: string;
   isActive: boolean;
@@ -93,29 +45,35 @@ const BacktestChart = ({ candles, trades }: { candles: Candle[]; trades: Trade[]
 
 export default function Backtest() {
   const { user } = useAuth();
+  
+  // Consumir Contexto Global para Semi-Auto (Batch)
+  const { isScanning, scanResults, scanProgress, startScan, stopScan } = useBacktestContext();
 
-  // Exchange, Market, Symbol selection
+  // Exchange, Market, Symbol selection (Local config state)
   const [selectedExchange, setSelectedExchange] = useState<string>('');
   const [selectedMarket, setSelectedMarket] = useState<string>('');
   const [selectedSymbol, setSelectedSymbol] = useState<string>('');
 
-  // Backtest config
+  // Single Backtest config & state
   const [symbol, setSymbol] = useState('BTC/USDT');
   const [timeframe, setTimeframe] = useState('1h');
   const [days, setDays] = useState(30);
   const [isRunning, setIsRunning] = useState(false);
   const [results, setResults] = useState<BacktestResults | null>(null);
-  const [initialBalance, setInitialBalance] = useState<number>(10000); // Default 10000
-  const [tradeAmount, setTradeAmount] = useState<number>(1000); // Default 1000 for DCA step
+  const [initialBalance, setInitialBalance] = useState<number>(10000); 
+  const [tradeAmount, setTradeAmount] = useState<number>(1000); 
 
-  // Guardar estimados (AI) devueltos por /backtest/optimize para mostrarlos en la UI
+  // Modal selection state
+  const [selectedResult, setSelectedResult] = useState<BacktestResults | null>(null);
+
+  // Estimates
   const [optEstimates, setOptEstimates] = useState<Record<string, { expected_profit_pct?: number; expected_win_rate?: number }>>({});
   const optKey = useCallback((strategyName?: string, sym?: string) => `${sym || ''}__${strategyName || ''}`, []);
 
   // Symbol Search
   const [symbolSearch, setSymbolSearch] = useState('');
 
-  // Balances/limits for simulation (source of truth)
+  // Balances/limits
   const [virtualBalance, setVirtualBalance] = useState<number>(10000);
   const [loadingBalance, setLoadingBalance] = useState(false);
   const [investmentLimits, setInvestmentLimits] = useState<{ cexMaxAmount?: number; dexMaxAmount?: number }>({});
@@ -126,28 +84,20 @@ export default function Backtest() {
 
   useEffect(() => {
     setLoadingExchanges(true);
-    console.log("[Backtest] Fetching user exchanges from:", `${CONFIG.API_BASE_URL}/backtest/exchanges`);
     fetch(`${CONFIG.API_BASE_URL}/backtest/exchanges`, { credentials: 'include' })
       .then(res => {
         if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
         return res.json();
       })
       .then(data => {
-        console.log("[Backtest] User exchanges loaded:", data);
         if (!Array.isArray(data)) return;
-
-        // API already returns [{exchangeId,isActive}]
         const list: Exchange[] = data.filter((x: any) => x?.exchangeId);
         setExchanges(list);
 
-        // Default exchange: prefer OKX if present, else first.
         if (list.length > 0) {
           const okx = list.find((e: any) => String(e.exchangeId).toLowerCase() === 'okx');
           const defaultExchange = (okx?.exchangeId || list[0]?.exchangeId || '').toString();
-
           setSelectedExchange(defaultExchange);
-
-          // Reset dependent selections and load markets (which will also load symbols)
           setMarkets([]);
           setSelectedMarket('');
           setSymbols([]);
@@ -165,13 +115,8 @@ export default function Backtest() {
   // WebSocket Connection Initialization
   useEffect(() => {
     if (user?.openId) {
-      console.log(`[Backtest] Initializing WebSocket for user: ${user.openId}`);
       wsService.connect(user.openId);
     }
-    return () => {
-      // We don't necessarily want to disconnect here if other pages use it, 
-      // but wsService.connect handles existing connections.
-    };
   }, [user?.openId]);
 
   // Fetch Symbols
@@ -180,13 +125,11 @@ export default function Backtest() {
 
   const loadSymbols = useCallback((exchangeId: string, marketType: string) => {
     if (!exchangeId || !marketType) return;
-
     const mt = String(marketType).toLowerCase();
     if (mt === 'dex') {
       setSymbols([]);
       return;
     }
-
     setLoadingSymbols(true);
     fetch(`${CONFIG.API_BASE_URL}/backtest/symbols/${encodeURIComponent(exchangeId)}?market_type=${encodeURIComponent(mt)}`, { credentials: 'include' })
       .then(res => res.json())
@@ -212,7 +155,7 @@ export default function Backtest() {
       .finally(() => setLoadingSymbols(false));
   }, []);
 
-  // Fetch Markets (dynamic from CCXT, per exchange)
+  // Fetch Markets
   const [markets, setMarkets] = useState<string[]>([]);
   const [loadingMarkets, setLoadingMarkets] = useState(false);
 
@@ -228,12 +171,9 @@ export default function Backtest() {
         const arr = Array.isArray(data) ? data : (Array.isArray(data?.markets) ? data.markets : []);
         if (Array.isArray(arr)) {
           setMarkets(arr);
-
-          // Default market: prefer spot if present, else first.
           if (arr.length > 0) {
             const spot = arr.find((m: any) => String(m).toLowerCase() === 'spot');
             const preferred = String(spot ?? arr[0]);
-
             setSelectedMarket(preferred);
             setSelectedSymbol('');
             loadSymbols(exchangeId, preferred);
@@ -247,188 +187,24 @@ export default function Backtest() {
       .finally(() => setLoadingMarkets(false));
   }, [loadSymbols]);
 
-  // Handle Exchange Change
   const handleExchangeChange = (exchangeId: string) => {
     setSelectedExchange(exchangeId);
-
-    // Clear dependent states
     setMarkets([]);
     setSelectedMarket('');
     setSymbols([]);
     setSelectedSymbol('');
-
-    if (exchangeId) {
-      loadMarkets(exchangeId);
-    }
+    if (exchangeId) loadMarkets(exchangeId);
   };
 
-  // Handle Market Change
   const handleMarketChange = (marketType: string) => {
     const mt = String(marketType);
     setSelectedMarket(mt);
-    if (selectedExchange) {
-      loadSymbols(selectedExchange, mt);
-    }
+    if (selectedExchange) loadSymbols(selectedExchange, mt);
     setSelectedSymbol('');
   };
 
-  // --- Semi-Auto Access (WebSocket) ---
-  const [isScanning, setIsScanning] = useState(false);
-  const [scanResults, setScanResults] = useState<BacktestResults[]>([]);
-  const [scanProgress, setScanProgress] = useState({ current: 0, total: 0, percent: 0, symbol: '' });
-  const [selectedResult, setSelectedResult] = useState<BacktestResults | null>(null);
-
-  // Escuchar eventos WebSocket
+  // --- WebSocket Listeners Only for SINGLE Backtest (Batch is handled by Context) ---
   useEffect(() => {
-    const handleBacktestStart = (data: any) => {
-      setIsScanning(true);
-      setScanResults([]);
-      setScanProgress({ current: 0, total: data.total || 0, percent: 0, symbol: 'Iniciando...' });
-      toast.info(`Iniciando escaneo de ${data.total} símbolos...`);
-    };
-
-    const handleBacktestProgress = (data: any) => {
-      setScanProgress({
-        current: data.current,
-        total: data.total,
-        percent: data.percent,
-        symbol: data.symbol
-      });
-    };
-
-    const handleBacktestResult = (data: any) => {
-      // Transformar datos del WS a la estructura BacktestResults
-      // Nota: 'details' viene serializado como en el endpoint single run
-      const details = data.details || {};
-
-      const normalizeTime = (t: any): number => {
-        if (typeof t === 'string') return new Date(t).getTime();
-        if (typeof t === 'number' && t < 20000000000) return t * 1000;
-        return t;
-      };
-
-      const transformedTrades: Trade[] = details.trades?.map((t: any) => ({
-        time: normalizeTime(t.time),
-        price: t.price,
-        side: t.type as 'BUY' | 'SELL',
-        profit: t.pnl,
-        amount: t.amount,
-        avg_price: t.avg_price,
-        label: t.label,
-        pnl_percent: t.pnl_percent
-      })) || [];
-
-      const candles: Candle[] = details.chart_data?.map((c: any) => ({
-        time: normalizeTime(c.time),
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close
-      })) || [];
-
-      // Normalización robusta: soporta payload en 0..100 o 0..1.
-      const toFinite = (v: any) => {
-        const n = Number(v);
-        return Number.isFinite(n) ? n : 0;
-      };
-
-      const initialBal = toFinite(details?.initial_balance ?? details?.resolved_initial_balance);
-      const finalBal = toFinite(details?.final_balance);
-      const impliedPct = initialBal > 0 && finalBal > 0
-        ? ((finalBal / initialBal) - 1) * 100
-        : null;
-
-      const normalizePct = (v: any, implied: number | null = null) => {
-        const n = toFinite(v);
-
-        // Si tenemos balances, usamos esa referencia para detectar escala.
-        if (implied !== null && Number.isFinite(implied)) {
-          if (Math.abs(n - implied) < 0.05) return n;          // ya viene en %
-          if (Math.abs((n * 100) - implied) < 0.05) return n * 100; // viene como ratio
-        }
-
-        // Fallback heurístico
-        if (Math.abs(n) > 0 && Math.abs(n) <= 1) return n * 100;
-        return n;
-      };
-
-      const pnlValue = normalizePct(
-        details?.profit_pct ?? details?.metrics?.profit_pct ?? data?.pnl ?? 0,
-        impliedPct
-      );
-      const wrValue = normalizePct(
-        details?.win_rate ?? details?.metrics?.win_rate ?? data?.win_rate ?? 0,
-        null
-      );
-      const tradesValue = Number(
-        details?.total_trades ?? details?.metrics?.total_trades ?? data?.trades ?? 0
-      );
-
-      const result: BacktestResults = {
-        symbol: data.symbol,
-        timeframe: timeframe, // Usamos el estado local ya que es el mismo para todos
-        days: days,
-        totalTrades: tradesValue,
-        winRate: wrValue,
-        profitFactor: details.metrics?.profit_factor?.toString() || '0',
-        maxDrawdown: Number(details.metrics?.max_drawdown || 0).toFixed(2),
-        totalReturn: pnlValue.toFixed(2),
-        sharpeRatio: details.metrics?.sharpe_ratio?.toString() || '0',
-        candles: candles,
-        trades: transformedTrades,
-        botConfiguration: details.bot_configuration,
-        metrics: details.metrics,
-        tournamentResults: details.tournament_results,
-        winner: details.winner,
-        strategy_name: data.strategy,
-        initial_balance: details.initial_balance,
-        final_balance: details.final_balance
-      };
-
-      // Top 10 por símbolo: mayor PnL y, en empate, mayor Win Rate.
-      setScanResults(prev => {
-        const bySymbol = new Map<string, BacktestResults>();
-
-        const compare = (a: BacktestResults, b: BacktestResults) => {
-          const profitA = Number.parseFloat(a.totalReturn) || 0;
-          const profitB = Number.parseFloat(b.totalReturn) || 0;
-          if (profitB !== profitA) return profitB - profitA;
-          const wrA = Number(a.winRate) || 0;
-          const wrB = Number(b.winRate) || 0;
-          if (wrB !== wrA) return wrB - wrA;
-          const trA = Number(a.totalTrades) || 0;
-          const trB = Number(b.totalTrades) || 0;
-          return trB - trA;
-        };
-
-        [...prev, result].forEach((r) => {
-          const key = r.symbol;
-          const current = bySymbol.get(key);
-          if (!current || compare(r, current) < 0) {
-            bySymbol.set(key, r);
-          }
-        });
-
-        return Array.from(bySymbol.values())
-          .sort(compare)
-          .slice(0, 10);
-      });
-    };
-
-    const handleBacktestComplete = (data: any) => {
-      setIsScanning(false);
-      setScanProgress({ ...scanProgress, percent: 100, symbol: 'Completado' });
-      toast.success("Escaneo completado exitosamente");
-    };
-
-    const handleBacktestError = (data: any) => {
-      console.error("Backtest Error:", data);
-      toast.error(`Error en backtest: ${data.message || data.error}`);
-      if (data.message && data.message.includes("Critical")) {
-        setIsScanning(false);
-      }
-    };
-
     const handleSingleBacktestStart = (data: any) => {
       setIsRunning(true);
       toast.info(`Backtest iniciado: ${data?.symbol || ''}`);
@@ -540,88 +316,53 @@ export default function Backtest() {
       setIsRunning(false);
     };
 
-    const handleSymbolError = (data: any) => {
-      console.warn(`Error en símbolo ${data.symbol}: ${data.error}`);
-    }
-
-    wsService.on('backtest_start', handleBacktestStart);
-    wsService.on('backtest_progress', handleBacktestProgress);
-    wsService.on('backtest_result', handleBacktestResult);
-    wsService.on('backtest_complete', handleBacktestComplete);
-    wsService.on('backtest_error', handleBacktestError);
-    wsService.on('backtest_symbol_error', handleSymbolError);
-
     wsService.on('single_backtest_start', handleSingleBacktestStart);
     wsService.on('single_backtest_result', handleSingleBacktestResult);
     wsService.on('single_backtest_error', handleSingleBacktestError);
 
     return () => {
-      wsService.off('backtest_start', handleBacktestStart);
-      wsService.off('backtest_progress', handleBacktestProgress);
-      wsService.off('backtest_result', handleBacktestResult);
-      wsService.off('backtest_complete', handleBacktestComplete);
-      wsService.off('backtest_error', handleBacktestError);
-      wsService.off('backtest_symbol_error', handleSymbolError);
-
       wsService.off('single_backtest_start', handleSingleBacktestStart);
       wsService.off('single_backtest_result', handleSingleBacktestResult);
       wsService.off('single_backtest_error', handleSingleBacktestError);
     };
-  }, [timeframe, days]); // Dependencias para el contexto de result mapping
+  }, []);
 
   const handleStartScan = () => {
     if (!user?.openId || !selectedExchange || !selectedMarket) {
       toast.error("Configuración incompleta");
       return;
     }
-
-    // Enviar comando por WS. El backend debe resolver los symbols (solo activos) y hacer el batch.
-    wsService.send({
-      action: "run_batch_backtest",
-      data: {
-        exchangeId: selectedExchange,
-        marketType: selectedMarket,
-        timeframe: timeframe,
-        days: days,
-        initialBalance: initialBalance,
-        tradeAmount: tradeAmount,
-        topN: 10
-      }
+    // Delegate to Context
+    startScan({
+      exchangeId: selectedExchange,
+      marketType: selectedMarket,
+      timeframe: timeframe,
+      days: days,
+      initialBalance: initialBalance,
+      tradeAmount: tradeAmount,
+      topN: 10
     });
-
-    // Reset UI state (y además el backend emitirá backtest_start)
-    setIsScanning(true);
-    setScanResults([]);
   };
 
   const handleStopScan = () => {
-    // No implemented explicit stop in backend yet, but we can simulate locally or reload
-    // For now just warn user
-    toast.info("La detención del proceso en servidor no está implementada, recarga la página si deseas cancelar la visualización.");
-    setIsScanning(false);
+    stopScan();
   };
-
-  // (Removed) legacy symbols loader via /market/...; we now load via loadSymbols() using /backtest/symbols.
 
   // Fetch user config and auto-select active exchange
   useEffect(() => {
     if (!user?.openId) return;
-
     fetch(`${CONFIG.API_BASE_URL}/config/`, { credentials: 'include' })
       .then(res => res.json())
       .then(data => {
         const config = data.config;
         if (config) {
           setInvestmentLimits(config.investmentLimits || {});
-
           let activeEx = config.activeExchange;
           if (!activeEx && config.exchanges && config.exchanges.length > 0) {
             const firstActive = config.exchanges.find((e: any) => e.isActive);
             if (firstActive) activeEx = firstActive.exchangeId;
           }
-
           if (activeEx) {
-            // Keep exchange/market/symbols in sync
             handleExchangeChange(activeEx);
           }
         }
@@ -629,14 +370,10 @@ export default function Backtest() {
       .catch(err => console.error("Error fetching user config for active exchange:", err));
   }, [user?.openId]);
 
-  // NOTE: Default selection is handled when exchanges are fetched (prefers OKX) and when user config loads.
-
-
-  // Fetch Virtual Balance (según mercado seleccionado)
+  // Fetch Virtual Balance
   useEffect(() => {
     const fetchBalance = async () => {
       if (!user?.openId) return;
-
       setLoadingBalance(true);
       try {
         const mt = String(selectedMarket || 'spot').toLowerCase();
@@ -652,7 +389,7 @@ export default function Backtest() {
           const data = await res.json();
           const bal = Number(data.balance || (isCex ? 10000 : 10));
           setVirtualBalance(bal);
-          setInitialBalance(bal); // no editable: espejo del virtual balance
+          setInitialBalance(bal);
         }
       } catch (e) {
         console.error('Error fetching virtual balance:', e);
@@ -660,13 +397,10 @@ export default function Backtest() {
         setLoadingBalance(false);
       }
     };
-
-    if (user?.openId) {
-      fetchBalance();
-    }
+    if (user?.openId) fetchBalance();
   }, [user?.openId, selectedMarket]);
 
-  // Inversión por entrada desde config (no editable en UI)
+  // Inversión por entrada
   useEffect(() => {
     const mt = String(selectedMarket || 'spot').toLowerCase();
     const isCex = ['spot', 'cex', 'futures', 'future', 'swap'].includes(mt);
@@ -681,15 +415,12 @@ export default function Backtest() {
       toast.error('Usuario no autenticado');
       return;
     }
-
     if (!selectedSymbol) {
       toast.error('Por favor selecciona un símbolo');
       return;
     }
-
     setIsRunning(true);
     toast.loading('Ejecutando backtest en segundo plano...');
-
     wsService.send({
       action: 'run_single_backtest',
       data: {
@@ -720,7 +451,6 @@ export default function Backtest() {
   const [panIndex, setPanIndex] = useState(0);
   const [selectedTrade, setSelectedTrade] = useState<Trade | null>(null);
 
-  // Reset zoom/pan when results change
   useEffect(() => {
     setZoom(1);
     setPanIndex(0);
@@ -730,15 +460,10 @@ export default function Backtest() {
   const handleTradeClick = (trade: Trade) => {
     setSelectedTrade(trade);
     if (!results) return;
-
-    // Auto-pan to the trade
     const tradeIndex = results.candles.findIndex(c => c.time === trade.time);
     if (tradeIndex !== -1) {
-      // Center the trade in the current view
       const visibleCount = Math.floor(results.candles.length / zoom);
       let newPan = tradeIndex - Math.floor(visibleCount / 2);
-
-      // Clamp
       newPan = Math.max(0, Math.min(newPan, results.candles.length - visibleCount));
       setPanIndex(newPan);
     }
@@ -1165,6 +890,7 @@ export default function Backtest() {
                     <div>
                       <p className="text-sm text-muted-foreground mb-1">Balance Inicial</p>
                       <p className="text-xl font-mono text-foreground font-bold">${results.initial_balance?.toLocaleString() ?? 0}</p>
+
                     </div>
                     <div>
                       <p className="text-sm text-muted-foreground mb-1">Balance Final</p>

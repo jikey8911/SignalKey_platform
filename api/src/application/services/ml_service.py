@@ -9,6 +9,9 @@ from api.src.domain.services.strategy_trainer import StrategyTrainer
 from api.src.domain.services.exchange_port import ExchangePort
 from api.src.domain.strategies.base import BaseStrategy
 
+# Global Training Lock (Module Level)
+_IS_TRAINING = False
+
 # === STABLE / BLOCKED ===
 # Flow: TRAINING (global models) + PREDICT
 # - training: train_all_strategies, _fetch_training_data
@@ -32,6 +35,11 @@ class MLService:
         # Import ModelManager (Singleton)
         from api.src.infrastructure.ai.model_manager import ModelManager
         self.model_manager = ModelManager()
+
+    @property
+    def is_training(self) -> bool:
+        global _IS_TRAINING
+        return _IS_TRAINING
 
     async def _fetch_training_data(
         self,
@@ -152,6 +160,13 @@ class MLService:
         Ciclo de entrenamiento masivo y agnóstico segmentado por mercado.
         Orquesta la obtención de datos + Entrenamiento de Modelos de Estategia.
         """
+        global _IS_TRAINING
+        if _IS_TRAINING:
+            msg = "⛔ ENTRENAMIENTO BLOQUEADO: Ya hay un proceso en curso."
+            self.logger.warning(msg)
+            return {"status": "error", "message": "Training in progress"}
+
+        _IS_TRAINING = True
         self.logger.info(f"Iniciando orquestación de entrenamiento para {len(symbols)} activos (User: {user_id}).")
 
         # Callback para sockets
@@ -160,15 +175,15 @@ class MLService:
                 from api.src.adapters.driven.notifications.socket_service import socket_service
                 await socket_service.emit_to_user(user_id, "training_log", {"message": msg, "type": type})
 
-        # 1. Obtención de Datasets (con fechas aleatorias para robustez)
-        # Usar el método centralizado para obtener datos
-        data_collection = await self._fetch_training_data(symbols, timeframe, user_id, socket_callback, days=days)
-
-        if not data_collection:
-            await socket_callback("❌ Training failed: No data collected.", "error")
-            return {"status": "error", "message": "Fallo en la recolección de datos de entrenamiento."}
-
         try:
+            # 1. Obtención de Datasets (con fechas aleatorias para robustez)
+            # Usar el método centralizado para obtener datos
+            data_collection = await self._fetch_training_data(symbols, timeframe, user_id, socket_callback, days=days)
+
+            if not data_collection:
+                await socket_callback("❌ Training failed: No data collected.", "error")
+                return {"status": "error", "message": "Fallo en la recolección de datos de entrenamiento."}
+
             # 2. Entrenar Modelos de Estrategia Individuales
             trained_models = await self.trainer.train_all(data_collection, market_type=market_type, emit_callback=socket_callback)
             self.logger.info(f"Modelos de estrategia ({market_type}) entrenados: {len(trained_models)}")
@@ -186,6 +201,13 @@ class MLService:
             self.logger.error(f"Fallo crítico en el proceso de entrenamiento: {e}")
             await socket_callback(f"❌ Critical Error: {e}", "error")
             return {"status": "error", "message": f"Error en motor ML: {str(e)}"}
+        finally:
+            _IS_TRAINING = False
+            # Notificar fin de bloqueo global
+            try:
+                from api.src.adapters.driven.notifications.socket_service import socket_service
+                await socket_service.broadcast("training_status", {"is_training": False})
+            except: pass
 
     async def get_available_models(self, market_type: str = None) -> List[str]:
         """Consulta el inventario de cerebros .pkl disponibles en el sistema."""

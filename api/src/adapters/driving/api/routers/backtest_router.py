@@ -404,38 +404,90 @@ async def deploy_bot(
         
         # Obtener configuración para determinar Modo
         config = await db.app_configs.find_one({"userId": user["_id"]}) or {}
+
         # Por defecto "simulated" si no existe config o flag
         current_mode = "real" if config.get("tradingMode") == "live" else "simulated"
-        
-        # TODO: Si es FULL REAL, validar API Keys aquí antes de guardar
+
+        # Safety: demoMode siempre fuerza simulated
+        if config.get("demoMode", True):
+            current_mode = "simulated"
+
+        # Elegir exchange activo del usuario (sin hardcode)
+        exchange_id = None
+        try:
+            exs = config.get("exchanges") or []
+            active = [e for e in exs if e.get("isActive", True)]
+            if active:
+                exchange_id = active[0].get("exchangeId")
+        except Exception:
+            exchange_id = None
+        exchange_id = exchange_id or "okx"
+
+        market_type = "spot"
+
+        # Resolver amount (inversión por orden) desde investmentLimits
+        limits = config.get("investmentLimits") or {}
+        limit_amount = float(limits.get("cexMaxAmount") or 0)
+        if limit_amount <= 0:
+            limit_amount = 100.0
+
+        final_amount = min(limit_amount, float(initial_balance) * 0.2) if initial_balance > 0 else limit_amount
+        if final_amount <= 0:
+            final_amount = 10.0
 
         # Crear BotInstance
         new_bot = BotInstance(
             id=None,
-            user_id=user_id, # ObjectId interno para que aparezca en /bots
+            user_id=user_id,  # ObjectId interno para que aparezca en /bots
             name=f"{strategy} - {symbol} ({current_mode})",
             symbol=symbol,
             strategy_name=strategy,
             timeframe=timeframe,
+            market_type=market_type,
+            exchange_id=exchange_id,
+            amount=final_amount,
             mode=current_mode,
             status="active",
             config={
                 "initial_balance": initial_balance,
                 "leverage": leverage,
-                "deployed_at": datetime.utcnow().isoformat()
-            }
+                "deployed_at": datetime.utcnow().isoformat(),
+            },
         )
         
         repo = MongoBotRepository()
         bot_id = await repo.save(new_bot)
-        
-        logger.info(f"Bot deployed: {bot_id} (Mode: {current_mode}) for user_id={user_id} openId={user.get('openId')}")
-        
+
+        # Inicializar bot_feature_states
+        try:
+            from api.src.application.services.bot_feature_state_service import BotFeatureStateService
+            svc = BotFeatureStateService()
+            await svc.initialize_for_bot(
+                bot_id=bot_id,
+                user_id=user_id,
+                user_open_id=user.get('openId'),
+                symbol=symbol,
+                timeframe=timeframe,
+                market_type=market_type,
+                exchange_id=exchange_id,
+                strategy_name=strategy,
+                candles_limit=200,
+            )
+        except Exception as e:
+            logger.warning(f"deploy_bot: feature_state init failed for bot={bot_id}: {e}")
+
+        logger.info(
+            f"Bot deployed: {bot_id} (Mode: {current_mode}) exchange={exchange_id} amount={final_amount} for user_id={user_id} openId={user.get('openId')}"
+        )
+
         return {
-            "status": "success", 
+            "status": "success",
             "message": f"Bot deployed for {symbol} in {current_mode} mode.",
             "bot_id": bot_id,
-            "mode": current_mode
+            "mode": current_mode,
+            "amount": final_amount,
+            "exchange_id": exchange_id,
+            "market_type": market_type,
         }
         
     except Exception as e:

@@ -11,6 +11,10 @@ router = APIRouter(prefix="/bots", tags=["Bot Management sp2"])
 repo = MongoBotRepository()
 feature_state_service = BotFeatureStateService()
 
+# Importar signal_bot_service como singleton (se inicializa en main.py)
+from api.src.application.services.bot_service import SignalBotService
+signal_bot_service = SignalBotService()
+
 from api.src.domain.models.schemas import BotInstanceSchema
 
 class CreateBotSchema(BaseModel):
@@ -398,6 +402,55 @@ async def receive_external_signal(data: SignalWebhook):
     result = await engine.process_signal(bot, {"signal": data.signal, "price": data.price})
     
     return {"status": "processed", "execution": result}
+
+@router.post("/{bot_id}/close")
+async def close_bot_endpoint(bot_id: str, current_user: dict = Depends(get_current_user)):
+    """
+    Cierra un bot de trading:
+    - Cierra posición abierta (si existe)
+    - Libera wallet al balance global
+    - Actualiza estado a 'closed'
+    """
+    from bson import ObjectId
+    
+    user_id_obj = current_user["_id"]
+    user_open_id = current_user.get("openId")
+    
+    # 1. Verificar que el bot existe y pertenece al usuario
+    bot = await repo.collection.find_one({
+        "$or": [
+            {"_id": ObjectId(bot_id), "user_id": user_id_obj},
+            {"_id": ObjectId(bot_id), "user_id": str(user_id_obj)},
+            {"_id": ObjectId(bot_id), "user_id": user_open_id},
+        ]
+    })
+    
+    if not bot:
+        raise HTTPException(status_code=404, detail="Bot not found or not authorized")
+    
+    # 2. Verificar estado actual
+    current_status = bot.get("status", "active")
+    if current_status == "closed":
+        raise HTTPException(status_code=400, detail="Bot is already closed")
+    
+    # 3. Ejecutar cierre desde el servicio
+    try:
+        result = await signal_bot_service.close_bot(bot_id, user_id_obj, user_open_id=user_open_id)
+        
+        if not result.get("success"):
+            raise HTTPException(status_code=400, detail=result.get("reason", "Failed to close bot"))
+        
+        return {
+            "status": "success",
+            "bot_id": bot_id,
+            "walletReleased": result.get("walletReleased", 0),
+            "pnlRealized": result.get("pnlRealized", 0),
+            "finalStatus": "closed"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error closing bot {bot_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
 
 @router.delete("/{bot_id}")
 async def delete_bot(bot_id: str, current_user: dict = Depends(get_current_user)):
